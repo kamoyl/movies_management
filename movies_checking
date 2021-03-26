@@ -141,30 +141,6 @@ do
     debug "    IMDB cover: ${DARK_GREEN}${IMDB_COVER_URL}"
     warn  "      IMDB_COVER_SIZE=${IMDB_COVER_SIZE}"
   fi
-#
-#  if [[ ${FILE_NAME} != ${MKV_INTERNAL_TITLE} ]]
-#  then
-#    debug "  filename: ${YELLOW}${FILE_NAME}${BLUE} (internally: ${BROWN}${MKV_INTERNAL_TITLE}${BLUE}, changing)"
-#    mkvpropedit "${FILE}" -e info -s title="${FILE_NAME}" > /dev/null 2>&1
-#  fi
-#  if [[ ${IMDB_TITLE} != "null" ]]
-#  then
-#    if [[ ${FILE_NAME} != ${IMDB_TITLE} ]] && [[ ${FILE_NAME} != ${IMDB_DATA_TITLE} ]]
-#    then
-#      error "  IMDB title: ${WINE}${IMDB_TITLE}/${IMDB_DATA_TITLE}${RED} (my local one: ${YELLOW}${FILE_NAME}${RED}), changing"
-#    fi
-#  fi
-#  if [[ ${VERBOSE} == yes ]]
-#  then
-#    debug "  Removing internal attachement (cover, text file etc.)"
-#  fi
-#  mkvpropedit "${FILE}" --delete-attachment mime-type:image/jpeg --delete-attachment mime-type:image/png --delete-attachment mime-type:text/plain > /dev/null 2>&1
-#  if [[ ${VERBOSE} == yes ]]
-#  then
-#    debug "  Removing all chapters:"
-#  fi
-#  mkvpropedit "${FILE}" --chapters "" > /dev/null 2>&1
-#
   if [ -f "${MOVIE_COVER}" ]
   then
     LOCAL_COVER_SIZE=$(du -sb "${MOVIE_COVER}" | awk '{print $1}')
