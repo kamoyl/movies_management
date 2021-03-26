@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+
+ORIGIFS=${IFS}
+NEWIFS=$'\n'
+
+export TERM="xterm-256color"
+BLACK=$(tput setaf 0)
+RED=$(tput setaf 1)
+GREEN=$(tput setaf 2)
+YELLOW=$(tput setaf 3)
+LIME_YELLOW=$(tput setaf 190)
+POWDER_BLUE=$(tput setaf 153)
+BLUE=$(tput setaf 4)
+MAGENTA=$(tput setaf 5)
+CYAN=$(tput setaf 6)
+WHITE=$(tput setaf 7)
+BRIGHT=$(tput bold)
+NORMAL=$(tput sgr0)
+BLINK=$(tput blink)
+REVERSE=$(tput smso)
+UNDERLINE=$(tput smul)
+RESET=$(tput sgr0)
+WINE=$(echo -e "\x1b[38;2;191;000;000m")
+LIME=$(echo -e "\x1b[38;2;191;255;000m")
+BROWN=$(echo -e "\x1b[38;2;210;100;000m")
+DARK_GREEN=$(echo -e "\x1b[38;2;50;200;100m")
+LIGHT_BLUE=$(echo -e "\x1b[38;2;50;200;240m")
+LIGHT_YELLOW=$(echo -e "\x1b[38;2;250;250;0m")
+ORANGE=$(echo -e "\x1b[38;2;255;127;000m")
+
+if [[ "${OSTYPE}" =~ "linux" ]]
+then
+  SCRIPT=$(readlink -f "$0")
+elif [[ "${OSTYPE}" =~ "darwin" ]]
+then
+  SCRIPT=$(greadlink -f "$0")
+else
+  SCRIPT=$(readlink -f "$0")
+fi
+
+SCRIPTS_HOME=$(dirname "${SCRIPT}")
+PARAMETERS=$(echo "$@" | sed 's/\-l .//g')
+
+if [ $(caller | awk '{print $1}') -eq 0 ]
+then
+  CALLING=0
+  echo -e "${BLUE}${datestring} EXECUTE: ${YELLOW}[ ${LIME}$0 ${PARAMETERS} ${YELLOW} ]${RESET}"
+  source "${SCRIPTS_HOME}/config"
+else
+  CALLING=1
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "${YELLOW}[ ${LIME}$(echo $(caller | awk '{print $2}') | awk -F\/ '{print $NF}') ${YELLOW}calls (in line: ${LIME}$(caller | awk '{print $1}')${YELLOW}) ${LIME}$(echo ${BASH_SOURCE} | awk -F\/ '{print $NF}') ${PARAMETERS} ${YELLOW} ]"
+  fi
+fi
+
+VERBOSE=no
+while getopts ":v" ARG
+do
+  case "${ARG}" in
+        v)
+            VERBOSE=yes
+            ;;
+        *)
+            usage
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+IFS=${NEWIFS}
+for FILE in $(ls --color=never *.mkv)
+do
+  LOCAL_COVER_SIZE="0"
+  IMDB_COVER_SIZE="0"
+  MOVIE_COVER="${FILE}.cover.jpg"
+  FILE_NAME=${FILE//\.mkv/}
+  MOVIE_NAME_URL_ENC=${FILE_NAME// /%20}
+  IMDB_ID_1=$(mkvextract "${FILE}" tags - | xq -r -M '.Tags.Tag[].Simple | select(.Name == "imdbID") | .String' 2>/dev/null)
+  IMDB_ID_2=$(mkvextract "${FILE}" tags - | xq -r -M '.Tags.Tag.Simple | select(.Name == "imdbID") | .String' 2>/dev/null)
+  curl -s --request GET --url "https://imdb-internet-movie-database-unofficial.p.rapidapi.com/search/${MOVIE_NAME_URL_ENC}" --header "x-rapidapi-host: imdb-internet-movie-database-unofficial.p.rapidapi.com" --header "x-rapidapi-key: ${X_RAPIDAPI_KEY}" > "/tmp/${FILE_NAME}_data.json"
+  if [ -z ${IMDB_ID_1} ] && [ -z ${IMDB_ID_2} ]
+  then
+    IMBD_MOVIE_DATA=$(jq -r '.titles | first' "/tmp/${FILE_NAME}_data.json")
+    IMDB_ID=$(echo ${IMBD_MOVIE_DATA} | jq -r '.id')
+    mkvpropedit "${FILE}" --tags all: > /dev/null 2>&1
+    echo "<?xml version="1.0"?>
+    <!-- <!DOCTYPE Tags SYSTEM "matroskatags.dtd"> -->
+    <Tags>
+      <Tag>
+        <Simple>
+          <Name>imdbID</Name>
+          <String>${IMDB_ID}</String>
+        </Simple>
+      </Tag>
+    </Tags>" > "/tmp/${FILE_NAME}.xml"
+    mkvpropedit "${FILE}" --tags global:"/tmp/${FILE_NAME}.xml" > /dev/null 2>&1
+    IMDB_MOVIE_TRAILER=$(curl -s --request GET --url "https://imdb-internet-movie-database-unofficial.p.rapidapi.com/film/${IMDB_ID}" --header "x-rapidapi-host: imdb-internet-movie-database-unofficial.p.rapidapi.com" --header "x-rapidapi-key: ${X_RAPIDAPI_KEY}" | jq -r '.trailer.link')
+    IMDB_TITLE=$(echo ${IMBD_MOVIE_DATA} | jq -r '.title')
+    IMDB_COVER_URL=$(echo ${IMBD_MOVIE_DATA} | jq -r '.image')
+  else
+    if [ ! -z ${IMDB_ID_1} ]
+    then
+      IMDB_ID=${IMDB_ID_1}
+    elif [ ! -z ${IMDB_ID_2} ]
+    then
+      IMDB_ID=${IMDB_ID_2}
+    fi
+    IMDB_TITLE=$(curl -s --request GET --url "https://imdb-internet-movie-database-unofficial.p.rapidapi.com/film/${IMDB_ID}" --header "x-rapidapi-host: imdb-internet-movie-database-unofficial.p.rapidapi.com" --header "x-rapidapi-key: ${X_RAPIDAPI_KEY}" | jq -r '.title' | sed 's/.$//')
+    IMDB_COVER_URL=$(curl -s --request GET --url "https://imdb-internet-movie-database-unofficial.p.rapidapi.com/film/${IMDB_ID}" --header "x-rapidapi-host: imdb-internet-movie-database-unofficial.p.rapidapi.com" --header "x-rapidapi-key: ${X_RAPIDAPI_KEY}" | jq -r '.poster')
+    IMDB_DATA_TITLE=$(jq -r --arg imdb_movie_id ${IMDB_ID} '.titles[] | select(.id == $imdb_movie_id) | .title' "/tmp/${FILE_NAME}_data.json")
+    IMDB_DATA_POSTER=$(jq -r --arg imdb_movie_id ${IMDB_ID} '.titles[] | select(.id == $imdb_movie_id) | .image' "/tmp/${FILE_NAME}_data.json")
+  fi
+  if [ ! -z ${IMDB_COVER_URL} ]
+  then
+    wget -O "/tmp/${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_COVER_URL}" > /dev/null 2>&1
+    IMDB_COVER_SIZE=$(du -sb "/tmp/${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" | awk '{print $1}')
+    if [ ${IMDB_COVER_SIZE} -eq 0 ]
+    then
+      warn "Despite having cover URL, either link is empty or size of a cover is equal 0, collecting from imbd metadata"
+      wget -O "/tmp/${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_DATA_POSTER}" > /dev/null 2>&1
+    fi
+  elif [ ! -z ${IMDB_DATA_POSTER} ]
+  then
+    wget -O "/tmp/${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_DATA_POSTER}" > /dev/null 2>&1
+  else
+    warn "Cannot find a cover for a movie: ${YELLOW}${FILE_NAME}"
+  fi
+  IMDB_COVER_SIZE=$(du -sb "/tmp/${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" | awk '{print $1}')
+  IMDB_COVER_EXT=$(echo "${IMDB_COVER_URL}" | awk -F\. '{print $NF}')
+  #MKV_INTERNAL_TITLE=$(mkvinfo "${FILE}" | grep "Title:" | cut -f 2- -d ":" | sed 's/^ //g;s/ $//g')
+  MKV_INTERNAL_TITLE="$(mkvmerge -i -F json ${FILE} | jq -r '.container.properties.title')"
+  inf "This movie: ${YELLOW}${FILE_NAME}${CYAN}, ${BROWN}${IMDB_ID}"
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "    FileName=${YELLOW}${FILE_NAME}"
+    debug "    IMDB title=${LIME}'${IMDB_TITLE}'"
+    debug "    IMDB data title=${LIME}${IMDB_DATA_TITLE}"
+    debug "    mkv internal title: ${BROWN}${MKV_INTERNAL_TITLE}"
+    debug "    imdb ID: ${BROWN}${IMDB_ID}"
+    debug "    IMDB cover: ${DARK_GREEN}${IMDB_COVER_URL}"
+    warn  "      IMDB_COVER_SIZE=${IMDB_COVER_SIZE}"
+  fi
+#
+#  if [[ ${FILE_NAME} != ${MKV_INTERNAL_TITLE} ]]
+#  then
+#    debug "  filename: ${YELLOW}${FILE_NAME}${BLUE} (internally: ${BROWN}${MKV_INTERNAL_TITLE}${BLUE}, changing)"
+#    mkvpropedit "${FILE}" -e info -s title="${FILE_NAME}" > /dev/null 2>&1
+#  fi
+#  if [[ ${IMDB_TITLE} != "null" ]]
+#  then
+#    if [[ ${FILE_NAME} != ${IMDB_TITLE} ]] && [[ ${FILE_NAME} != ${IMDB_DATA_TITLE} ]]
+#    then
+#      error "  IMDB title: ${WINE}${IMDB_TITLE}/${IMDB_DATA_TITLE}${RED} (my local one: ${YELLOW}${FILE_NAME}${RED}), changing"
+#    fi
+#  fi
+#  if [[ ${VERBOSE} == yes ]]
+#  then
+#    debug "  Removing internal attachement (cover, text file etc.)"
+#  fi
+#  mkvpropedit "${FILE}" --delete-attachment mime-type:image/jpeg --delete-attachment mime-type:image/png --delete-attachment mime-type:text/plain > /dev/null 2>&1
+#  if [[ ${VERBOSE} == yes ]]
+#  then
+#    debug "  Removing all chapters:"
+#  fi
+#  mkvpropedit "${FILE}" --chapters "" > /dev/null 2>&1
+#
+  if [ -f "${MOVIE_COVER}" ]
+  then
+    LOCAL_COVER_SIZE=$(du -sb "${MOVIE_COVER}" | awk '{print $1}')
+    if [[ ${VERBOSE} == yes ]]
+    then
+      debug "      LOCAL_COVER_SIZE=${LOCAL_COVER_SIZE}"
+    fi
+    if [ ${IMDB_COVER_SIZE} -eq 0 ] || [ -z ${IMDB_COVER_URL} ]
+    then
+      if [[ ${VERBOSE} == yes ]]
+      then
+        debug "    IMDB_COVER_SIZE=${IMDB_COVER_SIZE}"
+        debug "    IMDB_COVER_URL=${IMDB_COVER_URL}"
+      fi
+    else
+      if [[ ${LOCAL_COVER_SIZE} == ${IMDB_COVER_SIZE} ]]
+      then
+        if [[ ${VERBOSE} == yes ]]
+        then
+          debug "  There is a cover : ${DARK_GREEN}${MOVIE_COVER}${BLUE}, and it is the same size"
+        fi
+      else
+        debug "  There is a cover : ${DARK_GREEN}${MOVIE_COVER}${BLUE}, but local size (${LOCAL_COVER_SIZE}/${IMDB_COVER_SIZE}) is ${WINE}different"
+        cp -f "/tmp/${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" ./
+        #curl -s -o "${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_COVER_URL}"
+        #wget -O "${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_COVER_URL}" > /dev/null 2>&1
+      fi
+    fi
+  else 
+    error "    There is no cover, downloading..."
+    curl -s -o "${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_COVER_URL}"
+    if [[ ${VERBOSE} == yes ]]
+    then
+      if [ -f "${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" ]
+      then
+        debug "      IMDB cover downloaded: ${DARK_GREEN}${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}"
+      else
+        error "      IMDB cover cannot be downloaded"
+      fi
+    fi
+  fi
+  if [[ ${FILE_NAME} != ${MKV_INTERNAL_TITLE} ]]
+  then
+    debug "  filename: ${YELLOW}${FILE_NAME}${BLUE} (internally: ${BROWN}${MKV_INTERNAL_TITLE}${BLUE}, changing)"
+    mkvpropedit "${FILE}" -e info -s title="${FILE_NAME}" > /dev/null 2>&1
+  fi
+  if [[ ${IMDB_TITLE} != "null" ]]
+  then
+    if [[ ${FILE_NAME} != ${IMDB_TITLE} ]] && [[ ${FILE_NAME} != ${IMDB_DATA_TITLE} ]]
+    then
+      error "  IMDB title: ${WINE}${IMDB_TITLE}/${IMDB_DATA_TITLE}${RED} (my local one: ${YELLOW}${FILE_NAME}${RED}), changing"
+    fi
+  fi
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "  Removing internal attachement (cover, text file etc.)"
+  fi
+  mkvpropedit "${FILE}" --delete-attachment mime-type:image/jpeg --delete-attachment mime-type:image/png --delete-attachment mime-type:text/plain > /dev/null 2>&1
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "  Removing chapters"
+  fi
+  mkvpropedit "${FILE}" --chapters "" > /dev/null 2>&1
+  if [ ls --color=never "${FILE_NAME}.txt" > /dev/null 2>&1 ] || [ -f "${FILE_NAME}.sub" ] || [ -f "${FILE_NAME}.srt" ]
+  then
+    MOVIE_SUBTITLE="${FILE_NAME}.txt"
+    if [[ ${VERBOSE} == yes ]]
+    then
+      debug "  There is a subtitle :${BROWN}${MOVIE_SUBTITLE}"
+    fi
+  elif [ ls --color=never "${FILE_NAME}.sub" > /dev/null 2>&1 ] && [ ls --color=never "${FILE_NAME}.idx" > /dev/null 2>&1 ]
+  then
+    MOVIE_SUBTITLE="${FILE_NAME}.sub"
+    if [[ ${VERBOSE} == yes ]]
+    then
+      debug "  There is a subtitle :${BROWN}${MOVIE_SUBTITLE}${CYAN} (with index)"
+    fi
+  elif [ ls --color=never "${FILE_NAME}.srt" > /dev/null 2>&1 ]
+  then
+    MOVIE_SUBTITLE="${FILE_NAME}.srt"
+    if [[ ${VERBOSE} == yes ]]
+    then
+      debug "  There is a subtitle :${BROWN}${MOVIE_SUBTITLE}"
+    fi
+  else
+    if [[ ${VERBOSE} == yes ]]
+    then
+      error "    There is no subtitle, downloading..."
+    fi
+    subliminal --opensubtitles kamoyl ${OPENSUBTITLES_PASSWORD} --provider opensubtitles --provider argenteam --provider shooter --provider thesubdb --provider tvsubtitles -l pl -e UTF8 -s "${FILE}" > /dev/null 2>&1
+  fi
+  chmod 664 "${FILE_NAME}"*
+  chown nobody:minidlna "${FILE_NAME}"*
+done
+IFS=${ORIGIFS}
+systemctl stop minidlna.service
+minidlnad -f /etc/minidlna.conf -r -R
+systemctl restart minidlna.service
