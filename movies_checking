@@ -54,36 +54,74 @@ else
   fi
 fi
 
+usage()
+{
+echo "
+${CYAN}Usage:${BRIGHT}${WHITE}
+$0 [-i MKV_FILE ] -v [-I IMDB_ID ]
+
+    ${NORMAL}${CYAN}This script manages MKV (matroska) file this way:
+         - removing chapters, and internal attachments (only images);
+         - trying to find an IMDB ID in global tags;
+         - if there is no IMDB ID in global tags then it tries to find an IMDB metadata by file name
+         - checks if title of the movie is identical like IMDB title, and local file
+         - manages covers/posters with imdb API${BLUE}
+    ${LIME}-i${BLUE}  when provided then imdb id, covers, and subtile will be look for that movie/file
+    ${LIME}-I${BLUE}  when provided IMDB ID will be used/updated to the metadata of mkv file
+    ${LIME}-c${BLUE}  when provided then it tries to manage cover/poster
+    ${LIME}-s${BLUE}  when provided it tries to manage subtitles
+    ${LIME}-u${BLUE}  when provided with -I - makes an updated of IMDB_ID, or with -c make an update of a cover
+    ${LIME}-v${BLUE}  verbose
+    ${LIME}-h${BLUE}  this help
+    ${WINE}WHEN none parameter is provieded then it manages ALL mkv files in current directory${RESET}"
+    1>&2;
+    exit 1
+}
+
+start_time_collecting
+
 VERBOSE=no
-while getopts ":v" ARG
+UPDATE=no
+while getopts ":c:I:i:uvhs" ARG
 do
   case "${ARG}" in
+        i)
+            i=${OPTARG}
+            FILE_NAME=${i}
+            ;;
+        I)
+            I=${OPTARG}
+            IMDB_ID=${I}
+            ;;
+        s)
+            SUBTITLES=${s}
+            ;;
+        c)
+            c=${OPTARG}
+            COVER=${c}
+            ;;
+        u)
+            UPDATE=yes
+            ;;
         v)
             VERBOSE=yes
             ;;
-        *)
+        h)
             usage
             ;;
-    esac
+  esac
 done
 shift $((OPTIND-1))
 
-IFS=${NEWIFS}
-for FILE in $(ls --color=never *.mkv)
-do
-  LOCAL_COVER_SIZE="0"
-  IMDB_COVER_SIZE="0"
-  MOVIE_COVER="${FILE}.cover.jpg"
-  FILE_NAME=${FILE//\.mkv/}
-  MOVIE_NAME_URL_ENC=${FILE_NAME// /%20}
-  IMDB_ID_1=$(mkvextract "${FILE}" tags - | xq -r -M '.Tags.Tag[].Simple | select(.Name == "imdbID") | .String' 2>/dev/null)
-  IMDB_ID_2=$(mkvextract "${FILE}" tags - | xq -r -M '.Tags.Tag.Simple | select(.Name == "imdbID") | .String' 2>/dev/null)
-  curl -s --request GET --url "https://imdb-internet-movie-database-unofficial.p.rapidapi.com/search/${MOVIE_NAME_URL_ENC}" --header "x-rapidapi-host: imdb-internet-movie-database-unofficial.p.rapidapi.com" --header "x-rapidapi-key: ${X_RAPIDAPI_KEY}" > "/tmp/${FILE_NAME}_data.json"
-  if [ -z ${IMDB_ID_1} ] && [ -z ${IMDB_ID_2} ]
+imdb_update()
+{
+  if [ -z ${IMDB_ID} ]
   then
-    IMBD_MOVIE_DATA=$(jq -r '.titles | first' "/tmp/${FILE_NAME}_data.json")
+    curl -s --request GET --url "https://imdb-internet-movie-database-unofficial.p.rapidapi.com/search/${MOVIE_NAME_URL_ENC/\.*}" --header "x-rapidapi-host: imdb-internet-movie-database-unofficial.p.rapidapi.com" --header "x-rapidapi-key: ${X_RAPIDAPI_KEY}" > "/tmp/${MOVIE_NAME_ARRAY[*]}_data.json"
+    IMBD_MOVIE_DATA=$(jq -r '.titles | first' "/tmp/${MOVIE_NAME_ARRAY[*]}_data.json")
     IMDB_ID=$(echo ${IMBD_MOVIE_DATA} | jq -r '.id')
-    mkvpropedit "${FILE}" --tags all: > /dev/null 2>&1
+    debug "  There is no IMDB tag, assigning:"
+    mkvpropedit "${MOVIE_NAME_ARRAY[*]}.mkv" --tags all: > /dev/null 2>&1
     echo "<?xml version="1.0"?>
     <!-- <!DOCTYPE Tags SYSTEM "matroskatags.dtd"> -->
     <Tags>
@@ -93,12 +131,59 @@ do
           <String>${IMDB_ID}</String>
         </Simple>
       </Tag>
-    </Tags>" > "/tmp/${FILE_NAME}.xml"
-    mkvpropedit "${FILE}" --tags global:"/tmp/${FILE_NAME}.xml" > /dev/null 2>&1
-    IMDB_MOVIE_TRAILER=$(curl -s --request GET --url "https://imdb-internet-movie-database-unofficial.p.rapidapi.com/film/${IMDB_ID}" --header "x-rapidapi-host: imdb-internet-movie-database-unofficial.p.rapidapi.com" --header "x-rapidapi-key: ${X_RAPIDAPI_KEY}" | jq -r '.trailer.link')
-    IMDB_TITLE=$(echo ${IMBD_MOVIE_DATA} | jq -r '.title')
-    IMDB_COVER_URL=$(echo ${IMBD_MOVIE_DATA} | jq -r '.image')
+    </Tags>" > "/tmp/${MOVIE_NAME_ARRAY[*]}.xml"
+    mkvpropedit "${MOVIE_NAME_ARRAY[*]}.mkv" --tags global:"/tmp/${MOVIE_NAME_ARRAY[*]}.xml" > /dev/null 2>&1
   else
+    mkvpropedit "${MOVIE_NAME_ARRAY[*]}.mkv" --tags all: > /dev/null 2>&1
+    echo "<?xml version="1.0"?>
+    <!-- <!DOCTYPE Tags SYSTEM "matroskatags.dtd"> -->
+    <Tags>
+      <Tag>
+        <Simple>
+          <Name>imdbID</Name>
+          <String>${IMDB_ID}</String>
+        </Simple>
+      </Tag>
+    </Tags>" > "/tmp/${MOVIE_NAME_ARRAY[*]}.xml"
+    mkvpropedit "${MOVIE_NAME_ARRAY[*]}.mkv" --tags global:"/tmp/${MOVIE_NAME_ARRAY[*]}.xml" > /dev/null 2>&1
+  fi
+}
+
+imdb_tag_management()
+{
+  IMDB_ID_1=$(mkvextract "${MOVIE_NAME_ARRAY[*]}.mkv" tags - | xq -r -M '.Tags.Tag[].Simple | select(.Name == "imdbID") | .String' 2>/dev/null)
+  IMDB_ID_2=$(mkvextract "${MOVIE_NAME_ARRAY[*]}.mkv" tags - | xq -r -M '.Tags.Tag.Simple | select(.Name == "imdbID") | .String' 2>/dev/null)
+  if [ ! -z ${IMDB_ID} ]
+  then
+    if [[ ${UPDATE} == yes ]]
+    then
+      inf "Updating IMDB ID to: ${BROWN}${IMDB_ID}"
+      imdb_update
+      IMDB_ID_1=$(mkvextract "${MOVIE_NAME_ARRAY[*]}.mkv" tags - | xq -r -M '.Tags.Tag[].Simple | select(.Name == "imdbID") | .String' 2>/dev/null)
+      IMDB_ID_2=$(mkvextract "${MOVIE_NAME_ARRAY[*]}.mkv" tags - | xq -r -M '.Tags.Tag.Simple | select(.Name == "imdbID") | .String' 2>/dev/null)
+    fi
+    IMDB_TITLE=$(curl -s --request GET --url "https://imdb-internet-movie-database-unofficial.p.rapidapi.com/film/${IMDB_ID}" --header "x-rapidapi-host: imdb-internet-movie-database-unofficial.p.rapidapi.com" --header "x-rapidapi-key: ${X_RAPIDAPI_KEY}" | jq -r '.title' | sed 's/.$//')
+    IMDB_COVER_URL=$(curl -s --request GET --url "https://imdb-internet-movie-database-unofficial.p.rapidapi.com/film/${IMDB_ID}" --header "x-rapidapi-host: imdb-internet-movie-database-unofficial.p.rapidapi.com" --header "x-rapidapi-key: ${X_RAPIDAPI_KEY}" | jq -r '.poster')
+    IMDB_DATA_TITLE=$(jq -r --arg imdb_movie_id ${IMDB_ID} '.titles[] | select(.id == $imdb_movie_id) | .title' "/tmp/${MOVIE_NAME_ARRAY[*]}_data.json")
+    IMDB_DATA_POSTER=$(jq -r --arg imdb_movie_id ${IMDB_ID} '.titles[] | select(.id == $imdb_movie_id) | .image' "/tmp/${MOVIE_NAME_ARRAY[*]}_data.json")
+    if [[ ${IMDB_ID} == ${IMDB_ID_1} ]] || [[ ${IMDB_ID} == ${IMDB_ID_2} ]]
+    then
+      if [[ ${VERBOSE} == yes ]]
+      then
+        debug "IMDB ID is the same in file metadatas as it was provided (${BROWN}${IMDB_ID}${BLUE})"
+      fi
+    else
+      warn "IMDB ID in the file metadata is different then provided(privided: ${BROWN}${IMDB_ID}${WINE}, in metadata ${LIME}${IMDB_ID_1}/${IMDB_ID_2}${WINE})"
+    fi
+  elif [ -z ${IMDB_ID} ] && ([[ ${IMDB_ID_1} != "null" ]] && [[ ${IMDB_ID_2} != "null" ]]) && ([ ! -z ${IMDB_ID_1} ] || [ ! -z ${IMDB_ID_2} ])
+  then
+    if [[ ${UPDATE} == yes ]]
+    then
+      inf "Updating IMDB ID to: ${BROWN}${IMDB_ID}"
+      imdb_update
+      IMDB_ID_1=$(mkvextract "${MOVIE_NAME_ARRAY[*]}.mkv" tags - | xq -r -M '.Tags.Tag[].Simple | select(.Name == "imdbID") | .String' 2>/dev/null)
+      IMDB_ID_2=$(mkvextract "${MOVIE_NAME_ARRAY[*]}.mkv" tags - | xq -r -M '.Tags.Tag.Simple | select(.Name == "imdbID") | .String' 2>/dev/null)
+    fi
     if [ ! -z ${IMDB_ID_1} ]
     then
       IMDB_ID=${IMDB_ID_1}
@@ -108,42 +193,54 @@ do
     fi
     IMDB_TITLE=$(curl -s --request GET --url "https://imdb-internet-movie-database-unofficial.p.rapidapi.com/film/${IMDB_ID}" --header "x-rapidapi-host: imdb-internet-movie-database-unofficial.p.rapidapi.com" --header "x-rapidapi-key: ${X_RAPIDAPI_KEY}" | jq -r '.title' | sed 's/.$//')
     IMDB_COVER_URL=$(curl -s --request GET --url "https://imdb-internet-movie-database-unofficial.p.rapidapi.com/film/${IMDB_ID}" --header "x-rapidapi-host: imdb-internet-movie-database-unofficial.p.rapidapi.com" --header "x-rapidapi-key: ${X_RAPIDAPI_KEY}" | jq -r '.poster')
-    IMDB_DATA_TITLE=$(jq -r --arg imdb_movie_id ${IMDB_ID} '.titles[] | select(.id == $imdb_movie_id) | .title' "/tmp/${FILE_NAME}_data.json")
-    IMDB_DATA_POSTER=$(jq -r --arg imdb_movie_id ${IMDB_ID} '.titles[] | select(.id == $imdb_movie_id) | .image' "/tmp/${FILE_NAME}_data.json")
+    IMDB_DATA_TITLE=$(jq -r --arg imdb_movie_id ${IMDB_ID} '.titles[] | select(.id == $imdb_movie_id) | .title' "/tmp/${MOVIE_NAME_ARRAY[*]}_data.json")
+    IMDB_DATA_POSTER=$(jq -r --arg imdb_movie_id ${IMDB_ID} '.titles[] | select(.id == $imdb_movie_id) | .image' "/tmp/${MOVIE_NAME_ARRAY[*]}_data.json")
+  else
+    if [[ ${UPDATE} == yes ]]
+    then
+      inf "Updating IMDB ID to: ${BROWN}${IMDB_ID}"
+      imdb_update
+      IMDB_ID_1=$(mkvextract "${MOVIE_NAME_ARRAY[*]}.mkv" tags - | xq -r -M '.Tags.Tag[].Simple | select(.Name == "imdbID") | .String' 2>/dev/null)
+      IMDB_ID_2=$(mkvextract "${MOVIE_NAME_ARRAY[*]}.mkv" tags - | xq -r -M '.Tags.Tag.Simple | select(.Name == "imdbID") | .String' 2>/dev/null)
+    fi
+    IMDB_MOVIE_TRAILER=$(curl -s --request GET --url "https://imdb-internet-movie-database-unofficial.p.rapidapi.com/film/${IMDB_ID}" --header "x-rapidapi-host: imdb-internet-movie-database-unofficial.p.rapidapi.com" --header "x-rapidapi-key: ${X_RAPIDAPI_KEY}" | jq -r '.trailer.link')
+    IMDB_TITLE=$(echo ${IMBD_MOVIE_DATA} | jq -r '.title')
+    IMDB_COVER_URL=$(echo ${IMBD_MOVIE_DATA} | jq -r '.image')
   fi
+  if [[ "${IMDB_COVER_URL}" == "${IMDB_DATA_POSTER}" ]]
+  then
+    if [[ ${VERBOSE} == yes ]]
+    then
+      debug "metadata poster and imdb id data cover are the same" 
+    fi
+  fi
+}
+
+cover_management()
+{
   if [ ! -z ${IMDB_COVER_URL} ]
   then
-    wget -O "/tmp/${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_COVER_URL}" > /dev/null 2>&1
-    IMDB_COVER_SIZE=$(du -sb "/tmp/${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" | awk '{print $1}')
+    wget -O "/tmp/${MOVIE_NAME_ARRAY[*]}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_COVER_URL}" > /dev/null 2>&1
+    IMDB_COVER_SIZE=$(du -sb "/tmp/${MOVIE_NAME_ARRAY[*]}.mkv.cover.${IMDB_COVER_EXT}" | awk '{print $1}')
     if [ ${IMDB_COVER_SIZE} -eq 0 ]
     then
-      warn "Despite having cover URL, either link is empty or size of a cover is equal 0, collecting from imbd metadata"
-      wget -O "/tmp/${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_DATA_POSTER}" > /dev/null 2>&1
+      if [ ! -f "${MOVIE_NAME_ARRAY[*]}.mkv.cover.jpg" ]
+      then
+        warn "Despite having cover URL (${YELLOW}${MOVIE_NAME_ARRAY[*]}${WINE}), either link is empty or size of a cover is equal 0, collecting from imbd metadata"
+        wget -O "/tmp/${MOVIE_NAME_ARRAY[*]}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_DATA_POSTER}" > /dev/null 2>&1
+        IMDB_COVER_SIZE=$(du -sb "/tmp/${MOVIE_NAME_ARRAY[*]}.mkv.cover.${IMDB_COVER_EXT}" | awk '{print $1}')
+      fi
     fi
   elif [ ! -z ${IMDB_DATA_POSTER} ]
   then
-    wget -O "/tmp/${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_DATA_POSTER}" > /dev/null 2>&1
+    wget -O "/tmp/${MOVIE_NAME_ARRAY[*]}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_DATA_POSTER}" > /dev/null 2>&1
+    IMDB_COVER_SIZE=$(du -sb "/tmp/${MOVIE_NAME_ARRAY[*]}.mkv.cover.${IMDB_COVER_EXT}" | awk '{print $1}')
   else
-    warn "Cannot find a cover for a movie: ${YELLOW}${FILE_NAME}"
+    warn "Cannot find a cover for a movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}"
   fi
-  IMDB_COVER_SIZE=$(du -sb "/tmp/${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" | awk '{print $1}')
-  IMDB_COVER_EXT=$(echo "${IMDB_COVER_URL}" | awk -F\. '{print $NF}')
-  #MKV_INTERNAL_TITLE=$(mkvinfo "${FILE}" | grep "Title:" | cut -f 2- -d ":" | sed 's/^ //g;s/ $//g')
-  MKV_INTERNAL_TITLE="$(mkvmerge -i -F json ${FILE} | jq -r '.container.properties.title')"
-  inf "This movie: ${YELLOW}${FILE_NAME}${CYAN}, ${BROWN}${IMDB_ID}"
-  if [[ ${VERBOSE} == yes ]]
+  if [ -f "${MOVIE_NAME_ARRAY[*]}.mkv.cover.jpg" ]
   then
-    debug "    FileName=${YELLOW}${FILE_NAME}"
-    debug "    IMDB title=${LIME}'${IMDB_TITLE}'"
-    debug "    IMDB data title=${LIME}${IMDB_DATA_TITLE}"
-    debug "    mkv internal title: ${BROWN}${MKV_INTERNAL_TITLE}"
-    debug "    imdb ID: ${BROWN}${IMDB_ID}"
-    debug "    IMDB cover: ${DARK_GREEN}${IMDB_COVER_URL}"
-    warn  "      IMDB_COVER_SIZE=${IMDB_COVER_SIZE}"
-  fi
-  if [ -f "${MOVIE_COVER}" ]
-  then
-    LOCAL_COVER_SIZE=$(du -sb "${MOVIE_COVER}" | awk '{print $1}')
+    LOCAL_COVER_SIZE=$(du -sb "${MOVIE_NAME_ARRAY[*]}.mkv.cover.jpg" | awk '{print $1}')
     if [[ ${VERBOSE} == yes ]]
     then
       debug "      LOCAL_COVER_SIZE=${LOCAL_COVER_SIZE}"
@@ -160,82 +257,166 @@ do
       then
         if [[ ${VERBOSE} == yes ]]
         then
-          debug "  There is a cover : ${DARK_GREEN}${MOVIE_COVER}${BLUE}, and it is the same size"
+          debug "  There is a cover: ${DARK_GREEN}${MOVIE_NAME_ARRAY[*]}.mkv.cover.jpg${BLUE}, and it is the same size"
         fi
       else
-        debug "  There is a cover : ${DARK_GREEN}${MOVIE_COVER}${BLUE}, but local size (${LOCAL_COVER_SIZE}/${IMDB_COVER_SIZE}) is ${WINE}different"
-        cp -f "/tmp/${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" ./
-        #curl -s -o "${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_COVER_URL}"
-        #wget -O "${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_COVER_URL}" > /dev/null 2>&1
+        debug "  There is a cover: ${DARK_GREEN}${MOVIE_NAME_ARRAY[*]}.mkv.cover.jpg${BLUE}, but size (local: ${LOCAL_COVER_SIZE}/imdb: ${IMDB_COVER_SIZE}) is ${WINE}different"
       fi
     fi
-  else 
-    error "    There is no cover, downloading..."
-    curl -s -o "${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" "${IMDB_COVER_URL}"
+  else
+    if [ -f "/tmp/${MOVIE_NAME_ARRAY[*]}.mkv.cover.${IMDB_COVER_EXT}" ]
+    then
+      error "    There is no cover for a movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}${RED}, downloading..."
+      cp "/tmp/${MOVIE_NAME_ARRAY[*]}.mkv.cover.${IMDB_COVER_EXT}" ./
+    fi
     if [[ ${VERBOSE} == yes ]]
     then
-      if [ -f "${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}" ]
+      if [ -f "${MOVIE_NAME_ARRAY[*]}.mkv.cover.${IMDB_COVER_EXT}" ]
       then
-        debug "      IMDB cover downloaded: ${DARK_GREEN}${FILE_NAME}.mkv.cover.${IMDB_COVER_EXT}"
+        debug "      IMDB cover downloaded: ${DARK_GREEN}${MOVIE_NAME_ARRAY[*]}.mkv.cover.${IMDB_COVER_EXT}"
       else
-        error "      IMDB cover cannot be downloaded"
+        error "      IMDB cover for a movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}${RED},cannot be downloaded"
       fi
     fi
   fi
-  if [[ ${FILE_NAME} != ${MKV_INTERNAL_TITLE} ]]
+}
+
+title_management()
+{
+  if [[ ${MOVIE_NAME_ARRAY[*]} != ${MKV_INTERNAL_TITLE} ]]
   then
-    debug "  filename: ${YELLOW}${FILE_NAME}${BLUE} (internally: ${BROWN}${MKV_INTERNAL_TITLE}${BLUE}, changing)"
-    mkvpropedit "${FILE}" -e info -s title="${FILE_NAME}" > /dev/null 2>&1
+    debug "  filename: ${YELLOW}${MOVIE_NAME_ARRAY[*]}${BLUE} (internally: ${BROWN}${MKV_INTERNAL_TITLE}${BLUE}, changing)"
+    mkvpropedit "${MOVIE_NAME_ARRAY[*]}.mkv" -e info -s title="${MOVIE_NAME_ARRAY[*]}" > /dev/null 2>&1
   fi
   if [[ ${IMDB_TITLE} != "null" ]]
   then
-    if [[ ${FILE_NAME} != ${IMDB_TITLE} ]] && [[ ${FILE_NAME} != ${IMDB_DATA_TITLE} ]]
+    if [[ ${MOVIE_NAME_ARRAY[*]} != ${IMDB_TITLE} ]] && [[ ${MOVIE_NAME_ARRAY[*]} != ${IMDB_DATA_TITLE} ]]
     then
-      error "  IMDB title: ${WINE}${IMDB_TITLE}/${IMDB_DATA_TITLE}${RED} (my local one: ${YELLOW}${FILE_NAME}${RED}), changing"
+      error "  IMDB title: ${WINE}${IMDB_TITLE}/${IMDB_DATA_TITLE}${RED} (my local one: ${YELLOW}${MOVIE_NAME_ARRAY[*]}${RED}), changing"
     fi
   fi
+}
+
+mkv_cleaning()
+{
   if [[ ${VERBOSE} == yes ]]
   then
-    debug "  Removing internal attachement (cover, text file etc.)"
+    debug "  Removing internal attachement (cover, text file etc.) from a movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}"
   fi
-  mkvpropedit "${FILE}" --delete-attachment mime-type:image/jpeg --delete-attachment mime-type:image/png --delete-attachment mime-type:text/plain > /dev/null 2>&1
+  mkvpropedit "${MOVIE_NAME_ARRAY[*]}.mkv" --delete-attachment mime-type:image/jpeg --delete-attachment mime-type:image/png --delete-attachment mime-type:text/plain > /dev/null 2>&1
   if [[ ${VERBOSE} == yes ]]
   then
-    debug "  Removing chapters"
+    debug "  Removing chapters from a movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}"
   fi
-  mkvpropedit "${FILE}" --chapters "" > /dev/null 2>&1
-  if [ ls --color=never "${FILE_NAME}.txt" > /dev/null 2>&1 ] || [ -f "${FILE_NAME}.sub" ] || [ -f "${FILE_NAME}.srt" ]
+  mkvpropedit "${MOVIE_NAME_ARRAY[*]}.mkv" --chapters "" > /dev/null 2>&1
+}
+
+subtitles_management()
+{
+  if [ -f "${MOVIE_NAME_ARRAY[*]}.txt" ]
   then
-    MOVIE_SUBTITLE="${FILE_NAME}.txt"
+    MOVIE_SUBTITLE="${MOVIE_NAME_ARRAY[*]}.txt"
     if [[ ${VERBOSE} == yes ]]
     then
-      debug "  There is a subtitle :${BROWN}${MOVIE_SUBTITLE}"
+      debug "  There is a subtitle: ${BROWN}${MOVIE_SUBTITLE}"
     fi
-  elif [ ls --color=never "${FILE_NAME}.sub" > /dev/null 2>&1 ] && [ ls --color=never "${FILE_NAME}.idx" > /dev/null 2>&1 ]
+  elif [ -f "${MOVIE_NAME_ARRAY[*]}.srt" ]
   then
-    MOVIE_SUBTITLE="${FILE_NAME}.sub"
+    MOVIE_SUBTITLE="${MOVIE_NAME_ARRAY[*]}.srt"
+    if [[ ${VERBOSE} == yes ]]
+    then
+      debug "  There is a subtitle: ${BROWN}${MOVIE_SUBTITLE}"
+    fi
+  elif [ -f "${MOVIE_NAME_ARRAY[*]}.sub" ] && [ -f "${MOVIE_NAME_ARRAY[*]}.idx" ]
+  then
+    MOVIE_SUBTITLE="${MOVIE_NAME_ARRAY[*]}.sub"
     if [[ ${VERBOSE} == yes ]]
     then
       debug "  There is a subtitle :${BROWN}${MOVIE_SUBTITLE}${CYAN} (with index)"
     fi
-  elif [ ls --color=never "${FILE_NAME}.srt" > /dev/null 2>&1 ]
-  then
-    MOVIE_SUBTITLE="${FILE_NAME}.srt"
-    if [[ ${VERBOSE} == yes ]]
-    then
-      debug "  There is a subtitle :${BROWN}${MOVIE_SUBTITLE}"
-    fi
   else
     if [[ ${VERBOSE} == yes ]]
     then
-      error "    There is no subtitle, downloading..."
+      error "    There is no subtitle for a movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}${RED}, downloading..."
     fi
-    subliminal --opensubtitles kamoyl ${OPENSUBTITLES_PASSWORD} --provider opensubtitles --provider argenteam --provider shooter --provider thesubdb --provider tvsubtitles -l pl -e UTF8 -s "${FILE}" > /dev/null 2>&1
+    subliminal --opensubtitles kamoyl ${OPENSUBTITLES_PASSWORD} --provider opensubtitles --provider argenteam --provider shooter --provider thesubdb --provider tvsubtitles -l pl -e UTF8 -s "${MOVIE_NAME_ARRAY[*]}.mkv" > /dev/null 2>&1
   fi
-  chmod 664 "${FILE_NAME}"*
-  chown nobody:minidlna "${FILE_NAME}"*
-done
+}
+
+IFS=${NEWIFS}
+
+#I - IMDB_ID
+#i - FILE_NAME
+#s - SUBTITLES
+#c - COVER
+#u - UPDATE (yes/no)
+
+#if [ ! -z ${IMDB_ID} ] && [ -z ${FILE_NAME} ]
+#then
+#  error "There is lack of parameters... (-i and -u/-s/-c)"
+#  failed
+#elif [ ! -z ${FILE_NAME} ] && ([ ! -z ${SUBTITLES} ] || [ ! -z ${COVER} ])
+if [ ! -z ${FILE_NAME} ] && [ ! -z ${IMDB_ID} ]
+then
+  IFS=' '
+  MOVIE_NAME_ARRAY=(${FILE_NAME/\.mkv})
+  IMDB_COVER_EXT="jpg"
+  MKV_INTERNAL_TITLE="$(mkvmerge -i -F json "${MOVIE_NAME_ARRAY[*]}".mkv | jq -r '.container.properties.title')"
+  MOVIE_NAME_URL_ENC=$(jq -rn --arg movie_name_array "${MOVIE_NAME_ARRAY[*]}" '$movie_name_array|@uri')
+  LOCAL_COVER_SIZE="0"
+  IMDB_COVER_SIZE="0"
+  imdb_tag_management  
+  
+else
+  shopt -s nullglob
+  for FILE_NAME in *.mkv
+  do
+    O_IFS=${IFS}
+    IFS=' '
+    MOVIE_NAME_ARRAY=(${FILE_NAME/\.mkv})
+    IMDB_COVER_EXT="jpg"
+    MKV_INTERNAL_TITLE="$(mkvmerge -i -F json "${MOVIE_NAME_ARRAY[*]}".mkv | jq -r '.container.properties.title')"
+    MOVIE_NAME_URL_ENC=$(jq -rn --arg movie_name_array "${MOVIE_NAME_ARRAY[*]}" '$movie_name_array|@uri')
+    LOCAL_COVER_SIZE="0"
+    IMDB_COVER_SIZE="0"
+
+    imdb_tag_management
+  
+    inf "This movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}${CYAN}, ${BROWN}${IMDB_ID}"
+    if [[ ${VERBOSE} == yes ]]
+    then
+      debug "    IMDB title=${LIME}${IMDB_TITLE}"
+      debug "    IMDB data title=${LIME}${IMDB_DATA_TITLE}"
+      debug "    mkv internal title: ${BROWN}${MKV_INTERNAL_TITLE}"
+      debug "    "
+      debug "    IMDB_ID1: ${BROWN}${IMDB_ID_1}"
+      debug "    IMDB ID2: ${LIME}${IMDB_ID_2}"
+      debug "    url enc: ${WINE}${MOVIE_NAME_URL_ENC}"
+      debug "    imdb ID: ${BROWN}${IMDB_ID}"
+      debug "    IMDB_DATA_POSTER=${WINE}${IMDB_DATA_POSTER}"
+      debug "    IMDB cover URL: ${DARK_GREEN}${IMDB_COVER_URL}"
+      warn  "      IMDB_COVER_SIZE=${IMDB_COVER_SIZE}"
+    fi
+  
+    cover_management
+    title_management
+    mkv_cleaning 
+    subtitles_management
+
+    chmod 664 "${MOVIE_NAME_ARRAY[*]}"*
+    chown nobody:minidlna "${MOVIE_NAME_ARRAY[*]}"*
+  done
+fi
 IFS=${ORIGIFS}
+end_time_collecting
+MOVIES_CHECK_TIME=${RUNTIME}
+debug "  movies check time: ${ORANGE}${MOVIES_CHECK_TIME}"
 systemctl stop minidlna.service
-minidlnad -f /etc/minidlna.conf -r -R
-systemctl restart minidlna.service
+rm -rf /var/cache/minidlna/files.db
+/usr/sbin/minidlnad -f /etc/minidlna.conf -P /run/minidlna/minidlna.pid -r -R
+#ffmpeg -i Ricki\ and\ the\ Flash.mkv -i Ricki\ and\ the\ Flash.idx -i Ricki\ and\ the\ Flash.sub -map 0:v -map 0:a -c copy -map 1 -c:s:1 dvd_subtitle -metadata:s:s:1 language=eng Ricki\ and\ the\ Flash_combined.mkv
+#mkvmerge -o "Kung Fu Panda 3_opt.mkv" -a 1 -s 1 "Kung Fu Panda 3.mkv"
+#ffmpeg -err_detect ignore_err -i "${INPUT_FILE}" -c copy ${MOVIE_TITLE}_repaired.mkv
+#mkvmerge -o "Toy Story 4_merged.mkv" -A "Toy Story 4.mkv" "Toy Story 4.dts"
+#mkvmerge -o Toy\ Story\ 4_merged_sub2.mkv "Toy Story 4_merged_sub1.mkv" --language 0:eng --track-name 0:English-SDH-SRT "Toy Story 4_English-SDH-SRT.sub"
+#ffmpeg -fflags +genpts -i input.avi -c:v copy -c:a copy output.mkv
