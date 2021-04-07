@@ -18,12 +18,12 @@ Prerequisites:
 
 Parameters (yeah, finnaly added :))
 - [-i] - providing movie file (alone only shows some details)
-- [-I] - providing IMDB ID (needs [-i] shows and compares some mkv details)
+- [-I IMDB_ID] - providing IMDB ID (needs [-i] shows and compares some mkv details)
 - [-v] - VERBOSE (more info with [-i], [-I], or without them)
-- [-c] - cover (needs [-i], shows details, with [-v] even more of them)
 - [-s] - subtitles - like with cover
 - [-u] - UPDATE (needs [-i], and
-  - if [-I] not provided then it will try to update IMDB ID (despite it exists in file metadata)
-  - if [-I] provided then it will try to update IMDB ID to this one provided
-  - if [-c] provided then cover will try to be updated - and OVERWRITEN if already exists (if also [-I] will be provided then IMDB ID will be used to look for cover)
-  - if [-s] provided then subtitles will be updated
+  - if [-I IMDB_ID] not provided then it will try to look for IMDB ID and update it (despite it exists in file metadata)
+  - if [-I IMDB_ID] provided then it will try to update IMDB ID to this one provided
+  - if [-c COVER_URL] provided then cover will try to be updated - and OVERWRITEN if already exists
+  - if [-s] provided then subtitles will be updated [ToDo]
+  - if [-t] provided then title in metadata will be updated to file name [ToDo]
