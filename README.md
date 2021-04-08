@@ -1,4 +1,5 @@
 # movies_management
+## Description
 Simple script for do some staff with current directory (in no parameters (except [-v]) provided) existing *.mkv files:
 - checking and comparing if name of the file and "Title:" parameter in mkv metadata is the same as in IMDB;
 - checking if IMBD ID is already added to global metadata of the mkv file (if not it is added by script);
@@ -12,11 +13,11 @@ Simple script for do some staff with current directory (in no parameters (except
 - it is changes permissions to nobody:minidlna (first for samba, and second one for minidlna)
 - it is refreshing database and covers cache of minidlna service
 
-Prerequisites:
+## Prerequisites:
 - account on RapidAPI (I'm using imdb-internet-movie-database-unofficial from RapidAPI) - secure key is stored in variable: ${X_RAPIDAPI_KEY}
 - account in opensubtitles site and stored in variable: ${OPENSUBTITLES_PASSWORD}
 
-Parameters (yeah, finnaly added :))
+## Parameters (yeah, finnaly added :))
 - [-i] - providing movie file (alone only shows some details)
 - [-I IMDB_ID] - providing IMDB ID (needs [-i] shows and compares some mkv details)
 - [-v] - VERBOSE (more info with [-i], [-I], or without them)
@@ -27,3 +28,12 @@ Parameters (yeah, finnaly added :))
   - if [-c COVER_URL] provided then cover will try to be updated - and OVERWRITEN if already exists
   - if [-s] provided then subtitles will be updated [ToDo]
   - if [-t] provided then title in metadata will be updated to file name [ToDo]
+
+## links:
+- [Movies details](https://www.imdb.com)
+- [Nice poster site](https://www.joblo.com/movie-posters)
+- [The Movie DB](themoviedb.org)
+
+### some details:
+For imdb there is only a "gateway" of API through RapidAPI - and... unfortunatelly it doesn't fully works as expected - but rarely
+For themoviedb - they have their own API - so maybe I will also try to implement it

@@ -472,11 +472,8 @@ then
     chown nobody:minidlna "${MOVIE_NAME_ARRAY[*]}"*
   done
   systemctl stop minidlna.service
-  if [ -f "/var/cache/minidlna/files.db" ]
-  then
-    rm -rf /var/cache/minidlna/files.db
-  fi
-  /usr/sbin/minidlnad -f /etc/minidlna.conf -P /run/minidlna/minidlna.pid -r
+  rm -rf /var/cache/minidlna/*
+  systemctl start minidlna.service
 else
   error "Lack of parameter, try [-h] for help"
 fi
