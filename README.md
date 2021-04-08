@@ -33,6 +33,7 @@ Simple script for do some staff with current directory (in no parameters (except
 - [Movies details](https://www.imdb.com)
 - [Nice poster site](https://www.joblo.com/movie-posters)
 - [The Movie DB](themoviedb.org)
+- [The Movie DB developers site](https://developers.themoviedb.org/4)
 
 ### some details:
 For imdb there is only a "gateway" of API through RapidAPI - and... unfortunatelly it doesn't fully works as expected - but rarely
