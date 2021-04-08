@@ -262,18 +262,37 @@ cover_management()
 {
   if [ ! -z ${IMDB_COVER_URL} ]
   then
-    wget -O "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb.${IMDB_COVER_EXT}" "${IMDB_COVER_URL}" > "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb.log" 2>&1
-    IMDB_COVER_SIZE=$(du -sb "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb.${IMDB_COVER_EXT}" | awk '{print $1}')
+    wget -O "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb.${IMDB_COVER_EXT}" "${IMDB_COVER_URL}" > "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb.log" 2>&1 &
   fi
   if [ ! -z ${IMDB_DATA_POSTER} ]
   then
-    wget -O "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb_data.${IMDB_COVER_EXT}" "${IMDB_DATA_POSTER}" > "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb_data.log" 2>&1
-    IMDB_DATA_POSTER_SIZE=$(du -sb "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb_data.${IMDB_COVER_EXT}" | awk '{print $1}')
+    wget -O "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb_data.${IMDB_COVER_EXT}" "${IMDB_DATA_POSTER}" > "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb_data.log" 2>&1 &
   fi
   THEMOVIEDB_COVER=$(jq -r '.movie_results[].poster_path' "/tmp/${MOVIE_NAME_ARRAY[*]}_themoviedb_data.json")
-  THEMOVIEDB_COVER_URL="https://image.tmdb.org/t/p/original${THEMOVIEDB_COVER}"
-  wget -O "/tmp/${MOVIE_NAME_ARRAY[*]}_tmdb.jpg" "https://image.tmdb.org/t/p/original${THEMOVIEDB_COVER}" > "/tmp/${MOVIE_NAME_ARRAY[*]}_tmdb_cover.log" 2>&1
-  THEMOVIEDB_COVER_SIZE=$(du -sb "/tmp/${MOVIE_NAME_ARRAY[*]}_tmdb.jpg" | awk '{print $1}')
+  if [ ! -z ${THEMOVIEDB_COVER} ]
+  then
+    THEMOVIEDB_COVER_URL="https://image.tmdb.org/t/p/original${THEMOVIEDB_COVER}"
+    wget -O "/tmp/${MOVIE_NAME_ARRAY[*]}_tmdb.jpg" "https://image.tmdb.org/t/p/original${THEMOVIEDB_COVER}" > "/tmp/${MOVIE_NAME_ARRAY[*]}_tmdb_cover.log" 2>&1 &
+  fi
+  wait
+  if [ -f "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb.${IMDB_COVER_EXT}" ]
+  then
+    IMDB_COVER_SIZE=$(du -sb "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb.${IMDB_COVER_EXT}" | awk '{print $1}')
+  else
+    IMDB_COVER_SIZE="0"
+  fi
+  if [ -f "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb_data.${IMDB_COVER_EXT}" ]
+  then
+    IMDB_DATA_POSTER_SIZE=$(du -sb "/tmp/${MOVIE_NAME_ARRAY[*]}_imdb_data.${IMDB_COVER_EXT}" | awk '{print $1}')
+  else
+    IMDB_DATA_POSTER_SIZE="0"
+  fi
+  if [ -f "/tmp/${MOVIE_NAME_ARRAY[*]}_tmdb.jpg" ]
+  then
+    THEMOVIEDB_COVER_SIZE=$(du -sb "/tmp/${MOVIE_NAME_ARRAY[*]}_tmdb.jpg" | awk '{print $1}')
+  else
+    THEMOVIEDB_COVER_SIZE="0"
+  fi
   if [ ! -z ${COVER} ]
   then
     wget -O "/tmp/${MOVIE_NAME_ARRAY[*]}_own.jpg" "${COVER}" > "/tmp/${MOVIE_NAME_ARRAY[*]}_own.log" 2>&1
@@ -407,16 +426,50 @@ movie_processing_start()
   MOVIE_NAME_URL_ENC=$(jq -rn --arg movie_name_array "${MOVIE_NAME_ARRAY[*]}" '$movie_name_array|@uri')
   LOCAL_COVER_SIZE="0"
   IMDB_COVER_SIZE="0"
+  IMDB_DATA_POSTER_SIZE="0"
+  IMDB_TITLE=""
+  IMDB_DATA_TITLE=""
+  IMDB_ID_1=""
+  IMDB_ID_2=""
+  IMDB_ID_3=""
+  IMDB_ID=""
+  THEMOVIEDB_ID=""
+  MOVIE_OVERVIEW=""
+  IMDB_COVER_URL=""
+  THEMOVIEDB_COVER_URL=""
+  IMDB_DATA_POSTER=""
 }
 
 movie_processing_end()
 {
   mkv_cleaning
   show_debug_details
+  chmod 664 "${MOVIE_NAME_ARRAY[*]}"*
+  chown nobody:minidlna "${MOVIE_NAME_ARRAY[*]}"*
+}
+
+cleaning()
+{
+  rm -rf "/tmp/"*_imdb_data.json &
+  rm -rf "/tmp/"*_imdb_data_title.log &
+  rm -rf "/tmp/"*.mkv.cover.log &
+  rm -rf "/tmp/"*_themoviedb_data.json &
+  rm -rf "/tmp/"*_tmdb_cover.log &
+  rm -rf "/tmp/"*.xml &
+  rm -rf "/tmp/"*_tmdb.jpg &
+  rm -rf "/tmp/"*.mkv.cover.jpg &
+  rm -rf "/tmp/"*_imdb_data.log &
+  rm -rf "/tmp/"*_imdb_id_data.json &
+  rm -rf "/tmp/"*_imdb_id_data.log &
+  rm -rf "/tmp/"*_imdb_data.jpg &
+  rm -rf "/tmp/"*_imdb.jpg &
+  rm -rf "/tmp/"*_imdb.log &
+  rm -rf "/tmp/"*_own.log &
+  wait
 }
 
 IFS=${NEWIFS}
-
+cleaning
 #s - SUBTITLES
 #t
 if [ ! -z ${FILE_NAME} ] && [ ! -z ${IMDB_ID} ]
@@ -429,8 +482,6 @@ then
     cover_management
   fi
   movie_processing_end
-  chmod 664 "${MOVIE_NAME_ARRAY[*]}"*
-  chown nobody:minidlna "${MOVIE_NAME_ARRAY[*]}"*
 elif [ ! -z ${FILE_NAME} ] && [ ! -z ${COVER} ]
 then
   movie_processing_start
@@ -445,8 +496,6 @@ then
     cover_management
   fi
   movie_processing_end
-  chmod 664 "${MOVIE_NAME_ARRAY[*]}"*
-  chown nobody:minidlna "${MOVIE_NAME_ARRAY[*]}"*
 elif [ ! -z ${FILE_NAME} ] && [ -z ${COVER}] && [ -z ${IMDB_ID} ]
 then
   movie_processing_start
@@ -462,24 +511,14 @@ then
   shopt -s nullglob
   for FILE_NAME in *.mkv
   do
-    O_IFS=${IFS}
-    IFS=' '
-    MOVIE_NAME_ARRAY=(${FILE_NAME/\.mkv})
-    IMDB_COVER_EXT="jpg"
-    MKV_INTERNAL_TITLE="$(mkvmerge -i -F json "${MOVIE_NAME_ARRAY[*]}".mkv | jq -r '.container.properties.title')"
-    MOVIE_NAME_URL_ENC=$(jq -rn --arg movie_name_array "${MOVIE_NAME_ARRAY[*]}" '$movie_name_array|@uri')
-    LOCAL_COVER_SIZE="0"
-    IMDB_COVER_SIZE="0"
-
+    movie_processing_start
     imdb_tag_management
     cover_management
-    title_management
+    #title_management
     mkv_cleaning
-    subtitles_management 
+    #subtitles_management 
     inf "This movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}${CYAN}, ${BROWN}${IMDB_ID}"
     show_debug_details
-    chmod 664 "${MOVIE_NAME_ARRAY[*]}"*
-    chown nobody:minidlna "${MOVIE_NAME_ARRAY[*]}"*
   done
   systemctl stop minidlna.service
   rm -rf /var/cache/minidlna/*
@@ -488,18 +527,7 @@ else
   error "Lack of parameter, try [-h] for help"
 fi
 IFS=${ORIGIFS}
-rm -rf "/tmp/"*_imdb_data.json &
-rm -rf "/tmp/"*_imdb_data_title.log &
-rm -rf "/tmp/"*.mkv.cover.log &
-rm -rf "/tmp/"*_themoviedb_data.json &
-rm -rf "/tmp/"*_tmdb_cover.log &
-rm -rf "/tmp/"*.xml &
-rm -rf "/tmp/"*_tmdb.jpg &
-rm -rf "/tmp/"*.mkv.cover.jpg &
-rm -rf "/tmp/"*_imdb_data.log &
-rm -rf "/tmp/"*_imdb_id_data.json &
-rm -rf "/tmp/"*_imdb_id_data.log &
-wait
+cleaning
 end_time_collecting
 MOVIES_CHECK_TIME=${RUNTIME}
 debug "  movies check time: ${ORANGE}${MOVIES_CHECK_TIME}"
