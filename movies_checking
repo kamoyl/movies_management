@@ -432,7 +432,7 @@ movie_processing_start()
   IMDB_ID_1=""
   IMDB_ID_2=""
   IMDB_ID_3=""
-  IMDB_ID=""
+  #IMDB_ID=""
   THEMOVIEDB_ID=""
   MOVIE_OVERVIEW=""
   IMDB_COVER_URL=""
@@ -511,14 +511,28 @@ then
   shopt -s nullglob
   for FILE_NAME in *.mkv
   do
-    movie_processing_start
-    imdb_tag_management
-    cover_management
-    #title_management
-    mkv_cleaning
-    #subtitles_management 
-    inf "This movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}${CYAN}, ${BROWN}${IMDB_ID}"
-    show_debug_details
+    if [[ ${UPDATE} == no ]]
+    then
+      movie_processing_start
+      imdb_tag_management
+      cover_management
+      #title_management
+      mkv_cleaning
+      #subtitles_management 
+      inf "This movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}${CYAN}, ${BROWN}${IMDB_ID}"
+      show_debug_details
+      IMDB_ID=""
+    else
+      movie_processing_start
+      imdb_tag_management
+      #cover_management
+      #title_management
+      mkv_cleaning
+      #subtitles_management
+      inf "This movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}${CYAN}, ${BROWN}${IMDB_ID}"
+      show_debug_details
+      IMDB_ID=""
+    fi
   done
   systemctl stop minidlna.service
   rm -rf /var/cache/minidlna/*
