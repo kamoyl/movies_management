@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+
+if [[ ${VERBOSE} == yes ]]
+then
+  debug "${YELLOW}[ ${LIME}$(caller | awk '{print $2}'| awk -F\/ '{print $NF}') ${YELLOW}calls (in line: ${LIME}: ${LIME}$(caller | awk '{print $1}')${YELLOW}) ${LIME}$(echo "${BASH_SOURCE}" | awk -F\/ '{print $NF}') ${YELLOW} ]"
+fi
+
+if [ -z "${o}" ]
+then
+  VAR="${HOME}/var"
+  mkdir -p "${VAR}"
+else
+  VAR=$(readlink -f "${o}")
+  mkdir -p "${VAR}" > /dev/null 2>&1
+  ERROR_CODE="$?"
+  if [ "${ERROR_CODE}" -ne 0 ]
+  then
+    error "I have no permissions to create OUTPUT directory here:"
+    debug "  var=${WARN}${VAR}"
+    exit "${ERROR_CODE}"
+  fi
+fi
+
+if [ -z "${TMP}" ]
+then
+  TMP="${VAR}/tmp-${SCRIPT_NAME}_${CURRENT_TIMESTAMP}"
+  mkdir -p "${TMP}"
+fi
+
+if [ -z "${LOG}" ]
+then
+  LOG="${VAR}/log-${SCRIPT_NAME}_${CURRENT_TIMESTAMP}"
+  mkdir -p "${LOG}"
+fi
+
+if [ -z "${O}" ]
+then
+  VAR_OUT="${VAR}"
+else
+  VAR_OUT=$(readlink -f "${O}")
+  mkdir -p "${VAR_OUT}" > /dev/null 2>&1
+  ERROR_CODE="$?"
+  if [ "${ERROR_CODE}" -ne 0 ]
+  then
+    error "I have no permissions to create OUTPUT directory here:"
+    debug "  var=${WARN}${VAR}"
+    exit "${ERROR_CODE}"
+  fi  
+fi
+
+if [ -z "${TMP_OUT}" ]
+then
+  TMP_OUT="${VAR_OUT}/tmp-${SCRIPT_NAME}_${CURRENT_TIMESTAMP}"
+  mkdir -p "${TMP_OUT}"
+fi
+
+if [ -z "${LOG_OUT}" ]
+then
+  LOG_OUT="${VAR_OUT}/log-${SCRIPT_NAME}_${CURRENT_TIMESTAMP}"
+  mkdir -p "${LOG_OUT}"
+fi
+
+VAR_DEV_FREE_SPACE=$(df --block-size G ${VAR} | grep -v 'Filesystem' | awk '{print $1"~"$4}')
+VAR_DEV=$(echo ${VAR_DEV_FREE_SPACE} | awk -F\~ '{print $1}')
+VAR_FREE_SPACE=$(echo ${VAR_DEV_FREE_SPACE} | awk -F\~ '{print $2}' | sed "s/G//g")
+VAR_OUT_DEV_FREE_SPACE=$(df --block-size G ${VAR_OUT} | grep -v 'Filesystem' | awk '{print $1"~"$4}')
+VAR_OUT_DEV=$(echo ${VAR_OUT_DEV_FREE_SPACE} | awk -F\~ '{print $1}')
+VAR_OUT_FREE_SPACE=$(echo ${VAR_OUT_DEV_FREE_SPACE} | awk -F\~ '{print $2}' | sed "s/G//g")
+
+export VAR
+export VAR_FREE_SPACE
+export VAR_DEV
+export TMP
+export LOG
+export VAR_OUT
+export VAR_OUT_FREE_SPACE
+export VAR_OUT_DEV
+export TMP_OUT
+export LOG_OUT
+
+if [[ ${VERBOSE} == yes ]]
+then
+  debug "    VAR=${VAR}, space free ${VAR_FREE_SPACE} [GB] on ${VAR_DEV}"
+  debug "     TMP=${TMP}"
+  debug "     LOG=${LOG}"
+  debug "    VAR_OUT=${VAR_OUT}, space free ${VAR_OUT_FREE_SPACE} [GB] on ${VAR_OUT_DEV}"
+  debug "     TMP_OUT=${TMP_OUT}"
+  debug "     LOG_OUT=${LOG_OUT}"
+fi
