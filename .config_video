@@ -1,0 +1,1012 @@
+#!/usr/bin/env bash
+
+FFMPEG_GLOBAL_OPTIONS=(ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0)
+
+ncnn-release-build()
+{
+  if [ $# -ne 1 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs one parameter: ${YELLOW}'username/github-repo'"
+    ERROR_CODE="1"
+    failed
+  else
+    USERREPOSITORY_NCNN=${1}
+    GITHUBUSER="$(echo ${USERREPOSITORY_NCNN} | awk -F\/ '{print $1}')"
+    GITHUBREPO="$(echo ${USERREPOSITORY_NCNN} | awk -F\/ '{print $2}')"
+  fi
+
+  git clone https://github.com/${USERREPOSITORY_NCNN} "${TMP}/${GITHUBREPO}" > "${LOG}/${GITHUBREPO}_cloning_building.log" 2>&1
+  if [ -s "${TMP}/${GITHUBREPO}/src/CMakeLists.txt" ]
+  then
+    BUILD_RESULT=$(grep "project(" "${TMP}/${GITHUBREPO}/src/CMakeLists.txt" | sed "s/project(//g;s/)//g")
+  fi
+  inf " ${YELLOW}${BUILD_RESULT}${CYAN} is needed, thus it will be built first..."
+  if ! type ${BUILD_RESULT} > /dev/null 2>&1
+  then
+    (
+      mkdir -p "${TMP}/${GITHUBREPO}/build"
+      cd "${TMP}/${GITHUBREPO}"
+      if [ -s "${TMP}/${GITHUBREPO}/.gitmodules" ]
+      then
+        if grep -q "github.com:" "${TMP}/${GITHUBREPO}/.gitmodules"
+        then
+          sed -i "s/git@github.com:/https:\/\/github.com\//g" "${TMP}/${GITHUBREPO}/.gitmodules"
+        fi
+      fi
+
+      git submodule update --init --recursive >> "${LOG}/${GITHUBREPO}_cloning_building.log" 2>&1
+      cd build
+      cmake -DCMAKE_POLICY_VERSION_MINIMUM=$(cmake --version | grep version | awk '{print $NF}') ../src/ >> "${LOG}/${GITHUBREPO}_cloning_building.log" 2>&1
+      cmake --build . -j $(nproc) >> "${LOG}/${GITHUBREPO}_cloning_building.log" 2>&1
+      ERROR_CODE="$?"
+      if [ ${ERROR_CODE} -eq 0 ] && [ -s "${TMP}/${GITHUBREPO}/build/${BUILD_RESULT}" ]
+      then
+        strip "${TMP}/${GITHUBREPO}/build/${BUILD_RESULT}" >> "${LOG}/${GITHUBREPO}_cloning_building.log" 2>&1
+        sudo cp "${TMP}/${GITHUBREPO}/build/${BUILD_RESULT}" /usr/local/bin/ >> "${LOG}/${GITHUBREPO}_cloning_building.log" 2>&1
+      else
+        inf "  ${YELLOW}${BUILD_RESULT}${CYAN} cannot be built, so it needs to be downloaded - if possible"
+        curl -s https://api.github.com/repos/${USERREPOSITORY_NCNN}/releases/latest | jq -r ".assets[].browser_download_url"
+      fi
+      )
+    else
+      inf "  ${YELLOW}${BUILD_RESULT}${CYAN} looks like exists, continuing"
+    fi
+  }
+
+checking_space_bg()
+{
+  if [ $# -ne 2 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs two parameters: ${YELLOW}[PID] of the process which is observed, ${ORANGE1}[DIR]"
+    ERROR_CODE="1"
+    failed
+  else
+    CHECK_PID=${1}
+    CHECK_DIR="${2}"
+  fi
+  SHOW_FUNCTION_NAME=${FUNCNAME}
+  (
+    while ps --pid ${CHECK_PID} > /dev/null 2>&1
+    do
+      SPACE_TAKEN_DIR=$(du -sk "${TMP}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}" 2>/dev/null | awk '{print $1}')
+      SPACE_TAKEN_DIR="$(printf "%.0f\n" "$(echo "${SPACE_TAKEN_DIR}/1024" | bc -l)")"
+      if [ ${SPACE_TAKEN_DIR} -gt ${MAX_SPACE_TAKEN_INPUT_DIR} ]
+      then
+        MAX_SPACE_TAKEN_INPUT_DIR=${SPACE_TAKEN_INPUT_DIR}
+      fi
+      if [[ ${VERBOSE} == no ]]
+      then
+        printf "\033[%d;0H\033[2K f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 18))" "in=${WINE}${MAX_SPACE_TAKEN_INPUT_DIR}${CYAN}/${LIGHT_YELLOW}${SPACE_TAKEN_INPUT_DIR}${WHITE} [GB]${RESET}" 2>/dev/null
+      fi
+      sleep 3
+    done
+    ) &
+  }
+
+checking_space_background()
+{
+  if [ $# -ne 3 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs three parameters: ${YELLOW}PID of the process which is observed, ${ORANGE1}VIDEO_IN_DIR, ${DEEPPINK1}VIDEO_OUT_DIR"
+    ERROR_CODE="1"
+    failed
+  else
+    local CHECK_PID=${1}
+    local VIDEO_IN_DIR=${2}
+    local VIDEO_OUT_DIR=${3}
+  fi
+  local SHOW_FUNCTION_NAME=${FUNCNAME}
+  if [ -z ${MAX_SPACE_TAKEN_INPUT_DIR} ] || [[ ${MAX_SPACE_TAKEN_INPUT_DIR} == "" ]]
+  then
+    MAX_SPACE_TAKEN_INPUT_DIR=0
+  elif [ -s "${TMP}/MAX_SPACE_TAKEN_INPUT_DIR" ]
+  then
+    MAX_SPACE_TAKEN_INPUT_DIR=$(cat "${TMP}/MAX_SPACE_TAKEN_INPUT_DIR")
+  fi
+
+  if [ -z ${MAX_SPACE_TAKEN_OUTPUT_DIR} ] || [[ ${MAX_SPACE_TAKEN_OUTPUT_DIR} == "" ]]
+  then
+    MAX_SPACE_TAKEN_OUTPUT_DIR=0
+  elif [ -s "${TMP}/MAX_SPACE_TAKEN_OUTPUT_DIR" ]
+  then
+    MAX_SPACE_TAKEN_OUTPUT_DIR=$(cat "${TMP}/MAX_SPACE_TAKEN_OUTPUT_DIR")
+  fi
+  (
+    while ps --pid ${CHECK_PID} > /dev/null 2>&1
+    do
+      SPACE_TAKEN_INPUT_DIR=$(du -sm "${VIDEO_IN_DIR}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}" 2>/dev/null | awk '{print $1}')
+      SPACE_TAKEN_INPUT_DIR="$(printf "%.0f\n" "$(echo "${SPACE_TAKEN_INPUT_DIR}/1000" | bc -l)")"
+      if [ ${SPACE_TAKEN_INPUT_DIR} -gt ${MAX_SPACE_TAKEN_INPUT_DIR} ]
+      then
+        MAX_SPACE_TAKEN_INPUT_DIR=${SPACE_TAKEN_INPUT_DIR}
+      fi
+      SPACE_TAKEN_OUTPUT_DIR=$(du -sm "${VIDEO_OUT_DIR}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}" 2>/dev/null | awk '{print $1}')
+      SPACE_TAKEN_OUTPUT_DIR="$(printf "%.0f\n" "$(echo "${SPACE_TAKEN_OUTPUT_DIR}/1000" | bc -l)")"
+      if [ ${SPACE_TAKEN_OUTPUT_DIR} -gt ${MAX_SPACE_TAKEN_OUTPUT_DIR} ]
+      then
+        MAX_SPACE_TAKEN_OUTPUT_DIR=${SPACE_TAKEN_OUTPUT_DIR}
+      fi
+      SPACE_TAKEN_OVERALL=$((SPACE_TAKEN_INPUT_DIR + SPACE_TAKEN_OUTPUT_DIR))
+      MAX_SPACE_TAKEN_OVERALL=$((MAX_SPACE_TAKEN_INPUT_DIR + MAX_SPACE_TAKEN_OUTPUT_DIR))
+      PERCENT_TSPACE_INPUT=$(printf "%.0f\n" "$(echo "(${MAX_SPACE_TAKEN_INPUT_DIR}/${INPUT_FRAMES_MAX_TSPACE})*100" | bc -l)")
+      PERCENT_TSPACE_OUTPUT=$(printf "%.0f\n" "$(echo "(${MAX_SPACE_TAKEN_OUTPUT_DIR}/${INTER_FRAMES_MAX_TSPACE})*100" | bc -l)")
+      if [[ ${VERBOSE} == no ]]
+      then
+        printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 18))" "      ${MAGENTA2}[...]/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}=${WINE}${MAX_SPACE_TAKEN_INPUT_DIR} (${PERCENT_TSPACE_INPUT}[%])${CYAN}/${LIGHT_YELLOW}${SPACE_TAKEN_INPUT_DIR}${WHITE} [GB], ${MAGENTA2}[...]/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}=${WINE}${MAX_SPACE_TAKEN_OUTPUT_DIR} (${PERCENT_TSPACE_OUTPUT}[%])${CYAN}/${BROWN}${SPACE_TAKEN_OUTPUT_DIR}${WHITE} [GB]; all=${LIME}${MAX_SPACE_TAKEN_OVERALL}${CYAN}/${DARK_GREEN}${SPACE_TAKEN_OVERALL}" 2>/dev/null
+      fi
+      sleep 3
+    done
+    echo "${MAX_SPACE_TAKEN_INPUT_DIR}" > "${TMP}/MAX_SPACE_TAKEN_INPUT_DIR"
+    echo "${MAX_SPACE_TAKEN_OUTPUT_DIR}" > "${TMP}/MAX_SPACE_TAKEN_OUTPUT_DIR"
+    echo "${MAX_SPACE_TAKEN_OVERALL}" > "${TMP}/MAX_SPACE_TAKEN_OVERALL"
+    ) &
+  }
+
+mp4_to_mkv()
+{
+  start_time_collecting
+  inf "  conversion of ${YELLOW}${FILE_NAME}${CYAN} from mp4 to mkv"
+  FILE_NAME=$(echo ${FILE_NAME} | awk -F\. '{print $1}')
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${FILE_NAME}.mp4" -vcodec copy -acodec copy "${FILE_NAME}.mkv" > "${LOG}/${FILE_NAME}_mp4-2-mkv.log"
+  FILE_NAME="${FILE_NAME}.mkv"
+  end_time_collecting
+  inf "    conversion of ${YELLOW}${FILE_NAME}${CYAN} done successfully ${MAGENTA}${RUNTIME}"
+  }
+
+splitting_video()
+{
+  start_time_collecting
+  mkvmerge -o "${TMP}/${MOVIE_NAME_ARRAY[*]}_%03d.mkv" --split 120s ${FILE_NAME}
+  end_time_collecting
+  inf "    splitting of ${YELLOW}${FILE_NAME}${CYAN} done successfully ${MAGENTA}${RUNTIME}"
+  }
+
+appending_mkvs()
+{
+  mkvmerge -o "${WHOLE_MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_merge_${SPLIT_PART_START}-${LAST_VIDEO_FRAGMENT_ID}.mkv" $(ls --color=never video_part_minute_*_merged.mkv | sed "s/^/+/g" | tr "\n" " " | sed "s/^+//g")
+  }
+
+extracting_mkv_streams()
+{
+  if [ $# -ne 1 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs one parameter: ${YELLOW}VIDEO_FILE_NAME which subtitles and audio should be extracted"
+    ERROR_CODE="1"
+    failed
+  else
+    local VIDEO_FILE_NAME="${1}"
+  fi
+  local SHOW_FUNCTION_NAME=${FUNCNAME}
+  inf "  extracting streams (audio and subtitles)"
+  start_time_collecting
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${VIDEO_FILE_NAME}.mkv" -acodec copy "${TMP}/${VIDEO_FILE_NAME}.mka" > "${LOG}/${VIDEO_FILE_NAME}_extract_sound.log" 2>&1 & echo "$!" > "${TMP}/${VIDEO_FILE_NAME}_extract_audio.pid"
+  AUDIO_EXTRACT_PID=$(cat "${TMP}/${VIDEO_FILE_NAME}_extract_audio.pid")
+  if ffprobe "${VIDEO_FILE_NAME}.mkv" -show_streams -select_streams s 2>&1 | grep -q language
+  then
+    SELECTED_SUBTITLES_IETF="$(mkvmerge -J "${VIDEO_FILE_NAME}.mkv" | jq -r '.tracks[] | select(.type == "subtitles") | select((.properties.language_ietf == "pl") or (.properties.language_ietf == "nl") or (.properties.language_ietf == "en") or (.properties.language_ietf == "pl-PL") or (.properties.language_ietf == "nl-NL") or (.properties.language_ietf == "en-US")).id' | tr "\n" "," | sed "s/,$//g")"
+    mkvmerge --output "${TMP}/${VIDEO_FILE_NAME}_subtitles.mkv" --no-audio --no-video --no-track-tags --no-global-tags --subtitle-tracks "${SELECTED_SUBTITLES_IETF}" "${VIDEO_FILE_NAME}.mkv" > "${LOG}/${VIDEO_FILE_NAME}_extract_subtitles.log" 2>&1 & echo "$!" > "${TMP}/${VIDEO_FILE_NAME}_extract_subs.pid"
+    SUBS_EXTRACT_PID=$(cat "${TMP}/${VIDEO_FILE_NAME}_extract_subs.pid")
+  fi
+  (
+    while ps --pid ${AUDIO_EXTRACT_PID} > /dev/null 2>&1
+    do
+      sleep 1
+    done
+    end_time_collecting
+    EXTRACTING_STREAMS_RUNTIME=${RUNTIME}
+    echo ${RUNTIME} > "${TMP}/EXTRACTING_STREAMS_RUNTIME"
+    ) &
+  }
+
+converting_hdr2sdr()
+{
+  if [ $# -ne 1 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs one parameter: ${YELLOW}VIDEO_FILE_NAME which is check if HDR and then converts to SDR (interpolating process is SDR only)"
+    ERROR_CODE="1"
+    failed
+  else
+    local VIDEO_FILE_NAME="${1}"
+  fi
+  local SHOW_FUNCTION_NAME=${FUNCNAME}
+  start_time_collecting
+  COLOR_SPACE=$(jq -r '.frames[].color_space' "${TMP}/${MOVIE_NAME_ARRAY[*]}_mastering_display.json")
+  COLOR_PRIMARIES=$(jq -r '.frames[].color_primaries' "${TMP}/${MOVIE_NAME_ARRAY[*]}_mastering_display.json")
+  export COLOR_PRIMARIES
+  COLOR_TRANSFER=$(jq -r '.frames[].color_transfer' "${TMP}/${MOVIE_NAME_ARRAY[*]}_mastering_display.json")
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "    COLOR_SPACE=${COLOR_SPACE}"
+    debug "    COLOR_PRIMARIES=${COLOR_PRIMARIES}"
+    debug "    COLOR_TRANSFER=${COLOR_TRANSFER}"
+  fi
+  if [[ ${COLOR_PRIMARIES} != "bt709" ]]
+  then
+    inf "  tone mapping (HDR to SDR)"
+    ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${VIDEO_FILE_NAME}.mkv" -vf "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:format=yuv420p" -c:v libx265 -crf 0 -c:a copy "${VIDEO_FILE_NAME}_sdr.mkv" > "${LOG}/${VIDEO_FILE_NAME}_tonemapping.log" 2>&1 & echo "$!" > "${TMP}/${VIDEO_FILE_NAME}_tonemapping.pid"
+    sleep 1
+    if [ -s "${TMP}/${VIDEO_FILE_NAME}_tonemapping.pid" ]
+    then
+      TONEMAPPING_PID=$(cat "${TMP}/${VIDEO_FILE_NAME}_tonemapping.pid")
+      while ps --pid ${TONEMAPPING_PID} > /dev/null 2>&1
+      do
+        if [ -s "${LOG}/${VIDEO_FILE_NAME}_tonemapping.log" ]
+        then
+          CURRENT_TONEMAPPED_FRAME=$(tail -n$((TARGET_FRAME_COUNT*6)) "${LOG}/${VIDEO_FILE_NAME}_tonemapping.log" | grep "frame=" | tail -n1 | sed "s/frame=//g")
+          CURRENT_TONEMAPPED_FRAME_PERCENT="$(echo "(${CURRENT_TONEMAPPED_FRAME}/${INPUT_FRAMES_COUNT}) * 100" | bc -l)"
+          CURRENT_TONEMAPPED_FRAME_PERCENT="$(printf "%.0f\n" "${CURRENT_TONEMAPPED_FRAME_PERCENT}")"
+          if [[ ${VERBOSE} == no ]]
+          then
+            printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 19))" "             ${MAGENTA2}currently tone-mapped frame ${BROWN}${CURRENT_TONEMAPPED_FRAME} ${LIGHT_MAGENTA}${CURRENT_TONEMAPPED_FRAME_PERCENT} [%]" 2>/dev/null
+          fi
+        fi
+      ERROR_CODE="$?"
+      done
+      mv "${VIDEO_FILE_NAME}.mkv" "${VIDEO_FILE_NAME}_hdr.mkv"
+      ln -sf "${VIDEO_FILE_NAME}_sdr.mkv" "${VIDEO_FILE_NAME}.mkv"
+    fi
+    tput sc
+    end_time_collecting
+    echo ${RUNTIME} > "${TMP}/HDR_2_SDR"
+  fi
+  }
+
+extracting_mkv_frames()
+{
+  if [ $# -ne 3 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs three parameters: ${YELLOW}VIDEO_FILE_NAME which subtitles and audio should be extracted, ${ORANGE1}VIDEO_IN_DIR, ${DEEPPINK1}VIDEO_OUT_DIR"
+    ERROR_CODE="1"
+    failed
+  else
+    local VIDEO_FILE_NAME="${1}"
+    local VIDEO_IN_DIR="${2}"
+    local VIDEO_OUT_DIR="${3}"
+  fi
+  local SHOW_FUNCTION_NAME=${FUNCNAME}
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "  extracting frames"
+  fi
+  tput sc
+  start_time_collecting
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${VIDEO_FILE_NAME}.mkv" "${VIDEO_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/"%08d.png > "${LOG}/${VIDEO_FILE_NAME}_inter_inframes.log" 2>&1 & echo "$!" > "${TMP}/${VIDEO_FILE_NAME}_inter_inframes.pid"
+  FFMPEG_EX_BACKGROUND_PROCESS_PID=$(cat "${TMP}/${VIDEO_FILE_NAME}_inter_inframes.pid")
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "    ffmpeg isolation PID=${MAGENTA}${FFMPEG_EX_BACKGROUND_PROCESS_PID}"
+  fi
+  sleep 5
+  (
+    while ps --pid ${FFMPEG_EX_BACKGROUND_PROCESS_PID} > /dev/null 2>&1
+    do
+      CURRENT_EXTRACTED_FRAME=$(tail -n$((TARGET_FRAME_COUNT*6)) "${LOG}/${VIDEO_FILE_NAME}_inter_inframes.log" | grep "frame=" | tail -n1 | sed "s/frame=//g")
+      if [[ ${CURRENT_EXTRACTED_FRAME} != "" ]]
+      then
+        CURRENT_EXTRACTED_FRAME_PERCENT="$(echo "(${CURRENT_EXTRACTED_FRAME}/${INPUT_FRAMES_COUNT}) * 100" | bc -l | tee -a "${LOG}/${VIDEO_FILE_NAME}_percent_inter_inframes.log")"
+        CURRENT_EXTRACTED_FRAME_PERCENT="$(printf "%.0f\n" "${CURRENT_EXTRACTED_FRAME_PERCENT}")"
+        if [[ ${VERBOSE} == no ]]
+        then
+          printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 17))" "          ${MAGENTA2}currently extracted frame ${BROWN}${CURRENT_EXTRACTED_FRAME} ${LIGHT_MAGENTA}${CURRENT_EXTRACTED_FRAME_PERCENT} [%]" 2>/dev/null
+        fi
+      fi
+      sleep 2
+    done
+    end_time_collecting
+    echo ${RUNTIME} > "${TMP}/EXTRACTING_FRAMES_RUNTIME"
+    find "${VIDEO_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/" -iname '*.png' -type f -empty -delete
+    ) &
+  }
+
+interpolating_extracted_frames()
+{
+  if [ $# -ne 3 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs three parameters: ${YELLOW}VIDEO_FILE_NAME which subtitles and audio should be extracted, ${ORANGE1}VIDEO_IN_DIR, ${DEEPPINK1}VIDEO_OUT_DIR"
+    ERROR_CODE="1"
+    failed
+  else
+    local VIDEO_FILE_NAME="${1}"
+    local FRAMES_IN_DIR="${2}"
+    local FRAMES_OUT_DIR="${3}"
+  fi
+  local SHOW_FUNCTION_NAME=${FUNCNAME}
+  local LOG_FILE="${VIDEO_FILE_NAME}_ncnn_${NCNN_METHOD}"
+  local NCNN_PARAMETERS=""
+  inf "  interpolating, ${NCNN_METHOD} (${MAROON1}${INPUT_FPS} -> ${OUTPUT_FPS} [fps]${CYAN}) of ${YELLOW}${VIDEO_FILE_NAME}.${FILE_NAME_EXTENSION}"
+  tput sc
+  start_time_collecting
+  sudo amdmemtweak --i 0,1 --ref 30 > "${LOG}/${LOG_FILE}.log"
+  if [[ ${NCNN_METHOD} == rife ]]
+  then
+    NCNN_PARAMETERS=(-v -g 1,2 -j 6:2,2:8 -u -n ${INTER_FRAMES_COUNT} -m rife-v4.6)
+  elif [[ ${NCNN_METHOD} == dain ]] || [[ ${NCNN_METHOD} == cain ]]
+  then
+    NCNN_PARAMETERS=(-v -t 256,256 -g 1,2 -j 6:2,2:8 -n ${INTER_FRAMES_COUNT})
+  elif [[ ${NCNN_METHOD} == realsr ]]
+  then
+    NCNN_SCALE=4
+    OUTPUT_FPS_ROUND="${NCNN_SCALE}"
+    NCNN_PARAMETERS=(-v -g 1,2 -j 6:2,2:8 -s ${NCNN_SCALE} -t 0,0 -x -m models-DF2K)
+  elif [[ ${NCNN_METHOD} == realesrgan ]]
+  then
+    NCNN_SCALE=2 # or 3 or 4
+    OUTPUT_FPS_ROUND="${NCNN_SCALE}"
+    NCNN_PARAMETERS=(-v -g 1,2 -j 6:2,2:8 -s ${NCNN_SCALE} -t 0,0 -n 4 -x)
+  elif [[ ${NCNN_METHOD} == srmd ]]
+  then
+    NCNN_SCALE=2 # or 3 or 4
+    OUTPUT_FPS_ROUND="${NCNN_SCALE}"
+    NCNN_PARAMETERS=(-v -g 1,2 -j 6:2,2:8 -t 0,0 -n 4 -x)
+  fi
+  (exec 2>/dev/null ${NCNN_METHOD}-ncnn-vulkan ${NCNN_PARAMETERS[*]} -i "${FRAMES_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}" -o "${FRAMES_OUT_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}" > "${LOG}/${LOG_FILE}.log" 2>&1 ) & echo "$!" > "${TMP}/${LOG_FILE}.pid"
+  NCNN_BACKGROUND_PROCESS_PID=$(cat "${TMP}/${LOG_FILE}.pid")
+  export NCNN_BACKGROUND_PROCESS_PID
+  LAST_MANAGED_FRAME=""
+  LAST_GENERATED_FRAME=""
+  LAST_MANAGED_FRAME_PERCENT=""
+  LAST_MANAGED_FRAME_PERCENT=""
+  MANAGED_FRAME_TO_REMOVE=""
+  MANAGED_FILE_TO_REMOVE=""
+  (
+    while ps --pid ${NCNN_BACKGROUND_PROCESS_PID} > /dev/null 2>&1
+    do
+      if [ -s "${LOG}/${LOG_FILE}.log" ]
+      then
+        LAST_MANAGED_FRAME=$(grep "${TMP_OUT}" "${LOG}/${LOG_FILE}.log" | grep -vE 'failed|decode|vkQueueSubmit' | awk '{print $1}' | tail -n1 | awk -F\/ '{print $NF}' | sed "s/\.png//g")
+        if [[ ${LAST_MANAGED_FRAME} =~ ^[0-9]+$ ]]
+        then
+          LAST_GENERATED_FRAME=$(grep "${TMP_OUT}" "${LOG}/${LOG_FILE}.log" | grep -vE 'failed|decode' | awk '{print $5}' | tail -n1 | awk -F\/ '{print $NF}' | sed "s/\.png//g")
+          # when ( - 200) is set with 2x ncnn interpolation - there are still and quite many over-removed frames
+          # when ( - 300) is set with 2x ncnn interpolation - there are NONE over-removed frames
+          LAST_MANAGED_FRAME_PERCENT="$(echo "(${LAST_MANAGED_FRAME}/${INPUT_FRAMES_COUNT}) * 100" | bc -l)"
+          LAST_MANAGED_FRAME_PERCENT="$(printf "%.0f\n" "${LAST_MANAGED_FRAME_PERCENT}" 2>/dev/null | tee "${TMP}/LAST_MANAGED_FRAME_PERCENT")"
+          MANAGED_FRAME_TO_REMOVE=$(echo "${LAST_MANAGED_FRAME} - (${TARGET_FRAME_COUNT}*150)" | bc -l )
+          MANAGED_FILE_TO_REMOVE="$(printf "%08d\n" "${MANAGED_FRAME_TO_REMOVE}")"
+          if [ ${MANAGED_FRAME_TO_REMOVE} -gt 50 ]
+          then
+            # MANAGED_FILE_TO_REMOVE="$(printf "%08d\n" "${MANAGED_FRAME_TO_REMOVE}")"
+            #if [[ ${VERBOSE} == no ]]
+            #then
+            #  printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 16))" " ${MAGENTA2}currently interpolated frame ${BROWN}${LAST_MANAGED_FRAME} ${LIGHT_MAGENTA}${LAST_MANAGED_FRAME_PERCENT} [%] (removing: ${MANAGED_FILE_TO_REMOVE})" 2>/dev/null
+            #fi
+            eval rm -rf "${FRAMES_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/{${MANAGED_FILE_TO_REMOVE}..$(printf "%08d\n" 1)}.png" 2>/dev/null
+          fi
+          if [[ ${VERBOSE} == no ]]
+          then
+            printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 16))" " ${MAGENTA2}currently interpolated frame ${BROWN}${LAST_MANAGED_FRAME} ${LIGHT_MAGENTA}${LAST_MANAGED_FRAME_PERCENT} [%] (removing: ${MANAGED_FILE_TO_REMOVE})" 2>/dev/null
+          fi
+        fi
+      fi
+      sleep 2
+    done
+    rm -rf "${FRAMES_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/"*.png
+    end_time_collecting
+    echo ${RUNTIME} > "${TMP}/INTERPOLATING_FRAMES_RUNTIME"
+    ) &
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "    ${NCNN_METHOD}-ncnn-vulkan isolation PID=${MAGENTA}${NCNN_BACKGROUND_PROCESS_PID}"
+  fi
+  }
+
+merging_frames_mkv()
+{
+  if [ $# -ne 3 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs three parameters: ${YELLOW}VIDEO_FILE_NAME to which frames should be merged, ${ORANGE1}FRAMES_IN_DIR, ${DEEPPINK1}VIDEO_OUT_DIR"
+    ERROR_CODE="1"
+    failed
+  else
+    local VIDEO_FILE_NAME="${1}"
+    local FRAMES_IN_DIR="${2}"
+    local VIDEO_OUT_DIR="${3}"
+  fi
+  local SHOW_FUNCTION_NAME=${FUNCNAME}
+  FFMPEG_LOCAL_LOG_FILENAME="${VIDEO_FILE_NAME}_ffmpeg_merging"
+  export FFMPEG_LOCAL_LOG_FILENAME
+  start_time_collecting
+  # x265
+  # ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -framerate ${OUTPUT_FPS} -i "${FRAMES_IN_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/"%08d.png -pix_fmt yuv420p10le -c:v libx265 -preset medium -crf 0 -x265-params no-open-gop=1:keyint=300:gop-lookahead=12:bframes=6:weightb=1:hme=1:strong-intra-smoothing=0:rect=0:aq-mode=4 "${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.log" 2>&1 & echo "$!" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.pid"
+
+  rm -rf "${TMP}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/00000000.png"
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -framerate ${OUTPUT_FPS} -i "${FRAMES_IN_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/"%08d.png -c:v libsvtav1 -crf 0 -preset 5 -svtav1-params rc=1:tune=0:enable-overlays=1:scd=1 -pix_fmt yuv420p10le "${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.log" 2>&1 & echo "$!" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.pid"
+  # ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -framerate ${OUTPUT_FPS} -i "${FRAMES_IN_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/"%08d.png -pix_fmt yuv420p10le -c:v libsvtav1 -preset 5 -crf 0 -svtav1-params lossless=1 "${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.log" 2>&1 & echo "$!" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.pid"
+  
+  MERGING_INTERFRAMES_PROCESS_PID=$(cat "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.pid")
+  export MERGING_INTERFRAMES_PROCESS_PID
+  (
+    while ps --pid ${MERGING_INTERFRAMES_PROCESS_PID} > /dev/null 2>&1
+    do
+      LAST_MERGED_FFMPEG_FRAME=$(tail -n50 "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.log" | grep "frame=" | tail -n1 | awk -F\= '{print $2}')
+      BEFORE_LAST_MERGED_FFMPEG_FRAME=$((LAST_MERGED_FFMPEG_FRAME-1))
+      BEFORE_LAST_MERGED_FFMPEG_FILE=$(printf "%08d\n" "${BEFORE_LAST_MERGED_FFMPEG_FRAME}")
+      if [ ! -z ${LAST_MERGED_FFMPEG_FRAME} ] && [[ ${LAST_MERGED_FFMPEG_FRAME} != "" ]]
+      then
+        CURRENT_MERGED_FRAME_PERCENT="$(echo "(${LAST_MERGED_FFMPEG_FRAME}/${INTER_FRAMES_COUNT}) * 100" | bc -l)"
+        CURRENT_MERGED_FRAME_PERCENT="$(printf "%.0f\n" "${CURRENT_MERGED_FRAME_PERCENT}")"
+        if [[ ${VERBOSE} == no ]]
+        then
+          printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 15))" "             ${MAGENTA2}currently merged frame ${BROWN}${LAST_MERGED_FFMPEG_FRAME} ${LIGHT_MAGENTA}${CURRENT_MERGED_FRAME_PERCENT} [%] (removed: ${BEFORE_LAST_MERGED_FFMPEG_FILE})" 2>/dev/null
+        fi
+        eval rm -rf "${FRAMES_IN_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/{${BEFORE_LAST_MERGED_FFMPEG_FILE}..$(printf "%08d\n" 1)}.png" 2>/dev/null
+      fi
+      sleep 2
+    done
+    # rm -rf "${FRAMES_IN_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/"*.png
+    end_time_collecting
+    echo ${RUNTIME} > "${TMP}/MERGING_FRAMES_RUNTIME"
+    ) &
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "    ffmpeg merging frames into new video PID=${MAGENTA}${MERGING_INTERFRAMES_PROCESS_PID}"
+  fi
+  }
+
+merging_streams_mkv()
+{
+  if [ $# -ne 3 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs three parameters: ${YELLOW}VIDEO_FILE_NAME to which subtitles and audio should be merged, ${ORANGE1}VIDEO_IN_DIR, ${DEEPPINK1}VIDEO_OUT_DIR"
+    ERROR_CODE="1"
+    failed
+  else
+    local VIDEO_FILE_NAME="${1}"
+    local STREAMS_IN_DIR="${2}"
+    local VIDEO_OUT_DIR="${3}"
+  fi
+  local SHOW_FUNCTION_NAME=${FUNCNAME}
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "  merging audio and subtitles into new video"
+  fi
+  start_time_collecting
+  if [ -s "${STREAMS_IN_DIR}/${VIDEO_FILE_NAME}.mka" ]
+  then
+    if [ -s "${STREAMS_IN_DIR}/${VIDEO_FILE_NAME}_subtitles.mkv" ]
+    then
+      if [[ ${VERBOSE} == yes ]]
+      then
+        debug "    mkvmerge -o \"${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv\" -A \"${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv\" \"${STREAMS_IN_DIR}/${VIDEO_FILE_NAME}.mka\" \"${STREAMS_IN_DIR}/${VIDEO_FILE_NAME}_subtitles.mkv\""
+      fi
+      mkvmerge --priority lower --output "${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" --language 0:und "${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" --language 0:en "${STREAMS_IN_DIR}/${VIDEO_FILE_NAME}.mka" "${STREAMS_IN_DIR}/${VIDEO_FILE_NAME}_subtitles.mkv" --title "${VIDEO_FILE_NAME}" > "${LOG}/${VIDEO_FILE_NAME}_mkvmerge_merging.log" 2>&1
+    else
+      if [[ ${VERBOSE} == yes ]]
+      then
+        debug "    mkvmerge -o \"${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv\" -A \"${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv\" \"${STREAMS_IN_DIR}/${VIDEO_FILE_NAME}.mka\""
+      fi
+      mkvmerge --priority lower --output "${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" --language 0:und "${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" --language 0:en "${STREAMS_IN_DIR}/${VIDEO_FILE_NAME}.mka" > "${LOG}/${VIDEO_FILE_NAME}_mkvmerge_merging.log" 2>&1
+      ERROR_CODE="$?"
+    fi
+  fi
+  end_time_collecting
+  echo ${RUNTIME} > "${TMP}/MERGING_STREAMS_RUNTIME"
+  }
+
+interpolation_video_file()
+{
+  if [ $# -ne 1 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs one parameter: ${YELLOW}VIDEO_FILE_NAME which will be managed"
+    ERROR_CODE="1"
+    failed
+  else
+    local VIDEO_FILE_NAME="${1}"
+    local MOVIE_NAME_ARRAY=(${VIDEO_FILE_NAME/\.mkv})
+    local FILE_NAME_EXTENSION=${VIDEO_FILE_NAME: (-3)}
+  fi
+  local SHOW_FUNCTION_NAME=${FUNCNAME}
+  inf "  preparation of ${YELLOW}${MOVIE_NAME_ARRAY[*]}${CYAN} (video data analysing)"
+  inf "   counting frames of ${YELLOW}${MOVIE_NAME_ARRAY[*]}"
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${MOVIE_NAME_ARRAY[*]}.mkv" -map 0:v:0 -c copy -f null - | grep "frame=" | sed "s/frame=//g" | tail -n1 > "${LOG}/${MOVIE_NAME_ARRAY[*]}_frames_count.log" 2>&1 & echo "$!" > "${TMP}/${MOVIE_NAME_ARRAY[*]}_frames_count.pid"
+  inf "    analysing video metadata"
+  ffprobe -v quiet -print_format json -show_format -show_streams "${MOVIE_NAME_ARRAY[*]}.mkv" > "${TMP}/${MOVIE_NAME_ARRAY[*]}_ffprobe.json" 2>"${LOG}/${MOVIE_NAME_ARRAY[*]}_ffprobe.log"
+  ffprobe -v quiet -print_format json -hide_banner -loglevel warning -select_streams v -show_frames -read_intervals "%+#1" -show_entries "frame=color_space,color_primaries,color_transfer,side_data_list,pix_fmt" -i "${MOVIE_NAME_ARRAY[*]}.mkv" > "${TMP}/${MOVIE_NAME_ARRAY[*]}_mastering_display.json" 2>"${LOG}/${MOVIE_NAME_ARRAY[*]}_mastering_display.log"
+
+  inf "    analysing video frame size/color depth"
+  mkdir -p "${TMP}/frame_analysis"
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${MOVIE_NAME_ARRAY[*]}.mkv" -vf "select=not(mod(n\,100))" -vsync vfr "${TMP}/frame_analysis/output%04d.png" > "${LOG}/frame_analysis.log" 2>&1  & echo "$!" > "${TMP}/${MOVIE_NAME_ARRAY[*]}_frame_analysis.pid"
+  extracting_mkv_streams          "${MOVIE_NAME_ARRAY[*]}"
+  wait
+  INPUT_FRAMES_COUNT=$(cat "${LOG}/${MOVIE_NAME_ARRAY[*]}_frames_count.log")
+  INPUT_FRAMES_LEADING=$(printf "%08d\n" ${INPUT_FRAMES_COUNT})
+  INPUT_FPS=$(ffprobe -select_streams v -show_streams "${MOVIE_NAME_ARRAY[*]}.mkv" |& grep -i fps | awk -F"fps" '{print $1}' | awk -F\, '{print $NF}' | sed "s/^[[:space:]]\+//g")
+  if [[ ${NCNN_METHOD} == dain ]] || [[ ${NCNN_METHOD} == cain ]] || [[ ${NCNN_METHOD} == rife ]]
+  then
+    TARGET_FRAME_COUNT="2"
+    INTER_FRAMES_COUNT=$((INPUT_FRAMES_COUNT*TARGET_FRAME_COUNT))
+    OUTPUT_FPS=$(echo "${INPUT_FPS}*${TARGET_FRAME_COUNT}" | bc)
+    OUTPUT_FPS_ROUND=$(printf "%.0f\n" ${OUTPUT_FPS})
+  elif [[ ${NCNN_METHOD} == realsr ]]
+  then
+    TARGET_FRAME_SCALE="4"
+    INTER_FRAMES_COUNT=${INPUT_FRAMES_COUNT}
+    OUTPUT_FPS=${INPUT_FPS}
+    OUTPUT_FPS_ROUND="${TARGET_FRAME_SCALE}x"
+  fi
+
+  INPUT_FRAMES_INTER_LEADING=$(printf "%08d\n" ${INTER_FRAMES_COUNT})
+
+  if [ -d "${TMP}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}" ]
+  then
+    rm -rf "${TMP}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}"
+    mkdir -p "${TMP}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}"
+  else
+    mkdir -p "${TMP}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}"
+  fi
+
+  if [ -d "${TMP}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}" ]
+  then
+    rm -rf "${TMP}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}"
+    mkdir -p "${TMP}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}"
+  else
+    mkdir -p "${TMP}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}"
+  fi
+
+  if [ -d "${TMP_OUT}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}" ]
+  then
+    rm -rf "${TMP_OUT}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}"
+    mkdir -p "${TMP_OUT}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}"
+  else
+    mkdir -p "${TMP_OUT}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}"
+  fi
+
+  if [ -d "${TMP_OUT}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}" ]
+  then
+    rm -rf "${TMP_OUT}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}"
+    mkdir -p "${TMP_OUT}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}"
+  else
+    mkdir -p "${TMP_OUT}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}"
+  fi
+
+  FRAME_COLOR_SPACE="$(mediainfo --Output=JSON "${TMP}/frame_analysis/output0002.png" | jq -r '.media.track[] | select(."@type" != "General").BitDepth')"
+  FRAME_BIT_DEPTH="$(mediainfo --Output=JSON "${TMP}/frame_analysis/output0002.png" | jq -r '.media.track[] | select(."@type" != "General").BitDepth')"
+  FRAME_DIR_SIZE="$(du -sk "${TMP}/frame_analysis" | awk '{print $1}')"
+  FRAME_DIR_AMOUNT="$(ls "${TMP}/frame_analysis" | wc -l)"
+  AVERAGE_FRAME_SIZE="$(echo "(${FRAME_DIR_SIZE}/${FRAME_DIR_AMOUNT})/1024" | bc -l)"
+  rm -rf "${TMP}/frame_analysis"
+
+  if [ -s "${TMP}/${MOVIE_NAME_ARRAY[*]}_ffprobe.json" ]
+  then
+    VIDEO_HEIGHT=$(jq '.streams[] | select(.index == 0).height' "${TMP}/${MOVIE_NAME_ARRAY[*]}_ffprobe.json")
+    VIDEO_WIDTH=$(jq '.streams[] | select(.index == 0).width' "${TMP}/${MOVIE_NAME_ARRAY[*]}_ffprobe.json")
+    VIDEO_DURATION=$(printf "%.0f\n" $(jq -r '.format.duration' "${TMP}/${MOVIE_NAME_ARRAY[*]}_ffprobe.json")) # [s]
+  fi
+  MOVIE_SIZE=$(du -sh "${MOVIE_NAME_ARRAY[*]}.mkv" | awk '{print $1}')
+  INPUT_FRAMES_MAX_TSPACE=$(printf "%.0f\n" $(echo "(${AVERAGE_FRAME_SIZE}*${INPUT_FRAMES_COUNT})/1000" | bc -l)) # [MB]
+  MAX_INPUT_FRAMES_VAR_OUT_FREE_SPACE=$(echo "((${VAR_OUT_FREE_SPACE}*1000)/${AVERAGE_FRAME_SIZE})" | bc -l)
+  MAX_INPUT_SEC_VAR_OUT_FREE_SPACE=$(printf "%.0f\n" $(echo "${MAX_INPUT_FRAMES_VAR_OUT_FREE_SPACE}/${INPUT_FPS}" | bc -l))
+  if [ ${FRAME_BIT_DEPTH} -eq 8 ]
+  then
+    INTER_FRAMES_MAX_TSPACE=$(printf "%.0f\n" $(echo "(${TARGET_FRAME_COUNT}*${AVERAGE_FRAME_SIZE}*${INTER_FRAMES_COUNT})/1000" | bc -l))
+  elif [ ${FRAME_BIT_DEPTH} -eq 16 ]
+  then
+    INTER_FRAMES_MAX_TSPACE=$(printf "%.0f\n" $(echo "(${TARGET_FRAME_COUNT}*(${AVERAGE_FRAME_SIZE}/2)*${INTER_FRAMES_COUNT})/1000" | bc -l))
+    AVERAGE_FRAME_SIZE=$(printf "%.0f\n" $(echo "${AVERAGE_FRAME_SIZE}/2" | bc -l))
+  fi
+  MAX_INTER_FRAMES_VAR_FREE_SPACE=$(echo "((${VAR_FREE_SPACE}*1000)/${AVERAGE_FRAME_SIZE})" | bc -l)
+  MAX_INTER_SEC_VAR_FREE_SPACE=$(printf "%.0f\n" $(echo "${MAX_INTER_FRAMES_VAR_FREE_SPACE}/${OUTPUT_FPS}" | bc -l))
+  MAX_TSPACE=$((INPUT_FRAMES_MAX_TSPACE+INTER_FRAMES_MAX_TSPACE))
+  if [[ ${MAX_TSPACE} == "" ]] || [ ${MAX_TSPACE} -eq 0 ] || [ -z ${MAX_TSPACE} ]
+  then
+    MAX_TSPACE="1"
+  fi
+
+  split -d -a 8 -n$((INPUT_FRAMES_COUNT+1)) --additional-suffix=".png"  /dev/null "${TMP_OUT}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}/" &
+  # split -d -a 8 -n$((INTER_FRAMES_COUNT-1)) --additional-suffix=".png"  /dev/null "${TMP}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/" &
+  sleep 0.5
+  rm -rf "${TMP_OUT}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}/00000000.png"
+  # rm -rf "${TMP}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/00000000.png"
+
+  inf "  video details"
+  debug "    FILE_NAME=${TEAL}${FILE_NAME}"
+  debug "     MOVIE_NAME_ARRAY=${LIGHTGREEN}${MOVIE_NAME_ARRAY[*]}"
+  debug "     FILE_NAME_EXTENSION=${PURPLE2}${FILE_NAME_EXTENSION}"
+  debug "      VIDEO_SIZE=${CRIMSON}${VIDEO_WIDTH}x${VIDEO_HEIGHT}${DODGERBLUE1}, duration: ${OLIVE}${VIDEO_DURATION} [s]"
+  debug "      INPUT_FRAMES_COUNT=${GOLD}${INPUT_FRAMES_COUNT}${DODGERBLUE1} (last file: ${MAROON1}${INPUT_FRAMES_LEADING}.png${DODGERBLUE1}), (max_space for extracted frames: ${MAROON1}${INPUT_FRAMES_MAX_TSPACE} [GB]${DODGERBLUE1}, bit depth ${MAGENTA1}${FRAME_BIT_DEPTH} [bit/channel]${DODGERBLUE1})"
+  debug "      INTER_FRAMES_COUNT=${AQUAMARINE}${INTER_FRAMES_COUNT}${DODGERBLUE1} (last file: ${CORAL1}${INPUT_FRAMES_INTER_LEADING}.png${DODGERBLUE1}), (max_space for interpolated frames: ${CORAL1}${INTER_FRAMES_MAX_TSPACE} [GB]${DODGERBLUE1})"
+  debug "        INPUT_FPS=${ROYALBLUE2}${INPUT_FPS}"
+  debug "        OUTPUT_FPS=${SLATEBLUE1}${OUTPUT_FPS}${DODGERBLUE1} (OUTPUT_FPS_ROUND=${LIGHTSEAGREEN}${OUTPUT_FPS_ROUND})"
+  debug "         TARGET_FRAME_COUNT=${LAWNGREEN}${TARGET_FRAME_COUNT}"
+  debug "          MAX_TSPACE=${DEEPSKYBLUE2}${MAX_TSPACE} [GB]"
+  inf "    preparation of ${YELLOW}${MOVIE_NAME_ARRAY[*]}${CYAN} done successfully ${MAGENTA}${RUNTIME}"
+  inf "  directories:"
+  inf "    extracting streams (audio/subtitles) -> ${GREENYELLOW}${TMP}"
+  inf "    extracting frames                    -> ${LIGHTGREEN}${TMP_OUT} ${CYAN}(${DARKCYAN}${VAR_OUT_FREE_SPACE} [GB], ${MAX_INPUT_SEC_VAR_OUT_FREE_SPACE} [s]${CYAN})"
+  inf "    interpolating frames                 -> ${GREENYELLOW}${TMP} ${CYAN}(${DARKCYAN}${VAR_FREE_SPACE} [GB] ${MAX_INTER_SEC_VAR_FREE_SPACE} [s]${CYAN})"
+
+  inf "    merging frames                       from ${GREENYELLOW}${TMP}${CYAN} -> ${LIGHTGREEN}${TMP_OUT}"
+  inf "    merging streams                      -> ${GREENYELLOW}./ "
+  wait
+  end_time_collecting
+  VIDEO_ANALYSIS_RUNTIME=${RUNTIME}
+  echo ${VIDEO_ANALYSIS_RUNTIME} > "${TMP}/VIDEO_ANALYSIS_RUNTIME"
+  inf "    analysis, calculations and all other preparations of ${YELLOW}${MOVIE_NAME_ARRAY[*]}${CYAN} done successfully ${MAGENTA}${RUNTIME}"
+  # preparation, analysis, all calculations and information - END
+
+  # actual process
+  tput civis
+  # it will eliminate part of frame analysis as not needed anymore
+  converting_hdr2sdr              "${MOVIE_NAME_ARRAY[*]}"
+  if [[ ${VERBOSE} == yes ]]
+  then
+    warn "      VERBOSE, so waiting till the end of converting_hdr2sdr function"
+    wait
+  fi
+  extracting_mkv_frames           "${MOVIE_NAME_ARRAY[*]}"            "${TMP_OUT}"    "${TMP}"
+  if [[ ${VERBOSE} == yes ]]
+  then
+    warn "      VERBOSE, so waiting till the end of extracting_mkv_frames function"
+    wait
+  fi
+  interpolating_extracted_frames  "${MOVIE_NAME_ARRAY[*]}"            "${TMP_OUT}"    "${TMP}"
+  if [[ ${VERBOSE} == yes ]]
+  then
+    warn "      VERBOSE, so waiting till the end of interpolating_extracted_frames function"
+    wait
+  fi
+  if [[ ${VERBOSE} == no ]]
+  then
+    checking_space_background       "${NCNN_BACKGROUND_PROCESS_PID}"    "${TMP_OUT}"    "${TMP}"
+  fi
+  wait
+  merging_frames_mkv              "${MOVIE_NAME_ARRAY[*]}"               "${TMP}"          "${TMP_OUT}"
+  if [[ ${VERBOSE} == yes ]]
+  then
+    warn "      VERBOSE, so waiting till the end of merging_frames_mkv function"
+  fi
+  if [[ ${VERBOSE} == no ]]
+  then
+    checking_space_background       "${MERGING_INTERFRAMES_PROCESS_PID}"   "${TMP_OUT}"      "${TMP}"
+  fi
+  wait
+  merging_streams_mkv             "${MOVIE_NAME_ARRAY[*]}"               "${TMP}"          "${TMP_OUT}"
+  wait
+}
+
+movie_data_collecting()
+{
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "  FILE_NAME          = ${FILE_NAME}"
+  fi
+  MOVIE_NAME=$(echo ${VIDEO_FILE_NAME} | awk -F\/ '{print $NF}')
+  MOVIE_NAME_URL_ENC=$(jq -rn --arg movie_name_array "${MOVIE_NAME_ARRAY[*]}" '$movie_name_array|@uri')
+  MOVIE_METADATA_FILENAME="${MOVIE_NAME_ARRAY[*]}_metadata"
+  MOVIE_METADATA_FILENAME_LOCAL="${MOVIE_METADATA_FILENAME}_local"
+  MOVIE_METADATA_FILENAME_OMDB="${MOVIE_METADATA_FILENAME}_omdb_api"
+  MOVIE_METADATA_FILENAME_OMDB_SERIES="${MOVIE_METADATA_FILENAME}_omdb_api_series"
+  MOVIE_METADATA_FILENAME_THEMOVIEDB="${MOVIE_METADATA_FILENAME}_themoviedb_api"
+  mediainfo --Output=JSON "${MOVIE_NAME_ARRAY[*]}.mkv" | jq -r > "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mediainfo.json" 2>"${LOG}/${MOVIE_METADATA_FILENAME_LOCAL}_mediainfo.log"
+  ffprobe -v quiet -print_format json -show_format -show_streams "${MOVIE_NAME_ARRAY[*]}.mkv" > "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_ffprobe.json" 2>"${LOG}/${MOVIE_METADATA_FILENAME_LOCAL}_ffprobe.log"
+  ln -sf "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_ffprobe.json" "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.json"
+  mkvmerge -J "${MOVIE_NAME_ARRAY[*]}.mkv" > "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json" 2>"${LOG}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.log"
+  MOVIE_SIZE=$(du -sh "${FILE_NAME}" | awk '{print $1}')
+  MOVIE_METADATA_ENCODER_LOCAL=$(jq -r '.container.properties.writing_application' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
+  IMDB_ID_LOCAL="$(jq -r '.format.tags.imdbID' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.json")"
+  THEMOVIEDB_ID_LOCAL="$(jq -r '.format.tags.themoviedbID' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.json")"
+
+  if [ ! -z ${IMDB_ID_LOCAL} ] && [[ ${IMDB_ID_LOCAL} != null ]]
+  then
+    IMDB_ID="${IMDB_ID_LOCAL}"
+  elif [ ! -z ${IMDB_ID_PROVIDED} ]
+  then
+    IMDB_ID="${IMDB_ID_PROVIDED}"
+  else
+    error "  imdbID was neither in file metadata, nor provided"
+    failed
+  fi
+  curl -s --request GET --url "http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&i=${IMDB_ID}&plot=full" | jq -r > "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json" 2>"${LOG}/${MOVIE_METADATA_FILENAME_OMDB}.log"
+  curl -s --request GET --url "https://api.themoviedb.org/3/find/${IMDB_ID}?api_key=${THEMOVIEDB_API3_KEY}&external_source=imdb_id" > "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json" 2>"${LOG}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.log"
+  if [ -s "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json" ]
+  then
+    OMDB_API_IMDB_ID="$(jq -r '.imdbID' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_API_TITLE="$(jq -r '.Title' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")" # -> "Type": "movie" -> movie title
+    OMDB_API_TYPE="$(jq -r '.Type' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_API_YEAR="$(jq -r '.Year' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_RELEASED_API="$(jq -r '.Released' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    if [[ ${OMDB_API_TYPE} == "episode" ]]
+    then
+      # particular episode
+      OMDB_API_IMDBSERIESID_API="$(jq -r '.seriesID' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+      curl -s --request GET --url "http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&i=${OMDB_API_IMDBSERIESID_API}&plot=full" | jq -r > "${TMP}/${MOVIE_METADATA_FILENAME_OMDB_SERIES}.json" 2>"${LOG}/${MOVIE_METADATA_FILENAME_OMDB_SERIES}.log"
+      OMDB_EPISODE_TITLE_API="${OMDB_API_TITLE}" # -> title of an episode, not the series itself
+      OMDB_SEASON_API="$(jq -r '.Season' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+      OMDB_EPISODE_API="$(jq -r '.Episode' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+      # whole series
+      OMDB_SERIES_TITLE_API="$(jq -r '.Title' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB_SERIES}.json")"
+      OMDB_SERIES_TOTALSEASONS_API="$(jq -r '.totalSeasons' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB_SERIES}.json")"
+      OMDB_SERIES_PLOT_API="$(jq -r '.Plot' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB_SERIES}.json")"
+    elif [[ ${OMDB_API_TYPE} == "movie" ]]
+    then
+      OMDB_BOXOFFICE_API="$(jq -r '.BoxOffice' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+      OMDB_PRODUCTION_API="$(jq -r '.Production' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    fi
+    OMDB_RUNTIME_API="$(jq -r '.Runtime' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_GENRE_API="$(jq -r '.Genre' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_DIRECTOR_API="$(jq -r '.Director' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_WRITER_API="$(jq -r '.Writer' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_ACTORS_API="$(jq -r '.Actors' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_API_PLOT="$(jq -r '.Plot' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_API_LANGUAGE="$(jq -r '.Language' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_API_COUNTRY="$(jq -r '.Country' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_AWARDS_API="$(jq -r '.Awards' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_API_METACRITIC="$(jq -r '.Metascore + "%"' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_IMDBRATING_API="$(jq -r '.imdbRating' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+    OMDB_IMDBVOTES_API="$(jq -r '.imdbVotes' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")"
+  fi
+  # OMDB
+
+  # TheMovieDB
+  if [ -s "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json" ]
+  then
+    THEMOVIEDB_ID_API=$(jq -r '.movie_results[].id' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)
+    if [ ! -z ${THEMOVIEDB_ID_API} ]
+    then
+      THEMOVIEDB_TYPE_API=$(jq -r '.movie_results[].media_type' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)
+      THEMOVIEDB_TITLE_API="$(jq -r '.movie_results[].original_title' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)"
+      THEMOVIEDB_POSTER_URL_API="$(jq -r '.movie_results[].poster_path' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)"
+      THEMOVIEDB_POSTER_URL_API_FORMAT="$(echo ${THEMOVIEDB_POSTER_URL_API} | awk -F\. '{print $NF}')"
+      THEMOVIEDB_RELEASE_DATE_API=$(jq -r '.movie_results[].release_date' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)
+      THEMOVIEDB_RATING_API=$(jq -r '.movie_results[].vote_average' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)
+      THEMOVIEDB_PLOT_API=$(jq -r '.movie_results[].overview' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null) 
+      THEMOVIEDB_POSTER_URL_API="https://image.tmdb.org/t/p/original$(cat "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json" | jq -r '.movie_results[].poster_path')"
+    else
+      inf "It looks like it is not a \"movie\", rather episode of a series"
+      THEMOVIEDB_ID_API=$(jq -r '.tv_episode_results[].id' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)
+      THEMOVIEDB_TYPE_API=$(jq -r '.tv_episode_results[].media_type' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)
+      THEMOVIEDB_TITLE_API="$(jq -r '.tv_episode_results[].name' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)"
+      THEMOVIEDB_POSTER_URL_API="$(jq -r '.tv_episode_results[].poster_path' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)"
+      THEMOVIEDB_POSTER_URL_API_FORMAT="$(echo ${THEMOVIEDB_POSTER_URL_API} | awk -F\. '{print $NF}')"
+      THEMOVIEDB_RELEASE_DATE_API=$(jq -r '.tv_episode_results[].air_date' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)
+      THEMOVIEDB_RATING_API=$(jq -r '.tv_episode_results[].vote_average' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)
+      THEMOVIEDB_PLOT_API=$(jq -r '.tv_episode_results[].overview' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json"  2>/dev/null)
+      THEMOVIEDB_POSTER_URL_API="https://image.tmdb.org/t/p/original$(jq -r '.tv_episode_results[].still_path' "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}.json")"
+    fi
+    wget -q "${THEMOVIEDB_POSTER_URL_API}" -O "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}_poster.jpg"
+    if [ -s "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}_poster.jpg" ]
+    then
+      THEMOVIEDB_POSTER_URL_API_FORMAT=$(mediainfo --Output=JSON "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}_poster.jpg" | jq -r '.media.track[] | select(."@type" == "Image").Format')
+      THEMOVIEDB_POSTER_URL_API_HEIGHT=$(mediainfo --Output=JSON "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}_poster.jpg" | jq -r '.media.track[] | select(."@type" == "Image").Height')
+      THEMOVIEDB_POSTER_URL_API_WIDTH=$(mediainfo --Output=JSON "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}_poster.jpg" | jq -r '.media.track[] | select(."@type" == "Image").Width')
+      THEMOVIEDB_POSTER_SIZE=$(du -sk "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}_poster.jpg" | awk '{print $1}')
+    fi
+  fi
+  # TheMovieDB
+  if [ -s "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}_poster.jpg" ]
+  then
+    POSTER_SIZE=${THEMOVIEDB_POSTER_SIZE}
+    POSTER_HEIGHT=${THEMOVIEDB_POSTER_URL_API_HEIGHT}
+    POSTER_WIDTH=${THEMOVIEDB_POSTER_URL_API_WIDTH}
+    sudo cp "${TMP}/${MOVIE_METADATA_FILENAME_THEMOVIEDB}_poster.jpg" "${MOVIE_NAME_ARRAY[*]}.mkv.cover.jpg"
+  fi
+  }
+
+imdb_management()
+{
+  MOVIE_NAME=$(echo ${MOVIE_NAME_ARRAY[*]} | awk -F\/ '{print $NF}')
+  inf "    adding/updating mkv file with OMDB ID to: ${BROWN}${IMDB_ID}"
+  mkvpropedit "${MOVIE_NAME_ARRAY[*]}.mkv" --tags all: > /dev/null 2>&1
+  echo "<?xml version=1.0?>
+  <Tags>
+    <Tag>" > "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+
+  if [[ ${OMDB_API_TYPE} == "episode" ]]
+  then
+    echo "      <Simple><Name>IMDbID (series IMDbID)</Name><String>${OMDB_API_IMDB_ID} (${OMDB_API_IMDBSERIESID_API})</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+    echo "      <Simple><Name>TheMovieDbID</Name><String>${THEMOVIEDB_ID_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+    echo "      <Simple><Name>titles</Name><String>${OMDB_EPISODE_TITLE_API} (${OMDB_SERIES_TITLE_API})</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+    echo "      <Simple><Name>seasons/episodes</Name><String>S${OMDB_SEASON_API}, E${OMDB_EPISODE_API} (seasons: ${OMDB_SERIES_TOTALSEASONS_API})</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+    echo "      <Simple><Name>_series_plot</Name><String>${OMDB_SERIES_PLOT_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+    echo "      <Simple><Name>_episode_plot (OMDb)</Name><String>${OMDB_API_PLOT}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+    echo "      <Simple><Name>_episode_plot (TheMovieDb)</Name><String>${THEMOVIEDB_PLOT_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+  elif [[ ${OMDB_API_TYPE} == "movie" ]]
+  then
+    echo "      <Simple><Name>IMDbID</Name><String>${OMDB_API_IMDB_ID}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+    echo "      <Simple><Name>TheMovieDbID</Name><String>${THEMOVIEDB_ID_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+    echo "      <Simple><Name>title</Name><String>${OMDB_API_TITLE}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+    echo "      <Simple><Name>_OMDb_plot</Name><String>${OMDB_API_PLOT}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+    echo "      <Simple><Name>_TheMovieDb_plot</Name><String>${THEMOVIEDB_PLOT_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+    echo "      <Simple><Name>boxoffice</Name><String>${OMDB_BOXOFFICE_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+    echo "      <Simple><Name>production</Name><String>${OMDB_PRODUCTION_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+  fi
+  echo "      <Simple><Name>released</Name><String>${OMDB_RELEASED_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+  echo "      <Simple><Name>runtime</Name><String>${OMDB_RUNTIME_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+  echo "      <Simple><Name>genre</Name><String>${OMDB_GENRE_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+  echo "      <Simple><Name>director</Name><String>${OMDB_DIRECTOR_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+  echo "      <Simple><Name>actors</Name><String>${OMDB_ACTORS_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+  echo "      <Simple><Name>language</Name><String>${OMDB_API_LANGUAGE}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml" # -> may be useful for setting default language in a movie
+  echo "      <Simple><Name>country</Name><String>${OMDB_API_COUNTRY}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+  if [[ ${OMDB_AWARDS_API} != "N/A" ]] && [[ ${OMDB_AWARDS_API} != "" ]]
+  then
+    echo "      <Simple><Name>awards</Name><String>${OMDB_AWARDS_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+  fi
+
+  #if [[ ${OMDB_API_METACRITIC} != "N/A%" ]] && [[ ${OMDB_API_METACRITIC} != "" ]]
+  #then
+  #  echo "      <Simple><Name>metacritic</Name><String>${OMDB_API_METACRITIC}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+  #fi
+  #if [[ ${OMDB_IMDBRATING_API} != "N/A%" ]] && [[ ${OMDB_IMDBRATING_API} != "" ]]
+  #then
+  #  echo "      <Simple><Name>IMDb rating</Name><String>${OMDB_IMDBRATING_API}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+  #fi
+  IFS=${NEWIFS}
+  for OMDB_API_RATING in $(jq -r '.Ratings[] | .Source + "~" + .Value' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")
+  do
+    OMDB_API_RATING_SOURCE=$(echo ${OMDB_API_RATING} | awk -F\~ '{print $1}' | sed "s/[[:space:]]/_/g")
+    OMDB_API_RATING_RATING=$(echo ${OMDB_API_RATING} | awk -F\~ '{print $2}')
+    echo "      <Simple><Name>_${OMDB_API_RATING_SOURCE}_rating</Name><String>${OMDB_API_RATING_RATING}</String></Simple>" >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+  done
+  IFS=${ORIGIFS}
+
+  echo "     </Tag>
+  </Tags>"  >> "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml"
+
+  if [[ $(mkvmerge -J "${MOVIE_NAME_ARRAY[*]}.mkv"  | jq -r '.tracks[].properties | select(.language == "pol")') != "" ]]
+  then
+    sudo mkvpropedit --edit track:$(mkvmerge -J "${MOVIE_NAME_ARRAY[*]}.mkv"  | jq -r '.tracks[].properties | select(.language == "pol").number') --set flag-default=1 "${MOVIE_NAME_ARRAY[*]}.mkv" > /dev/null 2>&1
+  fi
+  sudo mkvpropedit "${MOVIE_NAME_ARRAY[*]}.mkv" --tags global:"${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.xml" > /dev/null 2>&1
+  sudo mkvpropedit "${MOVIE_NAME_ARRAY[*]}.mkv" -e info -s title="${OMDB_API_TITLE}" > /dev/null 2>&1
+  }
+
+movie_processing_end()
+{
+  if [[ ${UPDATE} == yes ]]
+  then
+    mkv_cleaning
+    sudo chmod 664 "${MOVIE_NAME_ARRAY[*]}"*
+    sudo chown nobody:minidlna "${MOVIE_NAME_ARRAY[*]}"* > /dev/null 2>&1
+  fi
+  }
+
+mkv_cleaning()
+{
+  if [[ ${UPDATE} == yes ]]
+  then
+    if [[ ${VERBOSE} == yes ]]
+    then
+      debug ""
+      debug "    ${WINE}Removing internal attachement (cover, text file etc.) from a movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}"
+    fi
+    mkvpropedit "${MOVIE_NAME_ARRAY[*]}.mkv" --delete-attachment mime-type:image/jpeg --delete-attachment mime-type:image/png --delete-attachment mime-type:text/plain > /dev/null 2>&1
+    if [[ ${VERBOSE} == yes ]]
+    then
+      debug ""
+      debug "    ${WINE}Removing chapters from a movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}"
+    fi
+    mkvpropedit "${MOVIE_NAME_ARRAY[*]}.mkv" --chapters "" > /dev/null 2>&1
+  fi
+  }
+
+subtitles_management()
+{
+  if [ -f "${MOVIE_NAME_ARRAY[*]}.txt" ]
+  then
+    MOVIE_SUBTITLE="${MOVIE_NAME_ARRAY[*]}.txt"
+    if [[ ${VERBOSE} == yes ]]
+    then
+      debug "  There is a subtitle: ${BROWN}${MOVIE_SUBTITLE}"
+    fi
+  elif [ -f "${MOVIE_NAME_ARRAY[*]}.srt" ]
+  then
+    MOVIE_SUBTITLE="${MOVIE_NAME_ARRAY[*]}.srt"
+    if [[ ${VERBOSE} == yes ]]
+    then
+      debug "  There is a subtitle: ${BROWN}${MOVIE_SUBTITLE}"
+    fi
+  elif [ -f "${MOVIE_NAME_ARRAY[*]}.sub" ] && [ -f "${MOVIE_NAME_ARRAY[*]}.idx" ]
+  then
+    MOVIE_SUBTITLE="${MOVIE_NAME_ARRAY[*]}.sub"
+    if [[ ${VERBOSE} == yes ]]
+    then
+      debug "  There is a subtitle :${BROWN}${MOVIE_SUBTITLE}${CYAN} (with index)"
+    fi
+  else
+    if [[ ${VERBOSE} == yes ]]
+    then
+      error "    There is no subtitle for a movie: ${YELLOW}${MOVIE_NAME_ARRAY[*]}${RED}, downloading..."
+    fi
+    subliminal --opensubtitles kamoyl ${OPENSUBTITLE_TRACKS_PASSWORD} --provider opensubtitles --provider argenteam --provider shooter --provider thesubdb --provider tvsubtitles -l pl -e UTF8 -s "${MOVIE_NAME_ARRAY[*]}.mkv" > /dev/null 2>&1
+  fi
+}
+
+encoding_process_details()
+{
+  DESTINATION_DIR="/media/ready"
+  if [[ ${ANIMATION} == yes ]]
+  then
+    # doc: https://keithwiley.com/astroPhotography/imageSharpening.shtml
+    OPTIMIZATION="animation"
+  elif [[ ${GRAIN} == yes ]]
+  then
+    OPTIMIZATION="grain"
+  elif [[ ${HIGHMOTION} == yes ]]
+  then
+    OPTIMIZATION="highmotion"
+  else
+    OPTIMIZATION="film"
+  fi
+
+  # aq-mode=4 from aq-mode=1
+  # VIDEO_ENCODER=(x265_10bit --quality 18 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts strong-intra-smoothing=0:rect=0:aq-mode=4)
+  # --cqp 1-70 (ffmpeg) -> --quality 22 (HandBrake)
+  # --input-depth {8, 10}, default is 10bit, and to do 10bit out of 8bit source, it needs conversion first, or svt_av1_10bit -> svt_av1
+  # VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts aq-mode=2)
+  # VIDEO_ENCODER=(svt_av1 -quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts rc=1:tune=0:enable-overlays=1:scd=1)
+  
+  VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts tune=0:enable-overlays=1:aq-mode=2)
+  AUDIO_ENCODER="copy"
+  DISPLAY_DIMENSIONS=$(jq -r '.tracks[] | select(.type == "video").properties.display_dimensions' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
+  PIXEL_DIMENTIONS=$(jq -r '.tracks[] | select(.type == "video").properties.pixel_dimensions' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
+  debug "      DISPLAY_DIMENSIONS=${DISPLAY_DIMENSIONS}"
+  debug "      PIXEL_DIMENTIONS=${PIXEL_DIMENTIONS}"
+  for TRACK_TYPE in $(jq -r '.tracks[].type' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json" | sort -u)
+  do
+    debug "  for TRACK_TYPE = ${TRACK_TYPE}"
+    for TRACK_ID in $(jq -r --arg track_type ${TRACK_TYPE} '.tracks[] | select(.type == $track_type).id' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
+    do
+      TRACK_CODEC=$(jq -r --arg track_type ${TRACK_TYPE} --arg track_id ${TRACK_ID} '.tracks[] | select(.type == $track_type) | select((.id|tostring) == $track_id).codec' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
+      TRACK_LANGUAGE=$(jq -r --arg track_type ${TRACK_TYPE} --arg track_id ${TRACK_ID} '.tracks[] | select(.type == $track_type) | select((.id|tostring) == $track_id).properties.language' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
+      debug "    TRACK_ID=${TRACK_ID}, TRACK_CODEC=${TRACK_CODEC}, TRACK_LANGUAGE=${TRACK_LANGUAGE}"
+    done
+  done
+  AUDIO_TRACKS=$(jq -r '.streams[] | select(.codec_type == "audio") | select(.tags.language == "eng" or .tags.language == "pol").index' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.json" | tr '\n' ',' | sed "s/,$//g")
+  inf "    encoding AUDIO_TRACKS=${MAGENTA}${AUDIO_TRACKS}"
+  SUBTITLE_TRACKS=$(jq -r '.streams[] | select(.codec_type == "subtitle") | select(.tags.language == "eng" or .tags.language == "pol" or .tags.language == "dut").index' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.json" | tr '\n' ',' | sed "s/,$//g")
+  inf "    encoding SUBTITLE_TRACKS=${MAGENTA}${SUBTITLE_TRACKS}"
+  inf "    nohup HandBrakeCLI -i \"${MOVIE_NAME_ARRAY[*]}.mkv\" -o \"${DESTINATION_DIR}/${MOVIE_NAME_ARRAY[*]}.mkv\" --encoder ${VIDEO_ENCODER[*]} -E ${AUDIO_ENCODER} --no-markers -a ${AUDIO_TRACKS} --subtitle-lang-list eng,pol,dut --all-subtitles > \"${DESTINATION_DIR}/${MOVIE_NAME_ARRAY[*]}.mkv.log\" 2>&1 &"
+  }
+
+encoding_process()
+{
+  encoding_process_details
+  nohup HandBrakeCLI -i "${MOVIE_NAME_ARRAY[*]}.mkv" -o "${DESTINATION_DIR}/${MOVIE_NAME_ARRAY[*]}.mkv" --encoder ${VIDEO_ENCODER[*]} -E ${AUDIO_ENCODER} --no-markers -a ${AUDIO_TRACKS} --subtitle-lang-list eng,pol,dut --all-subtitles > "${DESTINATION_DIR}/${MOVIE_NAME_ARRAY[*]}.mkv.log" 2>&1 &
+  }
+
+encoding_quality_metric()
+{
+  if [ $# -ne 2 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs two parameters: ${YELLOW}ENCODED_VIDEO_FILE, ${ORANGE1}REFERENCE_VIDEO_FILE"
+    ERROR_CODE="1"
+    failed
+  else
+    ENCODED_VIDEO_FILE="${1}"
+    REFERENCE_VIDEO_FILE="${2}"
+  fi
+  SHOW_FUNCTION_NAME=${FUNCNAME}
+  start_time_collecting
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${ENCODED_VIDEO_FILE}" -i "${REFERENCE_VIDEO_FILE}" -lavfi libvmaf=model="path=/usr/share/model/vmaf_v0.6.1.json":log_path="${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json":log_fmt=json -f null - > "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log" 2>&1 & echo "$!" > "${TMP}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.pid"
+  QUALITY_METRIC_CHECK_PID=$(cat ${TMP}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.pid)
+  while ps --pid ${QUALITY_METRIC_CHECK_PID} > /dev/null 2>&1
+  do
+    if [ -s "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log" ]
+    then
+      CURRENT_ANALYSED_FRAME=$(tail -n$((TARGET_FRAME_COUNT*6)) "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log" | grep "frame=" | tail -n1 | sed "s/frame=//g")
+      CURRENT_ANALYSED_FRAME_PERCENT="$(echo "(${CURRENT_ANALYSED_FRAME}/${INTER_FRAMES_COUNT}) * 100" | bc -l)"
+      CURRENT_ANALYSED_FRAME_PERCENT="$(printf "%.0f\n" "${CURRENT_ANALYSED_FRAME_PERCENT}")"
+      if [[ ${VERBOSE} == no ]]
+      then
+        printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 14))" "        ${MAGENTA2}currently analysed frame ${BROWN}${CURRENT_ANALYSED_FRAME} ${LIGHT_MAGENTA}${CURRENT_ANALYSED_FRAME_PERCENT} [%]" 2>/dev/null
+      fi
+    fi
+  done
+  VMAF_MIN="$(jq -r '.pooled_metrics.vmaf.min' "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json")"
+  VMAF_MAX="$(jq -r '.pooled_metrics.vmaf.max' "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json")"
+  VMAF_MEAN="$(jq -r '.pooled_metrics.vmaf.mean' "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json")"
+  end_time_collecting
+  echo ${RUNTIME} > "${TMP}/QUALITY_METRIC_RUNTIME"
+  printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 13))" "          ${MAGENTA2}VAMF mean:${BROWN} ${VMAF_MEAN}" 2>/dev/null
+  }
+
+reading_cursor_position()
+{
+  # Source - https://stackoverflow.com/a/6003016
+  # Posted by BSK, modified by community. See post 'Timeline' for change history
+  # Retrieved 2026-08-06, License - CC BY-SA 4.0
+  echo -en "\E[6n"
+  read -sdR CURPOS
+  CURPOS=${CURPOS#*[}
+  echo "${CURPOS}"
+  }

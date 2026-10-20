@@ -1,0 +1,355 @@
+#!/usr/bin/env bash
+
+ORIGIFS=${IFS}
+NEWIFS=$'\n'
+VERBOSE=no
+
+LIME_YELLOW=$(tput setaf 190)
+POWDER_BLUE=$(tput setaf 153)
+BRIGHT=$(tput bold)
+NORMAL=$(tput sgr0)
+BLINK=$(tput blink)
+REVERSE=$(tput smso)
+UNDERLINE=$(tput smul)
+RESET=$(tput sgr0)
+
+WINE=$(echo -e "\x1b[38;2;191;000;000m")
+DARK_GREEN=$(echo -e "\x1b[38;2;50;200;100m")
+LIGHT_BLUE=$(echo -e "\x1b[38;2;50;250;240m")
+LIGHT_YELLOW=$(echo -e "\x1b[38;2;250;250;0m")
+LIGHT_MAGENTA=$(echo -e "\x1b[38;2;240;200;240m")
+DARK_MAGENTA=$(echo -e "\x1b[38;2;75;66;144m")
+DARK_CYAN=$(echo -e "\x1b[38;2;0;139;139m")
+
+if [[ "${OSTYPE}" =~ "linux" ]]
+then
+  SCRIPT=$(readlink -f "$0")
+elif [[ "${OSTYPE}" =~ "darwin" ]]
+then
+  SCRIPT=$(greadlink -f "$0")
+else
+  SCRIPT=$(readlink -f "$0")
+fi
+
+SCRIPTS_HOME=$(dirname "${SCRIPT}")
+PARAMETERS=$(echo "$@" | sed 's/\-l .//g')
+
+if [ $(caller | awk '{print $1}') -eq 0 ]
+then
+  CALLING=0
+  echo -e "${BLUE}${datestring} EXECUTE: ${YELLOW}[ ${LIME}$0 ${PARAMETERS} ${YELLOW} ]${RESET}"
+  source "${SCRIPTS_HOME}/.config"
+  source "${SCRIPTS_HOME}/.var_management"
+else
+  CALLING=1
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "${YELLOW}[ ${LIME}$(echo $(caller | awk '{print $2}') | awk -F\/ '{print $NF}') ${YELLOW}calls (in line: ${LIME}$(caller | awk '{print $1}')${YELLOW}) ${LIME}$(echo ${BASH_SOURCE} | awk -F\/ '{print $NF}') ${PARAMETERS} ${YELLOW} ]"
+  fi
+fi
+
+ANIMATION=no
+GRAIN=no
+ENCODING=no
+UPDATE=no
+QUALITY=no
+HIGHMOTION=no
+while getopts ":I:i:o:qHaguvhe" ARG
+do
+  case "${ARG}" in
+        a)
+            ANIMATION=yes
+            ;;
+        g)
+            GRAIN=yes
+            ;;
+        H)
+            HIGHMOTION=yes
+            ;;
+        e)  ENCODING=yes
+            ;;
+        u)
+            UPDATE=yes
+            ;;
+        q)
+            QUALITY=yes
+            ;;
+        i)
+            i=${OPTARG}
+            FILE_NAME=${i}
+            ;;
+        I)
+            I=${OPTARG}
+            if [[ ${I} == tt* ]]
+            then
+              IMDB_ID_PROVIDED=${I}
+            else
+              THEMOVIEDB_ID_PROVIDED=${I}
+            fi
+            ;;
+        o)
+            o=${OPTARG}
+            ;;
+        v)
+            VERBOSE=yes
+            ;;
+        h)
+            usage
+            ;;
+  esac
+done
+shift $((OPTIND-1))
+
+if [[ ! -s ${FILE_NAME} ]]
+then
+  error " it looks like there is no such video file: ${ORANGE}${FILE_NAME}"
+  failed
+else
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "  FILE_NAME          = ${FILE_NAME}"
+  fi
+  MOVIE_NAME_ARRAY=(${FILE_NAME/\.mkv})
+  MOVIE_NAME=$(echo ${MOVIE_NAME_ARRAY[*]} | awk -F\/ '{print $NF}')
+  MOVIE_NAME_URL_ENC=$(jq -rn --arg movie_name_array "${MOVIE_NAME}" '$movie_name_array|@uri')
+  MOVIE_METADATA_FILENAME="${MOVIE_NAME}_metadata"
+  MOVIE_METADATA_FILENAME_LOCAL="${MOVIE_METADATA_FILENAME}_local"
+  MOVIE_METADATA_FILENAME_IMDB="${MOVIE_METADATA_FILENAME}_imdb_api"
+  MOVIE_METADATA_FILENAME_THEMOVIEDB="${MOVIE_METADATA_FILENAME}_themoviedb_api"
+fi
+
+start_time_collecting
+
+if ! type curl > /dev/null 2>&1
+then
+  warn "curl is needed to this script work properly, exiting"
+  failed
+fi
+
+if ! type mkvmerge > /dev/null 2>&1
+then
+  warn "mkvmerge is needed to this script work properly, exiting"
+  failed
+fi
+
+if ! type ffprobe > /dev/null 2>&1
+then
+  warn "ffprobe is needed to this script work properly, exiting"
+  failed
+fi
+
+if ! type jq > /dev/null 2>&1
+then
+  warn "jq is needed to this script work properly, exiting"
+  failed
+fi
+if ! type convert > /dev/null 2>&1
+then
+  warn "convert is needed to this script work properly, exiting"
+  failed
+fi
+if ! type wget > /dev/null 2>&1
+then
+  warn "wget is needed to this script work properly, exiting"
+  failed
+fi
+
+#linking all movies()
+#{
+#  IFS=${NEWIFS}
+#  for FILE in $(find /media/media_0*/movies_sylwia/ -type f -iname '*')
+#  do 
+#    sudo ln -s ${FILE}
+#  done
+#  for FILE in $(find /media/media_0*/movies_kamil/ -type f -iname '*')
+#  do
+#    sudo ln -s ${FILE}
+#  done
+#  for FILE in $(find /media/media_0*/movies_liam/ -type f -iname '*')
+#  do
+#    sudo ln -s ${FILE}
+#  done
+#  IFS=${ORIGIFS}
+#  }
+
+#running
+
+movie_data_collecting
+
+if [[ ${VERBOSE} == yes ]]
+then
+  debug "  ${DEEPSKYBLUE}LOCAL:"
+  debug "    MOVIE_NAME_ARRAY           = ${MOVIE_NAME_ARRAY[*]}"
+  debug "    MOVIE_NAME                 = ${MOVIE_NAME}"
+  debug "    MOVIE_NAME_URL_ENC         = ${MOVIE_NAME_URL_ENC}"
+  debug "    MOVIE_SIZE                 = ${MOVIE_SIZE}"
+  debug "    MOVIE_ENCODER              = ${MOVIE_METADATA_ENCODER_LOCAL}"
+  debug "    IMDB_ID_LOCAL              = ${IMDB_ID_LOCAL}"
+  debug ""
+  debug "  ${ORANGERED}OMDB:"
+  if [[ ${OMDB_API_TYPE} == "episode" ]]
+  then
+    debug "    ${CHOCOLATE}Series details:"
+    debug "     OMDB_API_IMDBSERIESID_API   = ${OMDB_API_IMDBSERIESID_API}"
+    debug "     OMDB_SERIES_TITLE_API       = ${OMDB_SERIES_TITLE_API}"
+    debug "     OMDB_SERIES_TOTALSEASONS_API= ${OMDB_SERIES_TOTALSEASONS_API}"
+    debug "     OMDB_SERIES_PLOT_API        = ${OMDB_SERIES_PLOT_API}"
+    debug "    ${CHOCOLATE}Episode details:"
+    debug "     OMDB_API_IMDB_ID            = ${OMDB_API_IMDB_ID}"
+    debug "     OMDB_EPISODE_TITLE_API      = ${OMDB_EPISODE_TITLE_API}"
+    debug "     OMDB_API_TITLE              = ${OMDB_API_TITLE}"
+    debug "     OMDB_SEASON_API             = ${OMDB_SEASON_API}"
+    debug "     OMDB_EPISODE_API            = ${OMDB_EPISODE_API}"
+  elif [[ ${OMDB_API_TYPE} == "movie" ]]
+  then
+    debug "    OMDB_API_IMDB_ID           = ${OMDB_API_IMDB_ID}"
+    debug "    OMDB_API_TITLE             = ${OMDB_API_TITLE}"
+  fi
+  debug "    OMDB_API_TYPE              = ${OMDB_API_TYPE}"
+  debug "    OMDB_API_YEAR              = ${OMDB_API_YEAR}"
+  debug "    OMDB_RELEASED_API          = ${OMDB_RELEASED_API}"
+  debug "    OMDB_BOXOFFICE_API         = ${OMDB_BOXOFFICE_API}"
+  debug "    OMDB_PRODUCTION_API        = ${OMDB_PRODUCTION_API}"
+  debug "    OMDB_RUNTIME_API           = ${OMDB_RUNTIME_API}"
+  debug "    OMDB_GENRE_API             = ${OMDB_GENRE_API}"
+  debug "    OMDB_DIRECTOR_API          = ${OMDB_DIRECTOR_API}"
+  debug "    OMDB_WRITER_API            = ${OMDB_WRITER_API}"
+  debug "    OMDB_ACTORS_API            = ${OMDB_ACTORS_API}"
+  debug "    OMDB_API_PLOT              = ${OMDB_API_PLOT}"
+  debug "    OMDB_API_LANGUAGE          = ${OMDB_API_LANGUAGE}"
+  debug "    OMDB_API_COUNTRY           = ${OMDB_API_COUNTRY}"
+  debug "    OMDB_AWARDS_API            = ${OMDB_AWARDS_API}"
+  debug "    OMDB_API_METACRITIC        = ${OMDB_API_METACRITIC}"
+  debug "    OMDB_IMDBRATING_API        = ${OMDB_IMDBRATING_API}"
+  debug "    OMDB_IMDBVOTES_API         = ${OMDB_IMDBVOTES_API}"
+  debug "    OMDB_API_RATINGS           = "
+  IFS=${NEWIFS}
+  for OMDB_API_RATING in $(jq -r '.Ratings[] | .Source + "~" + .Value' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")
+  do
+    OMDB_API_RATING_SOURCE=$(echo ${OMDB_API_RATING} | awk -F\~ '{print $1}')
+    OMDB_API_RATING_RATING=$(echo ${OMDB_API_RATING} | awk -F\~ '{print $2}')
+    debug "      ${OMDB_API_RATING_SOURCE}: ${OMDB_API_RATING_RATING}"
+  done # -> it may be a lot here
+  IFS=${ORIGIFS}
+
+
+
+  debug ""
+  debug "  ${DARKGOLDENROD1}THEMOVIEDB:"
+  debug "    THEMOVIEDB_ID_LOCAL        = ${THEMOVIEDB_ID_LOCAL}"
+  debug "    THEMOVIEDB_ID_API          = ${THEMOVIEDB_ID_API}"
+  debug "    THEMOVIEDB_TYPE_API        = ${THEMOVIEDB_TYPE_API}"
+  debug "    THEMOVIEDB_TITLE_API       = ${THEMOVIEDB_TITLE_API}"
+  debug "    THEMOVIEDB_POSTER_URL_API  = ${THEMOVIEDB_POSTER_URL_API}"
+  debug "    THEMOVIEDB_POSTER_URL_API_FORMAT=${THEMOVIEDB_POSTER_URL_API_FORMAT}"
+  debug "    THEMOVIEDB_RELEASE_DATE_API= ${THEMOVIEDB_RELEASE_DATE_API}"
+  debug "    THEMOVIEDB_RATING_API      = ${THEMOVIEDB_RATING_API}"
+  debug "    THEMOVIEDB_PLOT_API        = ${THEMOVIEDB_PLOT_API}"
+fi
+
+if [[ ${OMDB_API_TYPE} == "episode" ]]
+then
+  inf "    IMDbID (series IMDbID): ${OMDB_API_IMDB_ID} (${OMDB_API_IMDBSERIESID_API})"
+  inf "    TheMovieDbID:           ${THEMOVIEDB_ID_API}"
+  inf "    titles:                  ${OMDB_EPISODE_TITLE_API} (${OMDB_SERIES_TITLE_API})"
+  inf "    seasons/episodes:         S${OMDB_SEASON_API}, E${OMDB_EPISODE_API} (seasons: ${OMDB_SERIES_TOTALSEASONS_API})"
+  inf "    series plot:               ${OMDB_SERIES_PLOT_API}"
+  inf "    episode plot (OMDb):        ${OMDB_API_PLOT}"
+  inf "    episode plot (TheMovieDb):  ${THEMOVIEDB_PLOT_API}"
+  inf ""
+elif [[ ${OMDB_API_TYPE} == "movie" ]]
+then
+  inf "    IMDbID:                  ${OMDB_API_IMDB_ID}"
+  inf "    TheMovieDbID:            ${THEMOVIEDB_ID_API}"
+  inf "    title:                    ${OMDB_API_TITLE}"
+  inf "    plot (OMDb):               ${OMDB_API_PLOT}"
+  inf "    plot (TheMovieDb):          ${THEMOVIEDB_PLOT_API}"
+  inf "    boxoffice                    ${OMDB_BOXOFFICE_API}"
+  inf "    production                   ${OMDB_PRODUCTION_API}"
+fi
+inf "    released:                      ${OMDB_RELEASED_API}"
+inf "    runtime:                       ${OMDB_RUNTIME_API}"
+inf "    genre:                         ${OMDB_GENRE_API}"
+inf "    director:                      ${OMDB_DIRECTOR_API}"
+inf "    actors:                        ${OMDB_ACTORS_API}"
+inf "    language:                      ${OMDB_API_LANGUAGE}" # -> may be useful for setting default language in a movie 
+inf "    country:                       ${OMDB_API_COUNTRY}"
+if [[ ${OMDB_AWARDS_API} != "N/A" ]] && [[ ${OMDB_AWARDS_API} != "" ]]
+then
+  inf "    awards:                        ${OMDB_AWARDS_API}"
+fi
+if [[ ${OMDB_API_METACRITIC} != "N/A%" ]] && [[ ${OMDB_API_METACRITIC} != "" ]]
+then
+  inf "    metacritic:                    ${OMDB_API_METACRITIC}"
+fi
+inf "    ratings:                       ${OMDB_API_RATINGS}"
+  IFS=${NEWIFS}
+  for OMDB_API_RATING in $(jq -r '.Ratings[] | .Source + "~" + .Value' "${TMP}/${MOVIE_METADATA_FILENAME_OMDB}.json")
+  do
+    OMDB_API_RATING_SOURCE=$(echo ${OMDB_API_RATING} | awk -F\~ '{print $1}')
+    OMDB_API_RATING_RATING=$(echo ${OMDB_API_RATING} | awk -F\~ '{print $2}')
+    inf "      ${OMDB_API_RATING_SOURCE}: ${OMDB_API_RATING_RATING}"
+  done # -> it may be a lot here
+  IFS=${ORIGIFS}
+
+movie_data_collecting
+  # movie_constrains_show
+  # subtitles_management
+  # subtitles_merge
+movie_processing_end
+if [[ ${UPDATE} == yes ]]
+then
+  imdb_management
+fi
+
+if [[ ${VERBOSE} == yes ]]
+then
+  end_time_collecting
+  MOVIES_CHECK_TIME=${RUNTIME}
+  debug "  movies check time: ${ORANGE}${MOVIES_CHECK_TIME}"
+fi
+
+if [[ ${ENCODING} == yes ]]
+then
+  encoding_process
+else
+  encoding_process_details
+fi
+if [[ ${QUALITY} == yes ]]
+then
+  # source and destination must be provided 
+  encoding_quality_metric
+fi
+
+
+# if ${HDR_COLOUR_RANGE} == Full -> --colorspace bt2020
+
+#The SVT-AV1 encoder presets are designed to strike a balance between encoding speed and video quality. HandBrake doesn't provide specific explanations for each preset, but here's a simplified breakdown based on the official documentation. You can refer to the full details here for a more thorough explanation.
+
+#    Presets 1-3: These presets are for extremely high efficiency, prioritizing compression and quality over speed. They’re ideal when you need the best quality and smallest file size possible, but can tolerate long encoding times. These are often used for archiving or situations where quality is paramount.
+#    Presets 4-6: These offer a good balance between quality, file size, and encoding speed. They’re typically used by enthusiasts or home users who want solid quality without the extremely long encoding times of presets 1-3.
+#    Presets 7-12: These are designed for faster encoding, making them suitable for real-time encoding or when you need results more quickly. The trade-off is that they won’t offer the same level of compression or quality as the slower presets, but they are significantly faster.
+#    Preset 13: The fastest preset, used for scenarios where speed is crucial, such as video-on-demand (VOD) applications. It’s not intended for normal video encoding, as it sacrifices quality for speed.
+
+#3. Quality
+
+#HandBrake provides recommended CRF (Constant Rate Factor) settings for the SVT-AV1 encoder, which depend on the resolution of the footage you're working with:
+
+#    ✔️ For 480p/576p (Standard Definition), use RF 22-32. Lower CRF values give better quality but larger file sizes.
+#    ✔️ For 720p (HD) and 1080p (Full HD), use RF 25-35. This range strikes a good balance between quality and file size.
+#    ✔️ For 2160p (4K UHD), use RF 25-40. This range results in smaller file sizes while keeping good quality for 4K content.
+#
+#
+#
+# ffmpeg -i "Destino_test.mkv" -an -c:v libvvenc -preset slow -qp 22 -acodec copy "Destino_test_vvc.mkv"
+# HandBrakeCLI -i "Destino_test.mkv" -o "/media/ready/Destino_test_av1.mkv" --encoder svt_av1_10bit --encoder-preset 5 -E copy --quality 22
+
+#ffmpeg -i "" -map 
+
+#ffmpeg -i Ricki\ and\ the\ Flash.mkv -i Ricki\ and\ the\ Flash.idx -i Ricki\ and\ the\ Flash.sub -map 0:v -map 0:a -c copy -map 1 -c:s:1 dvd_subtitle -metadata:s:s:1 language=eng Ricki\ and\ the\ Flash_combined.mkv
+#mkvmerge -o "Kung Fu Panda 3_opt.mkv" -a 1 -s 1 "Kung Fu Panda 3.mkv"
+#ffmpeg -err_detect ignore_err -i "${INPUT_FILE}" -c copy ${MOVIE_TITLE}_repaired.mkv
+#mkvmerge -o "Toy Story 4_merged.mkv" -A "Toy Story 4.mkv" "Toy Story 4.dts"
+#mkvmerge -o Toy\ Story\ 4_merged_sub2.mkv "Toy Story 4_merged_sub1.mkv" --language 0:eng --track-name 0:English-SDH-SRT "Toy Story 4_English-SDH-SRT.sub"
+#ffmpeg -fflags +genpts -i input.avi -c:v copy -c:a copy output.mkv
+# convert git to mkv: ffmpeg -i input.mp4 -vf "scale=720:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" output.gif
