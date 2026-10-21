@@ -433,9 +433,9 @@ merging_frames_mkv()
       fi
       sleep 2
     done
-    # rm -rf "${FRAMES_IN_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/"*.png
     end_time_collecting
     echo ${RUNTIME} > "${TMP}/MERGING_FRAMES_RUNTIME"
+    rm -rf "${FRAMES_IN_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/"*.png
     ) &
   if [[ ${VERBOSE} == yes ]]
   then

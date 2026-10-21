@@ -148,7 +148,7 @@ $0 [-o VAR_DIRECTORY] [ -v ] [ -f ] [ -h ] [ -o var ] [ -O var_out ] [ -N ncnn ]
                      ${ORANGERED1}waifu2x                                                                             ${DEEPPINK1}(https://github.com/nihui/waifu2x-ncnn-vulkan)
                      ${ORANGERED1}realcugan   ${DARKCYAN}- superresolution + converter                                           ${DEEPPINK1}(https://github.com/nihui/realcugan-ncnn-vulkan)
                      ${ORANGERED1}zimage      ${DARKCYAN}- image generator                                                       ${DEEPPINK1}(https://github.com/nihui/zimage-ncnn-vulkan)
-    ${LIME}-n${DODGERBLUE1}  
+    ${LIME}-Q${DODGERBLUE1}  quality check (VMAF) 
     ${LIME}-o${DODGERBLUE1}  video_in OUTPUT directory + where to store ALL LOGs and TEMP files
         (default directory is: ${CYAN}${HOME}/var${DODGERBLUE1} and TMP and LOG are subdirectories to var)
     ${LIME}-O${DODGERBLUE1}  video_out OUTPUT directory (performance of IOPs is crucial)
@@ -229,7 +229,6 @@ then
   NCNN_METHOD="rife"
 fi
 
-clear
 TERMINAL_WIDTH=$(tput cols)
 TERMINAL_HEIGHT=$(tput lines)
  
@@ -283,21 +282,25 @@ VIDEO_LENGTH=$(printf "%.0f\n" $(ffprobe -v quiet -print_format json -show_forma
 #  sleep 1
 #  clear
 #else
-  # mkvmerge -o "video_part_minute_%03d.mkv" --split parts:00:06:00-00:07:00 S1E1\ -\ In\ the\ Beginning.mkv -> if SPLIT_PART_START provided
-#  if [[ ${SPLIT_PART_START} != "001" ]]
-#  then
 #    mkvmerge -o "video_part_minute_${SPLIT_PART_START}.mkv" --split parts:00:06:00-00:07:00 "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
-#  else
-    mkvmerge -o "video_part_minute_%03d.mkv" --split ${SPLIT_TIME_SEC}s "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
-#  fi
-  LAST_VIDEO_FRAGMENT_ID=$(grep "video_part_minute_" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" | tail -n1 | sed "s/\.mkv.*$//g;s/^.*_minute_//g")
-  BEFORE_LAST_VIDEO_FRAGMENT_ID=$(printf "%03d\n" $(echo "${LAST_VIDEO_FRAGMENT_ID}-1" | bc))
-  for VIDEO_FRAGMENT_ID in $(seq -w ${SPLIT_PART_START} ${BEFORE_LAST_VIDEO_FRAGMENT_ID})
+mkvmerge -o "video_part_minute_%03d.mkv" --split ${SPLIT_TIME_SEC}s "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
+LAST_VIDEO_FRAGMENT_ID=$(grep "video_part_minute_" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" | tail -n1 | sed "s/\.mkv.*$//g;s/^.*_minute_//g")
+if [[ ${SPLIT_PART_START} != 001 ]]
+then
+  BEFORE_SPLIT_PART_START=$(printf "%03d\n" $(echo "${SPLIT_PART_START}-1" | bc))
+  for VIDEO_FRAGMENT_ID in $(seq -w 001 ${BEFORE_SPLIT_PART_START})
   do
+    echo "VIDEO_FRAGMENT_ID=${VIDEO_FRAGMENT_ID}"
+    echo "  SPLIT_PART_START=${SPLIT_PART_START}, LAST_VIDEO_FRAGMENT_ID=${LAST_VIDEO_FRAGMENT_ID}, BEFORE_LAST_VIDEO_FRAGMENT_ID=${BEFORE_LAST_VIDEO_FRAGMENT_ID}"
     rm -rf video_part_minute_${VIDEO_FRAGMENT_ID}.mkv
   done
+fi
+
+  echo "video_id~tone_mapping_runtime~extracting_streams_runtime~extracting_frames_runtime~interpolating_runtime~merging_streams_runtime~merging_frames_runtime~quality_check_runtime~max_space [GB]~max_space [%]~VMAF [mean]~runtime" > "${TMP}/statistics.txt"
   for VIDEO_FRAGMENT_ID in $(seq -w ${SPLIT_PART_START} ${LAST_VIDEO_FRAGMENT_ID})
   do
+    start_time_collecting
+    START_TIME_FRAGMENT_ID=${START_TIME}
     IN_DIR="in_${VIDEO_FRAGMENT_ID}"
     OUT_DIR="out_${VIDEO_FRAGMENT_ID}"
     export IN_DIR
@@ -327,7 +330,9 @@ VIDEO_LENGTH=$(printf "%.0f\n" $(ffprobe -v quiet -print_format json -show_forma
 
     if [[ ${QUALITY_CHECK} == "yes" ]]
     then
-      encoding_quality_metric "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv" "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv"
+      #encoding_quality_metric "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv" "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv"
+      encoding_quality_metric "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
+      VMAF_MEAN="$(jq -r '.pooled_metrics.vmaf.mean' "${LOG}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv-video_part_minute_${VIDEO_FRAGMENT_ID}.mkv_vmaf.json")"
     fi
 
     printf "\033[%d;0H\033[2K ${WHITE}finishing: %s\n" "$((TERMINAL_HEIGHT - 12))" "                       DONE: ${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}" 2>/dev/null
@@ -335,7 +340,11 @@ VIDEO_LENGTH=$(printf "%.0f\n" $(ffprobe -v quiet -print_format json -show_forma
     then
       rm -rf "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
     fi
-
+    
+    START_TIME=${START_TIME_FRAGMENT_ID}
+    end_time_collecting
+    PART_VIDEO_RUNTIME=${RUNTIME}
+    inf "    following video management took: ${DARKCYAN}${PART_VIDEO_RUNTIME}"
     if [ -s "${TMP}/HDR_2_SDR" ]
     then
       HDR_2_SDR_RUNTIME=$(cat "${TMP}/HDR_2_SDR")
@@ -372,6 +381,8 @@ VIDEO_LENGTH=$(printf "%.0f\n" $(ffprobe -v quiet -print_format json -show_forma
     then
       QUALITY_METRIC_RUNTIME=$(cat "${TMP}/QUALITY_METRIC_RUNTIME")
       inf "    VMAF check took: ${DARKCYAN}${QUALITY_METRIC_RUNTIME}"
+    else
+      QUALITY_METRIC_RUNTIME="0"
     fi
     if [ -s "${TMP}/MAX_SPACE_TAKEN_OVERALL" ]
     then
@@ -383,7 +394,8 @@ VIDEO_LENGTH=$(printf "%.0f\n" $(ffprobe -v quiet -print_format json -show_forma
       MAX_SPACE_TAKEN_PERCENT=$(printf "%.0f\n" "$(echo "(${MAX_SPACE_TAKEN_OVERALL}/${MAX_TSPACE})*100" | bc -l)")
       inf "    space used all together: ${DARKCYAN}${MAX_SPACE_TAKEN_OVERALL} [GB] ${CYAN}(which is only ${MAROON1}${MAX_SPACE_TAKEN_PERCENT} [%]${CYAN} of space which should be taken if not removed on-the-fly)"
     fi
-    sleep 35
+    echo "${VIDEO_FRAGMENT_ID}~${HDR_2_SDR_RUNTIME}~${EXTRACTING_STREAMS_RUNTIME}~${EXTRACTING_FRAMES_RUNTIME}~${INTERPOLATING_FRAMES_RUNTIME}~${MERGING_STREAMS_RUNTIME}~${MERGING_FRAMES_RUNTIME}~${QUALITY_METRIC_RUNTIME}~${MAX_SPACE_TAKEN_OVERALL}~${MAX_SPACE_TAKEN_PERCENT}~${VMAF_MEAN}~${PART_VIDEO_RUNTIME}" >> "${TMP}/statistics.txt"
+    sleep 10
     clear
   done
 #fi
