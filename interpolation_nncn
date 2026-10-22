@@ -21,67 +21,19 @@
 #         from logs:
 #           - Timestamp used in split decision: 00:01:00.000000000
 #           - Timestamp used in split decision: 00:02:00.000000000
+#   - performance (shorter processing time per chunk; measure one chunk before/after each change):
+#       - overlap chunks: extract frames of chunk N+1 and encode chunk N-1 while NCNN works on chunk N (GPU waits now)
+#       - faster intermediate encode in merging_frames_mkv (libsvtav1 -crf 0 -preset 5 is slow; HandBrake encodes again later):
+#         e.g. libx264 -qp 0 -preset ultrafast, ffv1, or libsvtav1 -preset 8-10 (bigger temporary files)
+#       - faster PNG I/O: -compression_level 0 (or 1) for frame extraction; TMP/TMP_OUT on tmpfs (RAM) or fast NVMe
+#       - tune NCNN: benchmark -j values on the same chunk; check whether always using -u (RIFE UHD mode) fits the input resolution
+#       - smaller overhead per chunk:
+#           - remove fixed waits (sleep 5, sleep 3, sleep 1)
+#           - NCNN progress monitor greps the whole, growing log every 2 s -> use tail -n
+#           - drop NCNN -v (verbose) logging when not needed
+#           - with -Q: give VMAF more threads (n_threads) or run it alongside the next chunk
 #
-# Documentation:
-#   - https://nightmaretv.net/learn/hdr-tone-mapping (HDR Tone Mapping in IPTV: BT.2390 vs BT.2446 vs Hable, Explained)
-#   - https://dev.to/masonwritescode/ffmpeg-hdr-to-sdr-tone-mapping-that-doesnt-look-washed-out-2026-24ie
-#   - https://www.shoutcastnet.com/school/understanding-container-formats-mp4-mkv-ts.php
-#   - https://salivity.github.io/ffmpeg/article/sdr-to-hdr-tone-mapping-in-f-fmpeg
-#   - https://github.com/BlueSwordM/SVT-AV1/blob/master/Docs/Parameters.md
-#   - https://colinmckellar.com/2024/01/11/video-encoder-comparison/
-#   - https://salivity.github.io/ffmpeg/article/how-to-calculate-vmaf-score-using-f-fmpeg
-#   - https://github.com/Netflix/vmaf/blob/master/resource/doc/ffmpeg.md
-#
-# Helpers:
-#   AMD GPU:
-#   - amdgpu_top -n 1 -J | jq (show usage of GPU :)
-#   - amdgpu_top --json | jq -c -r '(.devices[] | (.Info | .DeviceName + " (" + .PCI + "): ") + ([.gpu_activity | to_entries[] | .key + ": " + (.value.value|tostring) + .value.unit] | join(", ")))'
-#   - sudo amdmemtweak --current | grep -E "REF:|GPU [0-9]:" >> "${LOG}/${VIDEO_FILE_NAME}_ncnn_${NCNN_METHOD}.log" 2>&1 (memory tweaking checking - only works on older cards when BIOS is not locked)
-#   - ncnn threads optimization examples:
-#       - 5:45 [min] (-j 2:2,2:4)
-#       - 4:03 [min] (-j 3:2,2:5)
-#       - 4:07 [min] (-j 3:3,3:5)
-#       - 3:09 [min] (-j 4:2,2:6)
-#       - 2:01 [min] (-j 6:2,2:8, mem REF 5 & 30)
-#       - 1:48 [min] (-j 8:2,2:10)
-#
-#   - BlueRay BDm2ts -> all streams
-#       - mpls -> all details about all streams
-#           mediainfo --Output=JSON 00000.mpls | jq -r '.media.track[] | select(.ID == "4769") | .Language + "," + .Format'
-#
-#   - Field Expected Value for HDR
-#       - Transfer characteristics    PQ (SMPTE ST 2084) or HLG
-#       - Bit depth   10 bits or higher
-#       - Color primaries BT.2020
-#           - color_space=bt2020nc
-#           - color_transfer=smpte2084
-#           - color_primaries=bt2020
-#   - tone mapping help:
-#     - bt.2390     libplacebo      ITU standard, broadcast-safe default
-#     - hable       zscale tonemap  filmic curve, holds shadow + highlight detail
-#     - reinhard    zscale tonemap  brighter output if hable is too dark
-#     - st2094-40   libplacebo      HDR10+ with dynamic per-scene metadata
-#
-#   - Field Expected Value for SDR
-#           - color_space=bt709
-#           - color_transfer=bt709
-#           - color_primaries=bt709
-#
-#   - tone-mapping: HDR to SDR
-#       - ffmpeg -i input.mkv -vf "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p" -c:v libx264 -crf 20 -c:a copy output.mp4 -> encoded 1449 frames in 230.05s (6.30 fps), 153166.02 kb/s, Avg QP:4.00
-#       - ffmpeg -i "peripheral_video_part_minute_045_for_test-conversion.mkv" -vf "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:format=yuv420p" -c:v libx265 -crf 0 -c:a copy "peripheral_video_part_minute_045_for_test-conversion_x265_lossless_libplacebo.mkv" -> encoded 1449 frames in 216.78s (6.68 fps), 174360.50 kb/s, Avg QP:3.30
-#
-#   - inverse tone-mapping: SDR to HDR
-#       - ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -i "${VIDEO_FILE_NAME}.mkv" -vf "zscale=primaries=bt709:transfer=linear,format=gbrpf32le,geq=r='r*2.0':g='g*2.0':b='b*2.0',zscale=primaries=bt2020:transfer=smpte2084:matrix=bt2020nc,format=yuv420p10le" -c:v libx265 -crf 0 -x265-params "hdr10=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):max-cll=1000,400" -pix_fmt yuv420p10le "${VIDEO_FILE_NAME}_hdr.mkv"
-#       - but HOW how to get lut3d file in the first place ? ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -i "${VIDEO_FILE_NAME}.mkv" -vf "lut3d=file=sdr_to_hdr_upmap.cube,zscale=primaries=bt2020:transfer=smpte2084:matrix=bt2020nc,format=yuv420p10le" -c:v libx265 -crf 0 -x265-params "hdr10=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):max-cll=1000,400" -pix_fmt yuv420p10le "${VIDEO_FILE_NAME}_hdr.mkv"
-#
-#   - VMAF score - quality of encoding:
-#       - example: ffmpeg -i reference.mkv -r 20 -i encoded.mkv -lavfi "[0:v]setpts=PTS-STARTPTS[reference];[1:v]setpts=PTS-STARTPTS[distorted];[distorted][reference]libvmaf=log_fmt=json:log_path=/tmp/turniej_rumba.json:model='path=/usr/share/model/vmaf_v0.6.1.json':n_threads=24" -f null -
-#       - example: ffmpeg -i encoded.mkv -i reference.mkv -lavfi libvmaf -f null - -> gives VMAF score
-#   Score Range:
-#       - VMAF scores range from 0 to 100, where 0 represents the lowest possible quality and 100 represents identical quality to the reference.
-#       - A score of 93 to 95 is generally considered the threshold for "broadcast quality" or "visually lossless," meaning the average viewer cannot distinguish the compressed video from the source.
-
+# Documentation and helpers (links, GPU tuning, HDR/SDR, tone mapping, VMAF): see README.md, "Interpolation reference notes"
 
 if [[ "${OSTYPE}" =~ "linux" ]]
 then
@@ -102,8 +54,7 @@ OWN_PID=${BASHPID}
 if [ "$(caller | awk '{print $1}')" -eq 0 ]
 then
   CALLING=0
-  source "${SCRIPTS_HOME}/.config"
-  echo -e "${DODGERBLUE1}${datestring} EXECUTE: ${YELLOW}[ ${LIME}$0 ${PARAMETERS} ${YELLOW} pid=${LIGHT_MAGENTA}${OWN_PID}]${RESET}"
+  reset
 else
   CALLING=1
   if [[ ${VERBOSE} == yes ]]
@@ -117,54 +68,68 @@ export EXECUTE_COMMAND
 
 usage()
 {
+  # colours only on a terminal, so help piped to a file or the silent log stays plain text
+  if [ -t 1 ] && [ -s "${SCRIPTS_HOME}/.config_colours" ]
+  then
+    source "${SCRIPTS_HOME}/.config_colours"
+    BRIGHT=$(tput bold 2>/dev/null)
+    NORMAL=$(tput sgr0 2>/dev/null)
+    RESET="${NORMAL}"
+  elif [ ! -t 1 ]
+  then
+    # colours may also come exported from the calling shell
+    local CYAN="" BRIGHT="" WHITE="" NORMAL="" LIME="" DODGERBLUE1="" ORANGERED1="" DARKCYAN="" DEEPPINK1="" RESET=""
+  fi
 echo "
 ${CYAN}Usage:${BRIGHT}${WHITE}
-$0 [-o VAR_DIRECTORY] [ -v ] [ -f ] [ -h ] [ -o var ] [ -O var_out ] [ -N ncnn ] [ -s XXX ] [ -S ] [ -Q ]
+$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -Q ] [ -S ] [ -v ] [ -h ]
 
-    ${NORMAL}${CYAN}Description: This script manages neural network enhanced image(s) (and video(s)) manipulation, it manages superresolution, restoration, 
-          enhancement and interpolation, as following:
-            1. converts mp4 (if needed) to mkv
-            2. divides video into 60s chunks
-              2a. makes HDR conversion to SDR (tone mapping)
-            3. separates and saves streams (audio and subtitles) from each chunk
-            4. decompose video (chunk) into single frames
-            5. interpolates frames (or does any other manipulation)
-            6. checks space in background and removes frames which are not needed anymore (storage space preservation)
-            7. combines interpolated frames into video (checks space in background and removes frames which are not needed anymore)
-            8. joins streams
-              8a. checks quality (VMAF) of new video with source one
-            9. continues loop
-    ${LIME}-S${DODGERBLUE1}  silence - no output whatsever - it does everything silently in the background
-    ${LIME}-s${DODGERBLUE1}  due to complexity of the process and it's resources hungyiness it divides video into 1 minute chunks, but it may be simply interrupeted 
-          and started again from pointed chunk ([NR][NR][NR]), for example [-s 003]
-    ${LIME}-N${DODGERBLUE1}  NCNN method by which image(s) will be managed (interpolation/scaling/'enhancing'), some details as following:
-                     ${ORANGERED1}cain        ${DARKCYAN}- Channel Attention Frame Interpolation                                 ${DEEPPINK1}(https://github.com/nihui/cain-ncnn-vulkan)
-                     ${ORANGERED1}dain        ${DARKCYAN}- Depth-Aware Video Frame Interpolation                                 ${DEEPPINK1}(https://github.com/nihui/dain-ncnn-vulkan)
-                     ${ORANGERED1}rife        ${DARKCYAN}- Real-Time Intermediate Flow Estimation for Video Frame Interpolation  ${DEEPPINK1}(https://github.com/nihui/rife-ncnn-vulkan, https://github.com/hzwer/ECCV2022-RIFE
-                     ${ORANGERED1}ifrnet      ${DARKCYAN}- Intermediate Feature Refine Network for Efficient Frame Interpolation ${DEEPPINK1}(https://github.com/nihui/ifrnet-ncnn-vulkan)
-                     ${ORANGERED1}realsr      ${DARKCYAN}- superresolution                                                       ${DEEPPINK1}(https://github.com/nihui/realsr-ncnn-vulkan)
-                     ${ORANGERED1}Real-ESRGAN ${DARKCYAN}- image and video restoration                                           ${DEEPPINK1}(https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan)
-                     ${ORANGERED1}srmd        ${DARKCYAN}- superresolution                                                       ${DEEPPINK1}(https://github.com/nihui/srmd-ncnn-vulkan)
-                     ${ORANGERED1}waifu2x                                                                             ${DEEPPINK1}(https://github.com/nihui/waifu2x-ncnn-vulkan)
-                     ${ORANGERED1}realcugan   ${DARKCYAN}- superresolution + converter                                           ${DEEPPINK1}(https://github.com/nihui/realcugan-ncnn-vulkan)
-                     ${ORANGERED1}zimage      ${DARKCYAN}- image generator                                                       ${DEEPPINK1}(https://github.com/nihui/zimage-ncnn-vulkan)
-    ${LIME}-Q${DODGERBLUE1}  quality check (VMAF) 
-    ${LIME}-o${DODGERBLUE1}  video_in OUTPUT directory + where to store ALL LOGs and TEMP files
-        (default directory is: ${CYAN}${HOME}/var${DODGERBLUE1} and TMP and LOG are subdirectories to var)
-    ${LIME}-O${DODGERBLUE1}  video_out OUTPUT directory (performance of IOPs is crucial)
-        (default directory is: ${CYAN}video_in${DODGERBLUE1})
-    ${LIME}-v${DODGERBLUE1}  verbose
-    ${LIME}-h${DODGERBLUE1}  help${RESET}"
+    ${NORMAL}${CYAN}Description: processes a video with a neural network (NCNN/Vulkan) tool, in 60-second chunks:
+            1. converts MP4 to MKV when needed, then splits it into chunks
+            2. tone-maps HDR to SDR when needed
+            3. extracts audio/subtitle streams and video frames
+            4. processes frames with the selected NCNN method
+            5. merges frames back into video and re-attaches the streams
+            6. optionally calculates VMAF (-Q) and appends TMP/statistics.txt
+            7. marks the chunk as finished:
+                 video_part_minute_NNN_<method>_<fps>_merged.mkv.done
+          It produces per-chunk merged files; it does not concatenate them into one final video.
+          Ctrl+C or an error also stops the background tools (NCNN, ffmpeg) started by this run.
 
-    1>&2;
-    exit 1
+    ${LIME}-i${DODGERBLUE1}  input video (required; MP4 input is converted to MKV)
+    ${LIME}-N${DODGERBLUE1}  NCNN/Vulkan method (default: ${CYAN}rife${DODGERBLUE1}); supported by this script:
+                     ${ORANGERED1}rife        ${DARKCYAN}- Real-Time Intermediate Flow Estimation (frame interpolation)    ${DEEPPINK1}(https://github.com/nihui/rife-ncnn-vulkan)
+                     ${ORANGERED1}dain        ${DARKCYAN}- Depth-Aware Video Frame Interpolation                           ${DEEPPINK1}(https://github.com/nihui/dain-ncnn-vulkan)
+                     ${ORANGERED1}cain        ${DARKCYAN}- Channel Attention Frame Interpolation                           ${DEEPPINK1}(https://github.com/nihui/cain-ncnn-vulkan)
+                     ${ORANGERED1}realsr      ${DARKCYAN}- superresolution (4x scale)                                      ${DEEPPINK1}(https://github.com/nihui/realsr-ncnn-vulkan)
+          ${DODGERBLUE1}not supported yet (frame calculations are not configured for them, so they are rejected):
+                     ${ORANGERED1}ifrnet      ${DARKCYAN}- Intermediate Feature Refine Network (frame interpolation)       ${DEEPPINK1}(https://github.com/nihui/ifrnet-ncnn-vulkan)
+                     ${ORANGERED1}Real-ESRGAN ${DARKCYAN}- image and video restoration                                     ${DEEPPINK1}(https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan)
+                     ${ORANGERED1}srmd        ${DARKCYAN}- superresolution                                                 ${DEEPPINK1}(https://github.com/nihui/srmd-ncnn-vulkan)
+                     ${ORANGERED1}waifu2x     ${DARKCYAN}- superresolution and denoising                                   ${DEEPPINK1}(https://github.com/nihui/waifu2x-ncnn-vulkan)
+                     ${ORANGERED1}realcugan   ${DARKCYAN}- superresolution + converter                                     ${DEEPPINK1}(https://github.com/nihui/realcugan-ncnn-vulkan)
+                     ${ORANGERED1}zimage      ${DARKCYAN}- image generator                                                 ${DEEPPINK1}(https://github.com/nihui/zimage-ncnn-vulkan)
+    ${LIME}-o${DODGERBLUE1}  workspace root for temporary files and logs
+          (default directory is: ${CYAN}${HOME}/var${DODGERBLUE1}; TMP and LOG are created inside it for every run)
+    ${LIME}-O${DODGERBLUE1}  separate root for extracted and processed frame data (performance of IOPs is crucial)
+          (default: same as ${CYAN}-o${DODGERBLUE1})
+    ${LIME}-s${DODGERBLUE1}  first three-digit chunk number to process, for example [-s 003] (default: ${CYAN}001${DODGERBLUE1})
+    ${LIME}-r${DODGERBLUE1}  resume: skip chunks already finished by an earlier run of the same movie and method
+          in this directory; combinable with -s
+    ${LIME}-Q${DODGERBLUE1}  calculate VMAF (quality check) for each processed chunk
+    ${LIME}-S${DODGERBLUE1}  silent: no terminal output; everything is written to the run's silent log
+    ${LIME}-v${DODGERBLUE1}  verbose diagnostics
+    ${LIME}-h${DODGERBLUE1}  this help${RESET}
+"
+  exit 0
 }
 
 INTERPOLATION=no
 SILENT=no
 VERBOSE=no
 QUALITY_CHECK=no
-while getopts ":o:O:i:N:n:s:vShQ" ARG
+RESUME=no
+while getopts ":o:O:i:N:s:rvShQ" ARG
 do
   case "${ARG}" in
         i)
@@ -176,9 +141,6 @@ do
             N=${OPTARG}
             NCNN_METHOD=${N}
             ;;
-        n)
-            n=${OPTARG}
-            ;; 
         o)
             o=${OPTARG}
             ;;
@@ -192,6 +154,9 @@ do
         Q)
             QUALITY_CHECK=yes
             ;;
+        r)
+            RESUME=yes
+            ;;
         S)
             SILENT=yes
             ;;
@@ -201,19 +166,63 @@ do
         h)
             usage
             ;;
+        :)
+            printf 'Option -%s requires an argument.\n' "${OPTARG}" >&2
+            exit 2
+            ;;
+        \?)
+            printf 'Unknown option: -%s\n' "${OPTARG}" >&2
+            exit 2
+            ;;
   esac
 done
 shift $((OPTIND-1))
 
-if [ ! -s "${FILE_NAME}" ]
+if [ ${CALLING} -eq 0 ]
 then
-  error "  Interpolation without input video file ? how shall I approach it ? ;)"
+  if [[ ${SILENT} == yes ]]
+  then
+    SILENT_ROOT="${o:-${HOME}/var}"
+    if ! mkdir -p "${SILENT_ROOT}"
+    then
+      printf 'Unable to create silent-mode workspace: %s\n' "${SILENT_ROOT}" >&2
+      exit 1
+    fi
+    SILENT_BOOT_LOG="${SILENT_ROOT}/.interpolation_nncn_silent_${BASHPID}_$(date +%s).log"
+    if ! exec >> "${SILENT_BOOT_LOG}" 2>&1
+    then
+      printf 'Unable to open silent-mode log: %s\n' "${SILENT_BOOT_LOG}" >&2
+      exit 1
+    fi
+  fi
+
+  source "${SCRIPTS_HOME}/.config"
+  source "${SCRIPTS_HOME}/.var_management"
+  if [[ ${SILENT} == yes ]]
+  then
+    SILENT_LOG="${LOG}/interpolation_nncn_silent_${CURRENT_TIMESTAMP}.log"
+    if ! mv "${SILENT_BOOT_LOG}" "${SILENT_LOG}"
+    then
+      printf 'Unable to move silent-mode log to: %s\n' "${SILENT_LOG}" >&2
+      exit 1
+    fi
+  fi
+  echo -e "${DODGERBLUE1}${datestring} EXECUTE: ${YELLOW}[ ${LIME}$0 ${PARAMETERS} ${YELLOW} pid=${LIGHT_MAGENTA}${OWN_PID}]${RESET}"
+fi
+
+if [[ ${FILE_NAME} == */* ]]
+then
+  error "  -i expects a file name in the current directory, not a path (got: ${YELLOW}${FILE_NAME}${RED})"
+  error "  run the script from the video's directory, e.g.: cd \"$(dirname -- "${FILE_NAME}")\" && $(basename -- "$0") -i \"$(basename -- "${FILE_NAME}")\""
+  ERROR_CODE="2"
   failed
 fi
 
-if [ ${CALLING} -eq 0 ]
+if [ ! -s "${FILE_NAME}" ]
 then
-  source "${SCRIPTS_HOME}/.var_management"
+  error "  Interpolation without input video file ? how shall I approach it ? ;)"
+  ERROR_CODE="2"
+  failed
 fi
 
 if [ -z ${SPLIT_PART_START} ] || [[ ${SPLIT_PART_START} == "" ]]
@@ -221,13 +230,35 @@ then
   SPLIT_PART_START="001"
 elif [[ ${SPLIT_PART_START} != [0-9][0-9][0-9] ]]
 then
-  exit 1
+  error "  -s expects a three-digit chunk number, for example 003 (got: ${YELLOW}${SPLIT_PART_START}${RED})"
+  ERROR_CODE="2"
+  failed
 fi
 
 if [ -z ${NCNN_METHOD} ]
 then
   NCNN_METHOD="rife"
 fi
+
+case "${NCNN_METHOD}" in
+  rife|dain|cain|realsr)
+    ;;
+  *)
+    error "  NCNN method ${YELLOW}${NCNN_METHOD}${RED} is not supported by this script (supported: rife, dain, cain, realsr)"
+    ERROR_CODE="2"
+    failed
+    ;;
+esac
+
+for REQUIRED_COMMAND in ffmpeg ffprobe mkvmerge jq bc mediainfo "${NCNN_METHOD}-ncnn-vulkan"
+do
+  if ! type "${REQUIRED_COMMAND}" > /dev/null 2>&1
+  then
+    error "  required command not found: ${YELLOW}${REQUIRED_COMMAND}"
+    ERROR_CODE="127"
+    failed
+  fi
+done
 
 TERMINAL_WIDTH=$(tput cols)
 TERMINAL_HEIGHT=$(tput lines)
@@ -249,15 +280,37 @@ TERMINAL_HEIGHT=$(tput lines)
 exit_function()
 {
   trap SIGINT
-  for NCNN_LOG in $(find "${LOG}/"*_ncnn_rife.log)
+  for NCNN_LOG in "${LOG}/"*_ncnn_${NCNN_METHOD}.log
   do
-    warn "  log: ${BLUE}${NCNN_LOG}${WINE}, errors=$(grep fail ${NCNN_LOG} | wc -l)"
+    if [ -s "${NCNN_LOG}" ]
+    then
+      warn "  log: ${BLUE}${NCNN_LOG}${WINE}, errors=$(grep fail "${NCNN_LOG}" | wc -l)"
+    fi
   done
   tput cnorm 
-  exit
+  error "  interrupted (Ctrl+C)"
+  # 130 = 128 + SIGINT(2), the conventional exit code of an interrupted program
+  exit 130
+  }
+
+# Stops every process still started directly by this script (NCNN, ffmpeg, progress monitors),
+# so Ctrl+C or an error does not leave them running and writing frames.
+stop_background_jobs()
+{
+  # subshells (progress monitors) must not run this: $$ is still the main script there
+  if [ "${BASHPID}" != "$$" ]
+  then
+    return
+  fi
+  local CHILD_PID
+  for CHILD_PID in $(pgrep -P $$ 2>/dev/null)
+  do
+    kill "${CHILD_PID}" 2>/dev/null
+  done
   }
 
 trap "exit_function" INT
+trap "stop_background_jobs" EXIT
 
 start_time_collecting
 START_TIME_WHOLE=${START_TIME}
@@ -268,10 +321,17 @@ if [[ ${FILE_NAME_EXTENSION} == mp4 ]]
 then
   mp4_to_mkv ${FILE_NAME}
 fi
-WHOLE_MOVIE_NAME_ARRAY=(${FILE_NAME/\.mkv})
+WHOLE_MOVIE_NAME_ARRAY=("${FILE_NAME%.mkv}")
 FILE_NAME_EXTENSION=${FILE_NAME: (-3)}
 
-VIDEO_LENGTH=$(printf "%.0f\n" $(ffprobe -v quiet -print_format json -show_format -show_streams "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" | jq -r '.format.duration'))
+VIDEO_DURATION_RAW=$(ffprobe -v quiet -print_format json -show_format -show_streams "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" | jq -r '.format.duration')
+if [[ ! ${VIDEO_DURATION_RAW} =~ ^[0-9]+(\.[0-9]+)?$ ]]
+then
+  error "  could not read duration of ${YELLOW}${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv${RED} (got: '${VIDEO_DURATION_RAW}')"
+  ERROR_CODE="1"
+  failed
+fi
+VIDEO_LENGTH=$(printf "%.0f\n" "${VIDEO_DURATION_RAW}")
 
 #if [ ${VIDEO_LENGTH} -le 90 ]
 #then
@@ -284,15 +344,29 @@ VIDEO_LENGTH=$(printf "%.0f\n" $(ffprobe -v quiet -print_format json -show_forma
 #else
 #    mkvmerge -o "video_part_minute_${SPLIT_PART_START}.mkv" --split parts:00:06:00-00:07:00 "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
 mkvmerge -o "video_part_minute_%03d.mkv" --split ${SPLIT_TIME_SEC}s "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
+mkvtoolnix_status "$?" "splitting video into ${SPLIT_TIME_SEC}s chunks" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log"
 LAST_VIDEO_FRAGMENT_ID=$(grep "video_part_minute_" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" | tail -n1 | sed "s/\.mkv.*$//g;s/^.*_minute_//g")
+if [[ ! ${LAST_VIDEO_FRAGMENT_ID} =~ ^[0-9]{3}$ ]]
+then
+  error "  could not find the last chunk number in ${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log (got: '${LAST_VIDEO_FRAGMENT_ID}')"
+  ERROR_CODE="1"
+  failed
+fi
+# 10# forces base 10, otherwise bash reads 008/009 as (invalid) octal numbers
+if [ $((10#${SPLIT_PART_START})) -gt $((10#${LAST_VIDEO_FRAGMENT_ID})) ]
+then
+  error "  -s ${SPLIT_PART_START} is beyond the last chunk ${LAST_VIDEO_FRAGMENT_ID}"
+  ERROR_CODE="2"
+  failed
+fi
 if [[ ${SPLIT_PART_START} != 001 ]]
 then
-  BEFORE_SPLIT_PART_START=$(printf "%03d\n" $(echo "${SPLIT_PART_START}-1" | bc))
+  BEFORE_SPLIT_PART_START=$(printf "%03d" "$((10#${SPLIT_PART_START} - 1))")
   for VIDEO_FRAGMENT_ID in $(seq -w 001 ${BEFORE_SPLIT_PART_START})
   do
     echo "VIDEO_FRAGMENT_ID=${VIDEO_FRAGMENT_ID}"
     echo "  SPLIT_PART_START=${SPLIT_PART_START}, LAST_VIDEO_FRAGMENT_ID=${LAST_VIDEO_FRAGMENT_ID}, BEFORE_LAST_VIDEO_FRAGMENT_ID=${BEFORE_LAST_VIDEO_FRAGMENT_ID}"
-    rm -rf video_part_minute_${VIDEO_FRAGMENT_ID}.mkv
+    rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
   done
 fi
 
@@ -305,11 +379,30 @@ fi
     OUT_DIR="out_${VIDEO_FRAGMENT_ID}"
     export IN_DIR
     export OUT_DIR
+    if [[ ${RESUME} == yes ]]
+    then
+      # the .done marker is written only after a chunk fully succeeded, so a half-written
+      # _merged.mkv from an interrupted run is never mistaken for a finished one
+      # shellcheck disable=SC2206 # the unquoted * is intentional: the glob finds the marker whatever the fps
+      FINISHED_CHUNK_MARKERS=(video_part_minute_${VIDEO_FRAGMENT_ID}_${NCNN_METHOD}_*_merged.mkv.done)
+      if [ -e "${FINISHED_CHUNK_MARKERS[0]}" ] && [ -s "${FINISHED_CHUNK_MARKERS[0]%.done}" ] && [[ "$(cat "${FINISHED_CHUNK_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
+      then
+        inf "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${CYAN} already finished (${FINISHED_CHUNK_MARKERS[0]%.done}), skipping"
+        rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
+        continue
+      fi
+    fi
     CURRENTLY_MANAGED_VIDEO_PART_PATH=$(grep "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" | grep ${VIDEO_FRAGMENT_ID} | awk '{print $3}' | sed "s/'//g")
     CURRENTLY_MANAGED_VIDEO_PART_FILENAME=$(echo ${CURRENTLY_MANAGED_VIDEO_PART_PATH} | awk -F\/ '{print $NF}')
+    if [ -z "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}" ] || [ ! -s "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}" ]
+    then
+      error "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${RED} not found (expected: video_part_minute_${VIDEO_FRAGMENT_ID}.mkv)"
+      ERROR_CODE="1"
+      failed
+    fi
     FILE_NAME="${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}"
     FILE_NAME_EXTENSION=${FILE_NAME: (-3)}
-    MOVIE_NAME_ARRAY=(${CURRENTLY_MANAGED_VIDEO_PART_FILENAME/\.mkv})
+    MOVIE_NAME_ARRAY=("${CURRENTLY_MANAGED_VIDEO_PART_FILENAME%.mkv}")
     NEXT_MANAGED_VIDEO_PART_PATH=$(grep "has been opened for writing" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" | grep -A1 "${CURRENTLY_MANAGED_VIDEO_PART_PATH}" | tail -n1 | awk '{print $3}' | sed "s/'//g")
     NEXT_MANAGED_VIDEO_PART_FILENAME=$(echo ${NEXT_MANAGED_VIDEO_PART_PATH} | awk -F\/ '{print $NF}')
     if [[ ${VIDEO_FRAGMENT_ID} == "001" ]]
@@ -320,26 +413,21 @@ fi
       LAST_VIDEO_PART="${CURRENTLY_MANAGED_VIDEO_PART_PATH}"
       NEXT_MANAGED_VIDEO_PART_PATH=""
     fi 
+    # checks every step itself (including NCNN failures) and stops the run on error
     interpolation_video_file "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}"
-    INTERPOLATING_ERRORS="$(grep fail "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log" | wc -l)"
-    if [ ${INTERPOLATING_ERRORS} -ne 0 ]
-    then
-      warn "  log: ${BLUE}${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log${WINE}, errors=${RED1}${INTERPOLATING_ERRORS}"
-      failed
-    fi
 
     if [[ ${QUALITY_CHECK} == "yes" ]]
     then
       #encoding_quality_metric "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv" "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv"
       encoding_quality_metric "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
-      VMAF_MEAN="$(jq -r '.pooled_metrics.vmaf.mean' "${LOG}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv-video_part_minute_${VIDEO_FRAGMENT_ID}.mkv_vmaf.json")"
+      # VMAF_MEAN is set by encoding_quality_metric ("error" when the check failed)
     fi
 
     printf "\033[%d;0H\033[2K ${WHITE}finishing: %s\n" "$((TERMINAL_HEIGHT - 12))" "                       DONE: ${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}" 2>/dev/null
-    if [ -s "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" ]
-    then
-      rm -rf "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
-    fi
+    # reaching this line means interpolation_video_file already required the _merged.mkv
+    rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
+    # chunk names are the same for every movie, so the marker remembers which movie it belongs to
+    printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" > "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv.done"
     
     START_TIME=${START_TIME_FRAGMENT_ID}
     end_time_collecting

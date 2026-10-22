@@ -1,0 +1,16 @@
+name: checks
+
+# Step 5: ShellCheck gate and tests for the scripts
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck
+        run: bash tests/shellcheck.sh
+      - name: Tests
+        run: bash tests/run_tests.sh

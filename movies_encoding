@@ -34,17 +34,53 @@ fi
 SCRIPTS_HOME=$(dirname "${SCRIPT}")
 PARAMETERS=$(echo "$@" | sed 's/\-l .//g')
 
-if [ $(caller | awk '{print $1}') -eq 0 ]
+usage()
+{
+  # colours only on a terminal, so help piped to a file stays plain text
+  if [ -t 1 ] && [ -s "${SCRIPTS_HOME}/.config_colours" ]
+  then
+    source "${SCRIPTS_HOME}/.config_colours"
+    BRIGHT=$(tput bold 2>/dev/null)
+    NORMAL=$(tput sgr0 2>/dev/null)
+    RESET="${NORMAL}"
+  elif [ ! -t 1 ]
+  then
+    # colours may also come exported from the calling shell
+    local CYAN="" BRIGHT="" WHITE="" NORMAL="" LIME="" DODGERBLUE1="" ORANGERED1="" DARKCYAN="" DEEPPINK1="" RESET=""
+  fi
+echo "
+${CYAN}Usage:${BRIGHT}${WHITE}
+$0 -i FILE [ -I imdb_id ] [ -o var ] [ -a ] [ -g ] [ -H ] [ -u ] [ -e ] [ -v ] [ -h ]
+
+    ${NORMAL}${CYAN}Description: collects movie metadata (local file, OMDb, TheMovieDB), optionally updates the MKV
+          and its related files, and optionally starts a HandBrake encode.
+          Quality analysis is not available in this version.
+
+    ${LIME}-i${DODGERBLUE1}  input video file (normally MKV)
+    ${LIME}-I${DODGERBLUE1}  IMDb ID (tt...) or TheMovieDB ID
+    ${LIME}-o${DODGERBLUE1}  workspace root for temporary files and logs
+          (default directory is: ${CYAN}${HOME}/var${DODGERBLUE1}; TMP and LOG are created inside it for every run)
+    ${LIME}-a${DODGERBLUE1}  use the animation encoding profile
+    ${LIME}-g${DODGERBLUE1}  use the grain encoding profile
+    ${LIME}-H${DODGERBLUE1}  use the high-motion encoding profile
+    ${LIME}-u${DODGERBLUE1}  update MKV metadata and related file attributes
+    ${LIME}-e${DODGERBLUE1}  start the configured HandBrake encode in the background
+    ${LIME}-v${DODGERBLUE1}  verbose diagnostics
+    ${LIME}-h${DODGERBLUE1}  this help${RESET}
+"
+  exit 0
+}
+
+if [ "$(caller | awk '{print $1}')" -eq 0 ]
 then
   CALLING=0
   echo -e "${BLUE}${datestring} EXECUTE: ${YELLOW}[ ${LIME}$0 ${PARAMETERS} ${YELLOW} ]${RESET}"
   source "${SCRIPTS_HOME}/.config"
-  source "${SCRIPTS_HOME}/.var_management"
 else
   CALLING=1
   if [[ ${VERBOSE} == yes ]]
   then
-    debug "${YELLOW}[ ${LIME}$(echo $(caller | awk '{print $2}') | awk -F\/ '{print $NF}') ${YELLOW}calls (in line: ${LIME}$(caller | awk '{print $1}')${YELLOW}) ${LIME}$(echo ${BASH_SOURCE} | awk -F\/ '{print $NF}') ${PARAMETERS} ${YELLOW} ]"
+    debug "${YELLOW}[ ${LIME}$(echo $(caller | awk '{print $2}') | awk -F\/ '{print $NF}') ${YELLOW}calls (in line: ${LIME}$(caller | awk '{print $1}')${YELLOW}) ${LIME}$(echo "${BASH_SOURCE[0]}" | awk -F\/ '{print $NF}') ${PARAMETERS} ${YELLOW} ]"
   fi
 fi
 
@@ -52,9 +88,8 @@ ANIMATION=no
 GRAIN=no
 ENCODING=no
 UPDATE=no
-QUALITY=no
 HIGHMOTION=no
-while getopts ":I:i:o:qHaguvhe" ARG
+while getopts ":I:i:o:Haguvhe" ARG
 do
   case "${ARG}" in
         a)
@@ -70,9 +105,6 @@ do
             ;;
         u)
             UPDATE=yes
-            ;;
-        q)
-            QUALITY=yes
             ;;
         i)
             i=${OPTARG}
@@ -96,21 +128,43 @@ do
         h)
             usage
             ;;
+        :)
+            printf 'Option -%s requires an argument.\n' "${OPTARG}" >&2
+            exit 2
+            ;;
+        \?)
+            printf 'Unknown option: -%s\n' "${OPTARG}" >&2
+            exit 2
+            ;;
   esac
 done
 shift $((OPTIND-1))
 
+if [[ ${CALLING} -eq 0 ]]
+then
+  source "${SCRIPTS_HOME}/.var_management"
+fi
+
+if [[ ${FILE_NAME} == */* ]]
+then
+  error "  -i expects a file name in the current directory, not a path (got: ${YELLOW}${FILE_NAME}${RED})"
+  error "  run the script from the video's directory, e.g.: cd \"$(dirname -- "${FILE_NAME}")\" && $(basename -- "$0") -i \"$(basename -- "${FILE_NAME}")\""
+  ERROR_CODE="2"
+  failed
+fi
+
 if [[ ! -s ${FILE_NAME} ]]
 then
   error " it looks like there is no such video file: ${ORANGE}${FILE_NAME}"
+  ERROR_CODE="2"
   failed
 else
   if [[ ${VERBOSE} == yes ]]
   then
     debug "  FILE_NAME          = ${FILE_NAME}"
   fi
-  MOVIE_NAME_ARRAY=(${FILE_NAME/\.mkv})
-  MOVIE_NAME=$(echo ${MOVIE_NAME_ARRAY[*]} | awk -F\/ '{print $NF}')
+  MOVIE_NAME_ARRAY=("${FILE_NAME%.mkv}")
+  MOVIE_NAME="${MOVIE_NAME_ARRAY[*]}"
   MOVIE_NAME_URL_ENC=$(jq -rn --arg movie_name_array "${MOVIE_NAME}" '$movie_name_array|@uri')
   MOVIE_METADATA_FILENAME="${MOVIE_NAME}_metadata"
   MOVIE_METADATA_FILENAME_LOCAL="${MOVIE_METADATA_FILENAME}_local"
@@ -120,39 +174,20 @@ fi
 
 start_time_collecting
 
-if ! type curl > /dev/null 2>&1
+REQUIRED_COMMANDS=(curl mkvmerge ffprobe jq convert wget mediainfo mkvpropedit)
+if [[ ${ENCODING} == yes ]]
 then
-  warn "curl is needed to this script work properly, exiting"
-  failed
+  REQUIRED_COMMANDS+=(HandBrakeCLI)
 fi
-
-if ! type mkvmerge > /dev/null 2>&1
-then
-  warn "mkvmerge is needed to this script work properly, exiting"
-  failed
-fi
-
-if ! type ffprobe > /dev/null 2>&1
-then
-  warn "ffprobe is needed to this script work properly, exiting"
-  failed
-fi
-
-if ! type jq > /dev/null 2>&1
-then
-  warn "jq is needed to this script work properly, exiting"
-  failed
-fi
-if ! type convert > /dev/null 2>&1
-then
-  warn "convert is needed to this script work properly, exiting"
-  failed
-fi
-if ! type wget > /dev/null 2>&1
-then
-  warn "wget is needed to this script work properly, exiting"
-  failed
-fi
+for REQUIRED_COMMAND in "${REQUIRED_COMMANDS[@]}"
+do
+  if ! type "${REQUIRED_COMMAND}" > /dev/null 2>&1
+  then
+    error "  required command not found: ${YELLOW}${REQUIRED_COMMAND}"
+    ERROR_CODE="127"
+    failed
+  fi
+done
 
 #linking all movies()
 #{
@@ -292,7 +327,8 @@ inf "    ratings:                       ${OMDB_API_RATINGS}"
   done # -> it may be a lot here
   IFS=${ORIGIFS}
 
-movie_data_collecting
+# step 4: movie_data_collecting already ran above and nothing changed the file since,
+# so the second call (repeating all OMDb/TheMovieDB requests and the cover download) was removed
   # movie_constrains_show
   # subtitles_management
   # subtitles_merge
@@ -315,41 +351,3 @@ then
 else
   encoding_process_details
 fi
-if [[ ${QUALITY} == yes ]]
-then
-  # source and destination must be provided 
-  encoding_quality_metric
-fi
-
-
-# if ${HDR_COLOUR_RANGE} == Full -> --colorspace bt2020
-
-#The SVT-AV1 encoder presets are designed to strike a balance between encoding speed and video quality. HandBrake doesn't provide specific explanations for each preset, but here's a simplified breakdown based on the official documentation. You can refer to the full details here for a more thorough explanation.
-
-#    Presets 1-3: These presets are for extremely high efficiency, prioritizing compression and quality over speed. They’re ideal when you need the best quality and smallest file size possible, but can tolerate long encoding times. These are often used for archiving or situations where quality is paramount.
-#    Presets 4-6: These offer a good balance between quality, file size, and encoding speed. They’re typically used by enthusiasts or home users who want solid quality without the extremely long encoding times of presets 1-3.
-#    Presets 7-12: These are designed for faster encoding, making them suitable for real-time encoding or when you need results more quickly. The trade-off is that they won’t offer the same level of compression or quality as the slower presets, but they are significantly faster.
-#    Preset 13: The fastest preset, used for scenarios where speed is crucial, such as video-on-demand (VOD) applications. It’s not intended for normal video encoding, as it sacrifices quality for speed.
-
-#3. Quality
-
-#HandBrake provides recommended CRF (Constant Rate Factor) settings for the SVT-AV1 encoder, which depend on the resolution of the footage you're working with:
-
-#    ✔️ For 480p/576p (Standard Definition), use RF 22-32. Lower CRF values give better quality but larger file sizes.
-#    ✔️ For 720p (HD) and 1080p (Full HD), use RF 25-35. This range strikes a good balance between quality and file size.
-#    ✔️ For 2160p (4K UHD), use RF 25-40. This range results in smaller file sizes while keeping good quality for 4K content.
-#
-#
-#
-# ffmpeg -i "Destino_test.mkv" -an -c:v libvvenc -preset slow -qp 22 -acodec copy "Destino_test_vvc.mkv"
-# HandBrakeCLI -i "Destino_test.mkv" -o "/media/ready/Destino_test_av1.mkv" --encoder svt_av1_10bit --encoder-preset 5 -E copy --quality 22
-
-#ffmpeg -i "" -map 
-
-#ffmpeg -i Ricki\ and\ the\ Flash.mkv -i Ricki\ and\ the\ Flash.idx -i Ricki\ and\ the\ Flash.sub -map 0:v -map 0:a -c copy -map 1 -c:s:1 dvd_subtitle -metadata:s:s:1 language=eng Ricki\ and\ the\ Flash_combined.mkv
-#mkvmerge -o "Kung Fu Panda 3_opt.mkv" -a 1 -s 1 "Kung Fu Panda 3.mkv"
-#ffmpeg -err_detect ignore_err -i "${INPUT_FILE}" -c copy ${MOVIE_TITLE}_repaired.mkv
-#mkvmerge -o "Toy Story 4_merged.mkv" -A "Toy Story 4.mkv" "Toy Story 4.dts"
-#mkvmerge -o Toy\ Story\ 4_merged_sub2.mkv "Toy Story 4_merged_sub1.mkv" --language 0:eng --track-name 0:English-SDH-SRT "Toy Story 4_English-SDH-SRT.sub"
-#ffmpeg -fflags +genpts -i input.avi -c:v copy -c:a copy output.mkv
-# convert git to mkv: ffmpeg -i input.mp4 -vf "scale=720:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" output.gif

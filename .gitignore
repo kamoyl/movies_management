@@ -1,0 +1,16 @@
+~*
+.DS_Store
+**/*__pycache__
+var_*
+~*
+**/*.pdf
+**/*.xlsx
+**/*_bak
+**/*.bak
+**/*.json
+**/*.mp4
+**/*.mkv
+bak/**/*
+waiting_room/*
+temporary_files/**/*
+questions.txt

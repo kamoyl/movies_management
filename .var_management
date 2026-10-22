@@ -11,41 +11,34 @@ then
   mkdir -p "${VAR}"
 else
   VAR=$(readlink -f "${o}")
-  mkdir -p "${VAR}" > /dev/null 2>&1
-  ERROR_CODE="$?"
-  if [ "${ERROR_CODE}" -ne 0 ]
+  if ! mkdir -p "${VAR}" > /dev/null 2>&1
   then
     error "I have no permissions to create OUTPUT directory here:"
-    debug "  var=${WARN}${VAR}"
-    exit "${ERROR_CODE}"
+    debug "  var=${WINE}${VAR}"
+    exit 1
   fi
 fi
 
-if [ -z "${TMP}" ]
-then
-  TMP="${VAR}/tmp-${SCRIPT_NAME}_${CURRENT_TIMESTAMP}"
-  mkdir -p "${TMP}"
-fi
+# always a new directory per run: an inherited TMP (some systems export TMP=/tmp)
+# would be shared between runs, so clones and leftovers from earlier runs would collide
+TMP="${VAR}/tmp-${SCRIPT_NAME}_${CURRENT_TIMESTAMP}"
+mkdir -p "${TMP}"
 
-if [ -z "${LOG}" ]
-then
-  LOG="${VAR}/log-${SCRIPT_NAME}_${CURRENT_TIMESTAMP}"
-  mkdir -p "${LOG}"
-fi
+# the same for LOG: every run writes its own logs, an inherited LOG is ignored
+LOG="${VAR}/log-${SCRIPT_NAME}_${CURRENT_TIMESTAMP}"
+mkdir -p "${LOG}"
 
 if [ -z "${O}" ]
 then
   VAR_OUT="${VAR}"
 else
   VAR_OUT=$(readlink -f "${O}")
-  mkdir -p "${VAR_OUT}" > /dev/null 2>&1
-  ERROR_CODE="$?"
-  if [ "${ERROR_CODE}" -ne 0 ]
+  if ! mkdir -p "${VAR_OUT}" > /dev/null 2>&1
   then
     error "I have no permissions to create OUTPUT directory here:"
-    debug "  var=${WARN}${VAR}"
-    exit "${ERROR_CODE}"
-  fi  
+    debug "  var_out=${WINE}${VAR_OUT}"
+    exit 1
+  fi
 fi
 
 if [ -z "${TMP_OUT}" ]
