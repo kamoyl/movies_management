@@ -188,7 +188,7 @@ then
       printf 'Unable to create silent-mode workspace: %s\n' "${SILENT_ROOT}" >&2
       exit 1
     fi
-    SILENT_BOOT_LOG="${SILENT_ROOT}/.interpolation_nncn_silent_${BASHPID}_$(date +%s).log"
+    SILENT_BOOT_LOG="${SILENT_ROOT}/.interpolation_nncn_silent_${BASHPID}_$(date "+%Y.%m.%d-%H.%M.%S").log" # .config (CURRENT_TIMESTAMP) is not loaded yet
     if ! exec >> "${SILENT_BOOT_LOG}" 2>&1
     then
       printf 'Unable to open silent-mode log: %s\n' "${SILENT_BOOT_LOG}" >&2
@@ -250,6 +250,12 @@ case "${NCNN_METHOD}" in
     ;;
 esac
 
+if ! type "${NCNN_METHOD}-ncnn-vulkan" > /dev/null 2>&1
+then
+  ncnn-release-build "nihui/${NCNN_METHOD}-ncnn-vulkan"
+fi
+
+# also checks that the NCNN build above really produced the tool
 for REQUIRED_COMMAND in ffmpeg ffprobe mkvmerge jq bc mediainfo "${NCNN_METHOD}-ncnn-vulkan"
 do
   if ! type "${REQUIRED_COMMAND}" > /dev/null 2>&1
@@ -264,16 +270,12 @@ TERMINAL_WIDTH=$(tput cols)
 TERMINAL_HEIGHT=$(tput lines)
  
 # Processing repositories and building tools
-# ncnn-release-build "nihui/realsr-ncnn-vulkan"
 ## ncnn-release-build "xinntao/Real-ESRGAN-ncnn-vulkan"
 # ncnn-release-build "nihui/srmd-ncnn-vulkan"
 # ncnn-release-build "nihui/waifu2x-ncnn-vulkan"
 # ncnn-release-build "nihui/realcugan-ncnn-vulkan"
 # ncnn-release-build "nihui/zimage-ncnn-vulkan"
 ## ncnn-release-build "nihui/Stable-Diffusion-NCNN"
-# ncnn-release-build "nihui/cain-ncnn-vulkan"
-# ncnn-release-build "nihui/dain-ncnn-vulkan"
-# ncnn-release-build "nihui/rife-ncnn-vulkan"
 ## ncnn-release-build "nihui/ifrnet-ncnn-vulkan"
 ## ncnn-release-build ""
 

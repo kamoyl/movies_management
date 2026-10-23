@@ -11,7 +11,9 @@
 #   - replace external tools such as ffmpeg with tiny fake scripts put first on PATH.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK_DIR="$(mktemp -d)"
+# work files stay inside the repository (tmp/ is gitignored), named like the scripts' log directories
+mkdir -p "${REPO_ROOT}/tmp"
+WORK_DIR="$(mktemp -d "${REPO_ROOT}/tmp/tmp-run_tests_$(date "+%Y.%m.%d-%H.%M.%S")_XXXX")"
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
 PASSED=0

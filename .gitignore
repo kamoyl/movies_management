@@ -14,3 +14,7 @@ bak/**/*
 waiting_room/*
 temporary_files/**/*
 questions.txt
+movies/**/*
+movies
+statistics.txt
+tmp/

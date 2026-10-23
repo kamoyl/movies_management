@@ -58,7 +58,7 @@ bash tests/shellcheck.sh   # gate: no errors, and none of the fixed warning clas
 bash tests/run_tests.sh    # behavior tests; no extra test framework needed
 ```
 
-`tests/run_tests.sh` does not load the full `.config`, because it contacts the network. It checks the command-line options (help, unknown options, missing values), the exit codes of `failed`, and the helpers `require_output`, `mkvtoolnix_status`, `safe_remove_dir`, `remove_numbered_frames`, and `mp4_to_mkv`; for the last one, `ffmpeg` is replaced by a fake script. `.github/workflows/checks.yml` runs both commands on GitHub Actions for each push and pull request.
+`tests/run_tests.sh` does not load the full `.config`, because it contacts the network. It checks the command-line options (help, unknown options, missing values), the exit codes of `failed`, and the helpers `require_output`, `mkvtoolnix_status`, `safe_remove_dir`, `remove_numbered_frames`, and `mp4_to_mkv`; for the last one, `ffmpeg` is replaced by a fake script. Its work files go to `tmp/tmp-run_tests_<timestamp>_XXXX` inside the repository (`tmp/` is gitignored) and are removed when the tests finish. `.github/workflows/checks.yml` runs both commands on GitHub Actions for each push and pull request.
 
 ## Requirements and configuration
 
