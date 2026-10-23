@@ -728,7 +728,7 @@ interpolation_video_file()
 
   inf "    analysing video frame size/color depth"
   mkdir -p "${TMP}/frame_analysis"
-  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${MOVIE_NAME_ARRAY[*]}.mkv" -vf "select=not(mod(n\,100))" -vsync vfr "${TMP}/frame_analysis/output%04d.png" > "${LOG}/frame_analysis.log" 2>&1 &
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${MOVIE_NAME_ARRAY[*]}.mkv" -vf "select=not(mod(n\,100))" -fps_mode vfr "${TMP}/frame_analysis/output%04d.png" > "${LOG}/frame_analysis.log" 2>&1 &
   local FRAME_ANALYSIS_PID=$!
   echo "${FRAME_ANALYSIS_PID}" > "${TMP}/${MOVIE_NAME_ARRAY[*]}_frame_analysis.pid"
   extracting_mkv_streams          "${MOVIE_NAME_ARRAY[*]}"

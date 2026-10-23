@@ -9,29 +9,11 @@
 #   - DONE: makes HDR conversion to SDR (if needed, to manage colors properly)
 #   - add VERBOSE whenever needed
 #   - DONE: when video file is equal or shorter then ${NO_SPLIT_MAX_SEC} - just run, without splitting
-#   - update ffmpeg to use FFMPEG_GLOBAL_OPTIONS
-#   - make silent version (all in the background without any notifications whatsovever
-#   - run concatenation WHEN ONLY ALL parts existed
-#   - takes care for space, so if started from some fragment_id, then remove all before it already
-#       - try to change split of all into split to pick up exactly one needed
-#         Examples:
-#           – split parts:00:01:20-00:02:45,00:05:50-00:10:30
-#           – split parts:00:01:20-00:02:45,+00:05:50-00:10:30
-#           - split parts:00:00:00-00:10:00 (proper)
-#         from logs:
-#           - Timestamp used in split decision: 00:01:00.000000000
-#           - Timestamp used in split decision: 00:02:00.000000000
-#   - performance (shorter processing time per chunk; measure one chunk before/after each change):
-#       - overlap chunks: extract frames of chunk N+1 and encode chunk N-1 while NCNN works on chunk N (GPU waits now)
-#       - faster intermediate encode in merging_frames_mkv (libsvtav1 -crf 0 -preset 5 is slow; HandBrake encodes again later):
-#         e.g. libx264 -qp 0 -preset ultrafast, ffv1, or libsvtav1 -preset 8-10 (bigger temporary files)
-#       - faster PNG I/O: -compression_level 0 (or 1) for frame extraction; TMP/TMP_OUT on tmpfs (RAM) or fast NVMe
-#       - tune NCNN: benchmark -j values on the same chunk; check whether always using -u (RIFE UHD mode) fits the input resolution
-#       - smaller overhead per chunk:
-#           - remove fixed waits (sleep 5, sleep 3, sleep 1)
-#           - NCNN progress monitor greps the whole, growing log every 2 s -> use tail -n
-#           - drop NCNN -v (verbose) logging when not needed
-#           - with -Q: give VMAF more threads (n_threads) or run it alongside the next chunk
+#   - NICE_BUT_LEAST_PRIORITY: update ffmpeg to use FFMPEG_GLOBAL_OPTIONS
+#   - DONE: make silent version (all in the background without any notifications whatsovever
+#   - LEAST_PRIORITY now: run concatenation WHEN ONLY ALL parts existed
+#   - PROBABLY impossible to be done, as start of a range of N+1 fragment_id is based on previous one - but it would definately save both space, and a little time (maybe fake/dry run in mkvmerge, or send output of all but one/two now for processing, to /dev/null ?)
+#   - performance optimizations/details and some ideas are now in questions.txt
 #
 # Documentation and helpers (links, GPU tuning, HDR/SDR, tone mapping, VMAF): see README.md, "Interpolation reference notes"
 
