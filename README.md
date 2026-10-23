@@ -66,6 +66,8 @@ These are Linux-oriented Bash scripts and rely on external command-line tools. T
 
 On macOS the scripts look for GNU `greadlink`, but other commands and options are Linux/GNU-specific. A compatible GNU toolchain may be needed, and macOS execution is not guaranteed.
 
+`.config` sets `LC_NUMERIC=C`, so numbers use a decimal point (as `ffprobe`, `jq`, and `bc` print them) even with a locale such as `nl_NL`, where `printf` would otherwise reject `60.64` as an invalid number. If `LC_ALL` is set, it overrides this setting; leave `LC_ALL` unset.
+
 Metadata and subtitle operations need credentials configured in the shell environment or in your local configuration, as appropriate:
 
 - `OMDB_API_KEY` for OMDb lookups
