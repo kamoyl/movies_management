@@ -10,7 +10,8 @@ Both scripts load shared functions from `.config` (which loads `.config_colours`
 ## Improvements
 
 The scripts were improved step by step; each group below describes
-what changed and why.
+what changed and why. Speed work has its own section:
+[Performance optimization](#performance-optimization).
 
 **Options and help.**
 
@@ -148,6 +149,23 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 
 The script divides input into 60-second MKV chunks in the current working directory. A video of up to 90 seconds (`NO_SPLIT_MAX_SEC`) is not split: it is copied unchanged into one chunk, `video_part_minute_001.mkv`, and processed in one go; `-r`, `-Q`, and the statistics work the same way. It processes chunks from the selected start number, retains per-chunk merged outputs, and removes intermediate chunk data as it completes. The final whole-video concatenation code is currently commented out, so the script does **not** automatically create one combined output video. After each chunk, a `~`-separated row is appended to `TMP/statistics.txt` with stage runtimes, peak space use, the VMAF mean (with `-Q`), and the total chunk runtime.
 
+The processed frames of each chunk are encoded into an intermediate video. HandBrake (`movies_encoding`) makes the final encode later. Choose its codec with the `INTERMEDIATE_CODEC` environment variable. The script checks the name and the FFmpeg encoder at start-up: an unknown name exits with `2`, and a missing encoder exits with `127`.
+
+| `INTERMEDIATE_CODEC` | FFmpeg settings | Quality | Time / size per 60 s chunk* |
+|---|---|---|---|
+| `x264_lossless` (default) | `libx264 -qp 0 -preset ultrafast` | lossless | ~14 s / ~3.3 GB |
+| `ffv1` | `ffv1 -level 3 -slices 24` | lossless | ~32 s / ~2.7 GB |
+| `svtav1_crf10` | `libsvtav1 -crf 10 -preset 8` | near-lossless | ~20 s / ~150 MB |
+| `x264_crf10` | `libx264 -crf 10 -preset veryfast` | near-lossless | ~31 s / ~350 MB |
+
+\* Measured with 3000 frames (1920×800, 50 fps); it will differ on other machines. Before this setting existed, the encoder was SVT-AV1 with `rc=1`, which is VBR at about 2 Mbps: ~80 s and 18 MB per chunk, at a lossy PSNR of ~46.6 dB.
+
+The lossless codecs need a lot of disk space: about 3.3 GB per minute of output, or ~400 GB for a 2-hour movie, because every per-chunk output is kept. If space is short, use `svtav1_crf10`:
+
+```bash
+INTERMEDIATE_CODEC=svtav1_crf10 ./interpolation_nncn -i "Movie.mkv"
+```
+
 The method names listed by the script's help include `cain`, `dain`, `rife`, `ifrnet`, `realsr`, `Real-ESRGAN`, `srmd`, `waifu2x`, `realcugan`, and `zimage`. However, the current processing configuration has explicit parameter sets only for `rife`, `dain`, `cain`, `realsr`, `realesrgan`, and `srmd`. `rife` is the default and doubles the frame rate; `dain` and `cain` also use the interpolation path. `realsr` is configured for 4x scaling, while `realesrgan` and `srmd` use 2x scaling. Other names shown in the help do not currently have equivalent method setup in `.config_video`; do not assume they will run successfully. Method spelling must match the executable name used by the script (for example, `realesrgan`).
 
 Examples:
@@ -262,6 +280,68 @@ ffmpeg -i reference.mkv -r 20 -i encoded.mkv -lavfi "[0:v]setpts=PTS-STARTPTS[re
 ```
 
 VMAF scores range from 0 to 100, where 0 is the lowest possible quality and 100 means identical to the reference. A score of 93–95 is generally considered the threshold for "broadcast quality" or "visually lossless": the average viewer cannot tell the compressed video from the source.
+
+## Performance optimization
+
+This section records the plan for speeding up `interpolation_nncn`, what has been done, and the measurements behind each decision. Target setup: Linux, AMD GPUs, 64 GB RAM, 1080p movies.
+
+### Baseline (before optimization)
+
+From `statistics.txt` rows for chunks 018–024 (RIFE, 60 s chunks), each chunk took about **1400 s**:
+
+| Stage | Time per chunk | Notes |
+|---|---|---|
+| HDR → SDR tone mapping | ~250 s | sequential; writes a lossless x265 `_sdr.mkv` |
+| Frame extraction | ~100 s | runs in parallel with NCNN |
+| NCNN interpolation | ~290 s | GPU; parameters already tuned (`-j`, `-u`) |
+| Merging frames into MKV | ~117 s | SVT-AV1 encode |
+| VMAF (`-Q`) | ~700 s | before the VMAF fix below |
+
+Peak space use per chunk was 30–37 GB of PNG frames.
+
+### Done
+
+1. **VMAF compares only the original frames** (commit `aea2e93`).
+   - Distorted input first, reference second (checked against the FFmpeg docs).
+   - Only frames at original positions are compared (`select='not(mod(n\,TARGET_FRAME_COUNT))'`), so interpolated frames have no reference and are skipped.
+   - `n_threads=$(nproc)` uses all CPU cores.
+   - Option `-Q` makes VMAF optional, because it is the slowest stage.
+2. **Short videos are not split** (commit `b590ff5`): videos of up to 90 s (`NO_SPLIT_MAX_SEC`) are processed in one go.
+3. **`-T` turns off tone mapping** (commit `b590ff5`): this skips the ~250 s stage when SDR output is not needed.
+4. **Selectable intermediate codec** (`INTERMEDIATE_CODEC`, default `x264_lossless`; see the [`interpolation_nncn`](#interpolation_nncn) section).
+   - The old setting was `libsvtav1 -crf 0 -preset 5 -svtav1-params rc=1:...`. In SVT-AV1, `rc=1` means **VBR**: it overrides `-crf`, and the encoder log showed a target bitrate of 2000 kbps. That explains the small files. Despite `-crf 0`, the result was lossy (PSNR ~46.6 dB).
+
+### Codec benchmark
+
+Test material: 500 PNG frames from `video_part_minute_029.mkv`, scaled to 1920×800 and encoded as 50 fps. Times are scaled to a 60 s chunk of 3000 frames. Run on a Mac (Apple M5, 10 cores); Linux numbers will differ. The quality of the encoded frames was compared with the source PNGs using PSNR.
+
+| Codec / settings | Time | Size | Quality |
+|---|---|---|---|
+| svtav1 `rc=1` (old) | ~80 s | 18 MB | PSNR 46.6 dB |
+| svtav1 `-crf 10 -preset 8` | ~20 s | 150 MB | PSNR 48.7 dB |
+| x264 `-crf 10 -preset veryfast` | ~31 s | 350 MB | PSNR 51.1 dB |
+| **x264 `-qp 0 -preset ultrafast`** | **~14 s** | 3.3 GB | lossless |
+| ffv1 `-level 3 -slices 24` | ~32 s | 2.7 GB | lossless |
+| x264 `-qp 0 -preset superfast` | ~44 s | 3.0 GB | lossless |
+| svtav1 `lossless=1 -preset 8` | ~109 s | 3.1 GB | lossless (111 dB) |
+
+Decision: lossless x264 `ultrafast` is the default because it is the fastest and loses nothing before the final HandBrake encode. The other codecs stay selectable for when disk space is short.
+
+### Planned (in agreed order)
+
+1. **Tone mapping inside frame extraction.** Apply the tonemap filter (for example `libplacebo`) inside the extraction `ffmpeg` instead of first writing a lossless x265 `_sdr.mkv`. Expected saving: most of ~250 s per chunk. VMAF then needs the same filter on its reference, because `video_part_minute_NNN.mkv` is currently a symlink to the `_sdr` file.
+2. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It also lets NCNN run without `-v`, because the monitor no longer needs its log lines. The result is lower peak space use, which makes the next items possible.
+3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the ~117 s merge overlaps with interpolation.
+4. **VMAF in the background,** running alongside the next chunk.
+5. **Smaller items:**
+   - replace fixed sleeps (`sleep 5` in extraction, `sleep 10` in the chunk loop, other 1–3 s sleeps) with event-based waits;
+   - lower the PNG `-compression_level` (faster writes, larger files);
+   - frames on tmpfs (RAM disk, `huge=always`) once peak space use is low enough for 64 GB RAM;
+   - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item).
+
+### How to measure
+
+Process the same chunk before and after a change (for example `-s 029` on `video_part_minute_029.mkv`) and compare the stage runtimes in `TMP/statistics.txt`. Use the same machine and settings for both runs.
 
 ## Runtime directories and logs
 

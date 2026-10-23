@@ -593,6 +593,52 @@ interpolating_extracted_frames()
   fi
   }
 
+# Codec of the intermediate video made from the processed frames (HandBrake encodes the final video later).
+# Can be overridden from the environment, e.g. INTERMEDIATE_CODEC=ffv1 ./interpolation_nncn ...
+# Measured on a 1920x800, 50 fps chunk of 60 s (3000 frames):
+#   x264_lossless - libx264 -qp 0 -preset ultrafast: lossless, fastest (~14 s), ~3.3 GB per chunk
+#   ffv1          - lossless, ~32 s, ~2.7 GB per chunk
+#   svtav1_crf10  - libsvtav1 -crf 10 -preset 8: near-lossless, ~20 s, ~150 MB per chunk
+#   x264_crf10    - libx264 -crf 10 -preset veryfast: near-lossless, ~31 s, ~350 MB per chunk
+INTERMEDIATE_CODEC="${INTERMEDIATE_CODEC:-x264_lossless}"
+
+# intermediate_codec_options - sets INTERMEDIATE_CODEC_OPTIONS from INTERMEDIATE_CODEC and checks that
+# ffmpeg has the encoder (unknown name: exit 2, missing encoder: exit 127)
+intermediate_codec_options()
+{
+  local INTERMEDIATE_ENCODER
+  case "${INTERMEDIATE_CODEC}" in
+    x264_lossless)
+      INTERMEDIATE_ENCODER="libx264"
+      INTERMEDIATE_CODEC_OPTIONS=(-c:v libx264 -qp 0 -preset ultrafast)
+      ;;
+    ffv1)
+      INTERMEDIATE_ENCODER="ffv1"
+      INTERMEDIATE_CODEC_OPTIONS=(-c:v ffv1 -level 3 -slices 24 -slicecrc 1 -threads 0)
+      ;;
+    svtav1_crf10)
+      # no rc=1 here: in SVT-AV1 rc=1 means VBR (default 2 Mbps), which overrides -crf
+      INTERMEDIATE_ENCODER="libsvtav1"
+      INTERMEDIATE_CODEC_OPTIONS=(-c:v libsvtav1 -crf 10 -preset 8 -svtav1-params tune=0)
+      ;;
+    x264_crf10)
+      INTERMEDIATE_ENCODER="libx264"
+      INTERMEDIATE_CODEC_OPTIONS=(-c:v libx264 -crf 10 -preset veryfast)
+      ;;
+    *)
+      error "  unknown INTERMEDIATE_CODEC=${YELLOW}${INTERMEDIATE_CODEC}${RED} (supported: x264_lossless, ffv1, svtav1_crf10, x264_crf10)"
+      ERROR_CODE="2"
+      failed
+      ;;
+  esac
+  if ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -qw "${INTERMEDIATE_ENCODER}"
+  then
+    error "  ffmpeg has no ${YELLOW}${INTERMEDIATE_ENCODER}${RED} encoder, needed for INTERMEDIATE_CODEC=${INTERMEDIATE_CODEC}"
+    ERROR_CODE="127"
+    failed
+  fi
+  }
+
 merging_frames_mkv()
 {
   if [ $# -ne 3 ]
@@ -613,7 +659,7 @@ merging_frames_mkv()
   # ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -framerate ${OUTPUT_FPS} -i "${FRAMES_IN_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/"%08d.png -pix_fmt yuv420p10le -c:v libx265 -preset medium -crf 0 -x265-params no-open-gop=1:keyint=300:gop-lookahead=12:bframes=6:weightb=1:hme=1:strong-intra-smoothing=0:rect=0:aq-mode=4 "${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.log" 2>&1 & echo "$!" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.pid"
 
   rm -f -- "${TMP}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/00000000.png"
-  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -framerate ${OUTPUT_FPS} -i "${FRAMES_IN_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/"%08d.png -c:v libsvtav1 -crf 0 -preset 5 -svtav1-params rc=1:tune=0:enable-overlays=1:scd=1 -pix_fmt yuv420p10le "${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.log" 2>&1 & echo "$!" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.pid"
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -framerate ${OUTPUT_FPS} -i "${FRAMES_IN_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/"%08d.png "${INTERMEDIATE_CODEC_OPTIONS[@]}" -pix_fmt yuv420p10le "${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.log" 2>&1 & echo "$!" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.pid"
   # ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -framerate ${OUTPUT_FPS} -i "${FRAMES_IN_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/"%08d.png -pix_fmt yuv420p10le -c:v libsvtav1 -preset 5 -crf 0 -svtav1-params lossless=1 "${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.log" 2>&1 & echo "$!" > "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.pid"
   
   MERGING_INTERFRAMES_PROCESS_PID=$(cat "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.pid")

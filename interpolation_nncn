@@ -255,6 +255,9 @@ do
   fi
 done
 
+# codec of the intermediate video (INTERMEDIATE_CODEC in .config_video), checked before any work
+intermediate_codec_options
+
 TERMINAL_WIDTH=$(tput cols)
 TERMINAL_HEIGHT=$(tput lines)
  
@@ -329,11 +332,14 @@ VIDEO_LENGTH=$(printf "%.0f\n" "${VIDEO_DURATION_RAW}")
 if [ "${VIDEO_LENGTH}" -le "${NO_SPLIT_MAX_SEC}" ]
 then
   # mkvmerge without --split copies the whole video into chunk 001 and writes the same
-  # log lines as a split, so the chunk loop below works unchanged
+  # log lines as a split, so the chunk loop below works unchanged; after the loop the
+  # results are renamed from video_part_minute_001 to the input name
+  WHOLE_VIDEO_IN_ONE_CHUNK="yes"
   inf "  video is ${YELLOW}${VIDEO_LENGTH}s${CYAN} long (<= ${NO_SPLIT_MAX_SEC}s), so it is processed as one chunk, without splitting"
   mkvmerge -o "video_part_minute_001.mkv" "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
   mkvtoolnix_status "$?" "copying the video into one chunk" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log"
 else
+  WHOLE_VIDEO_IN_ONE_CHUNK="no"
   mkvmerge -o "video_part_minute_%03d.mkv" --split ${SPLIT_TIME_SEC}s "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
   mkvtoolnix_status "$?" "splitting video into ${SPLIT_TIME_SEC}s chunks" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log"
 fi
@@ -376,7 +382,15 @@ fi
       # the .done marker is written only after a chunk fully succeeded, so a half-written
       # _merged.mkv from an interrupted run is never mistaken for a finished one
       # shellcheck disable=SC2206 # the unquoted * is intentional: the glob finds the marker whatever the fps
-      FINISHED_CHUNK_MARKERS=(video_part_minute_${VIDEO_FRAGMENT_ID}_${NCNN_METHOD}_*_merged.mkv.done)
+      if [[ ${WHOLE_VIDEO_IN_ONE_CHUNK} == yes ]]
+      then
+        # results of an unsplit video were already renamed to the input name
+        # shellcheck disable=SC2206
+        FINISHED_CHUNK_MARKERS=("${WHOLE_MOVIE_NAME_ARRAY[*]}"_${NCNN_METHOD}_*_merged.mkv.done)
+      else
+        # shellcheck disable=SC2206
+        FINISHED_CHUNK_MARKERS=(video_part_minute_${VIDEO_FRAGMENT_ID}_${NCNN_METHOD}_*_merged.mkv.done)
+      fi
       if [ -e "${FINISHED_CHUNK_MARKERS[0]}" ] && [ -s "${FINISHED_CHUNK_MARKERS[0]%.done}" ] && [[ "$(cat "${FINISHED_CHUNK_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
       then
         inf "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${CYAN} already finished (${FINISHED_CHUNK_MARKERS[0]%.done}), skipping"
@@ -475,10 +489,34 @@ fi
       inf "    space used all together: ${DARKCYAN}${MAX_SPACE_TAKEN_OVERALL} [GB] ${CYAN}(which is only ${MAROON1}${MAX_SPACE_TAKEN_PERCENT} [%]${CYAN} of space which should be taken if not removed on-the-fly)"
     fi
     echo "${VIDEO_FRAGMENT_ID}~${HDR_2_SDR_RUNTIME}~${EXTRACTING_STREAMS_RUNTIME}~${EXTRACTING_FRAMES_RUNTIME}~${INTERPOLATING_FRAMES_RUNTIME}~${MERGING_STREAMS_RUNTIME}~${MERGING_FRAMES_RUNTIME}~${QUALITY_METRIC_RUNTIME}~${MAX_SPACE_TAKEN_OVERALL}~${MAX_SPACE_TAKEN_PERCENT}~${VMAF_MEAN}~${PART_VIDEO_RUNTIME}" >> "${TMP}/statistics.txt"
-    sleep 10
-    clear
+    # after the last chunk the screen stays as it is, so the summary remains visible
+    if [[ ${VIDEO_FRAGMENT_ID} != "${LAST_VIDEO_FRAGMENT_ID}" ]]
+    then
+      sleep 10
+      # -x clears only the visible screen and keeps the scrollback
+      clear -x
+    fi
   done
 #fi
+
+# an unsplit video was processed as chunk 001: its results get the input name
+if [[ ${WHOLE_VIDEO_IN_ONE_CHUNK} == yes ]] && [ -e "video_part_minute_001_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv.done" ]
+then
+  RESULT_SUFFIXES=("_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" "_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv.done")
+  # _sdr/_hdr exist only when this run did the tone mapping (TMP is new for every run)
+  if [ -s "${TMP}/HDR_2_SDR" ]
+  then
+    RESULT_SUFFIXES+=("_sdr.mkv" "_hdr.mkv")
+  fi
+  for RESULT_SUFFIX in "${RESULT_SUFFIXES[@]}"
+  do
+    if [ -e "video_part_minute_001${RESULT_SUFFIX}" ]
+    then
+      mv -f -- "video_part_minute_001${RESULT_SUFFIX}" "${WHOLE_MOVIE_NAME_ARRAY[*]}${RESULT_SUFFIX}"
+      inf "  result: ${YELLOW}${WHOLE_MOVIE_NAME_ARRAY[*]}${RESULT_SUFFIX}"
+    fi
+  done
+fi
 
 # for VIDEO_FRAGMENT_ID in $(seq -w ${SPLIT_PART_START} ${LAST_VIDEO_FRAGMENT_ID})
 # do

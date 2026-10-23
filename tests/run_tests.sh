@@ -174,6 +174,24 @@ assert_contains "renumbers the reference the same way" "${OUTPUT}" "[1:v]setpts=
 assert_contains "distorted first, reference second" "${OUTPUT}" "[distorted][reference]libvmaf"
 assert_contains "uses all CPU cores" "${OUTPUT}" "libvmaf=n_threads="
 
+echo "intermediate_codec_options (ffmpeg replaced by a fake encoder list)"
+mkdir -p "${WORK_DIR}/codecbin"
+cat > "${WORK_DIR}/codecbin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+# fake ffmpeg -encoders: lists only libx264 and ffv1 (no libsvtav1)
+printf ' V....D libx264              libx264 H.264\n V.S..D ffv1                 FFmpeg video codec #1\n'
+EOF
+chmod +x "${WORK_DIR}/codecbin/ffmpeg"
+OUTPUT="$(unset INTERMEDIATE_CODEC; PATH="${WORK_DIR}/codecbin:${PATH}" run_with_helpers 'intermediate_codec_options; echo "OPTS=${INTERMEDIATE_CODEC_OPTIONS[*]}"' 2>&1)"; STATUS=$?
+assert_status   "default codec is accepted" 0 "${STATUS}"
+assert_contains "default is lossless x264" "${OUTPUT}" "OPTS=-c:v libx264 -qp 0 -preset ultrafast"
+OUTPUT="$(INTERMEDIATE_CODEC=ffv1 PATH="${WORK_DIR}/codecbin:${PATH}" run_with_helpers 'intermediate_codec_options; echo "OPTS=${INTERMEDIATE_CODEC_OPTIONS[*]}"' 2>&1)"
+assert_contains "ffv1 can be chosen" "${OUTPUT}" "OPTS=-c:v ffv1"
+INTERMEDIATE_CODEC=nonsense PATH="${WORK_DIR}/codecbin:${PATH}" run_with_helpers 'intermediate_codec_options' > /dev/null 2>&1
+assert_status   "unknown codec exits 2" 2 $?
+INTERMEDIATE_CODEC=svtav1_crf10 PATH="${WORK_DIR}/codecbin:${PATH}" run_with_helpers 'intermediate_codec_options' > /dev/null 2>&1
+assert_status   "missing encoder exits 127" 127 $?
+
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"
 [ "${FAILED}" -eq 0 ]
