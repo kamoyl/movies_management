@@ -80,6 +80,7 @@ done
 OUTPUT="$(TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -h 2>&1)"
 assert_contains "interpolation_nncn -h documents -r (resume)" "${OUTPUT}" "-r  resume"
 assert_contains "interpolation_nncn -h separates unsupported methods" "${OUTPUT}" "not supported yet"
+assert_contains "interpolation_nncn -h documents -T (no tone mapping)" "${OUTPUT}" "-T  no tone mapping"
 
 echo "failed: never exits 0"
 run_with_helpers 'ERROR_CODE=2; failed' > /dev/null
@@ -136,6 +137,17 @@ chmod +x "${WORK_DIR}/bin/ffmpeg"
 OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkdir -p "$LOG"; echo x > "My.Movie 2024.mp4"; FILE_NAME="My.Movie 2024.mp4"; mp4_to_mkv; echo "RESULT=$FILE_NAME"')"; STATUS=$?
 assert_status   "converts a dotted, spaced name" 0 "${STATUS}"
 assert_contains "keeps every dot in the name" "${OUTPUT}" "RESULT=My.Movie 2024.mkv"
+
+echo "converting_hdr2sdr (ffmpeg replaced by the same fake)"
+HDR_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; MOVIE_NAME_ARRAY=(hdr); echo x > hdr.mkv
+echo "{\"frames\":[{\"color_space\":\"bt2020nc\",\"color_primaries\":\"bt2020\",\"color_transfer\":\"smpte2084\"}]}" > "$TMP/hdr_mastering_display.json"'
+OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers "${HDR_SETUP}"'; TONE_MAPPING=no; converting_hdr2sdr hdr; [ ! -e hdr_sdr.mkv ] && echo "NO_SDR"' 2>&1)"; STATUS=$?
+assert_status   "-T: HDR is left as it is" 0 "${STATUS}"
+assert_contains "-T: warns that tone mapping is off" "${OUTPUT}" "tone mapping is switched off"
+assert_contains "-T: ffmpeg is not run" "${OUTPUT}" "NO_SDR"
+OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers "${HDR_SETUP}"'; rm -f hdr_sdr.mkv; converting_hdr2sdr hdr; [ -s hdr_sdr.mkv ] && [ -L hdr.mkv ] && echo "SDR_LINKED"' 2>&1)"; STATUS=$?
+assert_status   "default: HDR is tone-mapped" 0 "${STATUS}"
+assert_contains "default: hdr.mkv points to the SDR version" "${OUTPUT}" "SDR_LINKED"
 
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"

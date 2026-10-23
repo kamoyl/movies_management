@@ -407,7 +407,11 @@ converting_hdr2sdr()
     debug "    COLOR_PRIMARIES=${COLOR_PRIMARIES}"
     debug "    COLOR_TRANSFER=${COLOR_TRANSFER}"
   fi
-  if [[ ${COLOR_PRIMARIES} != "bt709" ]]
+  # TONE_MAPPING=no comes from interpolation_nncn -T
+  if [[ ${COLOR_PRIMARIES} != "bt709" ]] && [[ ${TONE_MAPPING:-yes} == no ]]
+  then
+    warn "  HDR video (${COLOR_PRIMARIES}), but tone mapping is switched off (-T): frames are processed as HDR, colours may differ"
+  elif [[ ${COLOR_PRIMARIES} != "bt709" ]]
   then
     inf "  tone mapping (HDR to SDR)"
     ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${VIDEO_FILE_NAME}.mkv" -vf "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:format=yuv420p" -c:v libx265 -crf 0 -c:a copy "${VIDEO_FILE_NAME}_sdr.mkv" > "${LOG}/${VIDEO_FILE_NAME}_tonemapping.log" 2>&1 &

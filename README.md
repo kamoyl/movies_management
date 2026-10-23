@@ -3,7 +3,7 @@
 This repository contains two Bash utilities for working with Matroska video:
 
 - `movies_encoding` collects and updates movie metadata, and can start an AV1 encode.
-- `interpolation_nncn` splits a video into one-minute chunks, processes the chunks with an NCNN/Vulkan image-processing tool, and merges each chunk's video with its audio and subtitle streams. Audio and subtitle tracks in Polish, Dutch, or English are extracted with `mkvmerge`, keeping their original language tags; if a chunk has audio but none in these languages, all its audio tracks are taken. Audio and subtitles are optional: a chunk without them is still processed, with a warning, and merged without them.
+- `interpolation_nncn` splits a video into one-minute chunks (a video of up to 90 seconds is processed as one chunk), processes the chunks with an NCNN/Vulkan image-processing tool, and merges each chunk's video with its audio and subtitle streams. Audio and subtitle tracks in Polish, Dutch, or English are extracted with `mkvmerge`, keeping their original language tags; if a chunk has audio but none in these languages, all its audio tracks are taken. Audio and subtitles are optional: a chunk without them is still processed, with a warning, and merged without them.
 
 Both scripts load shared functions from `.config` (which loads `.config_colours` and `.config_video`) and use `.var_management` to create working, temporary, and log directories. Run the scripts from a working directory where you have space for the input, intermediate files, and outputs.
 
@@ -139,13 +139,14 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 | `-o` | `DIR` | Workspace root for temporary files and logs. Defaults to `$HOME/var`. |
 | `-O` | `DIR` | Separate root for extracted/processed frames and related temporary data. Defaults to the `-o` workspace root. |
 | `-s` | `NNN` | First three-digit chunk number to process, such as `003`. Defaults to `001`; this lets a run skip earlier chunks. |
+| `-r` | — | Resume: skip chunks already finished by an earlier run of the same movie and method in this directory (see "Resumable and predictable runs"). Can be combined with `-s`. |
+| `-T` | — | No tone mapping: an HDR video is processed as HDR, without conversion to SDR. A warning is shown, because the colours of the processed frames may differ. Without `-T`, HDR is tone-mapped to SDR automatically. |
 | `-Q` | — | Run the VMAF quality check for each processed chunk. Requires an FFmpeg build with `libvmaf` and the configured VMAF model. |
-| `-S` | — | Sets an internal silent-mode variable. The current script does not consistently use it to suppress output, so normal progress output may still appear. |
+| `-S` | — | Silent: no terminal output; everything is written to `LOG/interpolation_nncn_silent_<timestamp>.log`. |
 | `-v` | — | Enable verbose diagnostics. |
 | `-h` | — | Print usage information. |
-| `-n` | `VALUE` | Accepted by the option parser but currently unused. |
 
-The script divides input into 60-second MKV chunks in the current working directory. It processes chunks from the selected start number, retains per-chunk merged outputs, and removes intermediate chunk data as it completes. The final whole-video concatenation code is currently commented out, so the script does **not** automatically create one combined output video. After each chunk, a `~`-separated row is appended to `TMP/statistics.txt` with stage runtimes, peak space use, the VMAF mean (with `-Q`), and the total chunk runtime.
+The script divides input into 60-second MKV chunks in the current working directory. A video of up to 90 seconds (`NO_SPLIT_MAX_SEC`) is not split: it is copied unchanged into one chunk, `video_part_minute_001.mkv`, and processed in one go; `-r`, `-Q`, and the statistics work the same way. It processes chunks from the selected start number, retains per-chunk merged outputs, and removes intermediate chunk data as it completes. The final whole-video concatenation code is currently commented out, so the script does **not** automatically create one combined output video. After each chunk, a `~`-separated row is appended to `TMP/statistics.txt` with stage runtimes, peak space use, the VMAF mean (with `-Q`), and the total chunk runtime.
 
 The method names listed by the script's help include `cain`, `dain`, `rife`, `ifrnet`, `realsr`, `Real-ESRGAN`, `srmd`, `waifu2x`, `realcugan`, and `zimage`. However, the current processing configuration has explicit parameter sets only for `rife`, `dain`, `cain`, `realsr`, `realesrgan`, and `srmd`. `rife` is the default and doubles the frame rate; `dain` and `cain` also use the interpolation path. `realsr` is configured for 4x scaling, while `realesrgan` and `srmd` use 2x scaling. Other names shown in the help do not currently have equivalent method setup in `.config_video`; do not assume they will run successfully. Method spelling must match the executable name used by the script (for example, `realesrgan`).
 
@@ -275,4 +276,4 @@ For `interpolation_nncn`, `-O` is where the large extracted and processed frame 
 
 ## Notes on option/help mismatches
 
-The parsers in the scripts are the authoritative list of accepted options. Some help text is stale: `interpolation_nncn` mentions `-f`, but does not accept it; `-n` is accepted but unused; and `-S` does not currently silence all output. The interpolation script's processing of chunk starts and its method support are also narrower than the help text suggests. These behaviors are documented here as implemented, not as intended future functionality.
+The help output (`-h`) and the option parsers of both scripts list the same options; unknown options exit with code 2. `interpolation_nncn -h` separates the methods it supports (`rife`, `dain`, `cain`, `realsr`) from those that are listed but not supported yet.

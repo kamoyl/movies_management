@@ -8,7 +8,7 @@
 #   - DONE (for control+C now): show failed interpolation moments after each run/all together - only amount (check it out if possible even if process is interfeared
 #   - DONE: makes HDR conversion to SDR (if needed, to manage colors properly)
 #   - add VERBOSE whenever needed
-#   - NOT_WORKING: when video file is equal or shorter then ${SPLIT_TIME_SEC} - just run, without splitting
+#   - DONE: when video file is equal or shorter then ${NO_SPLIT_MAX_SEC} - just run, without splitting
 #   - update ffmpeg to use FFMPEG_GLOBAL_OPTIONS
 #   - make silent version (all in the background without any notifications whatsovever
 #   - run concatenation WHEN ONLY ALL parts existed
@@ -82,11 +82,12 @@ usage()
   fi
 echo "
 ${CYAN}Usage:${BRIGHT}${WHITE}
-$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -Q ] [ -S ] [ -v ] [ -h ]
+$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -T ] [ -Q ] [ -S ] [ -v ] [ -h ]
 
     ${NORMAL}${CYAN}Description: processes a video with a neural network (NCNN/Vulkan) tool, in 60-second chunks:
             1. converts MP4 to MKV when needed, then splits it into chunks
-            2. tone-maps HDR to SDR when needed
+               (a video of up to 90 seconds is not split: it is processed as one chunk, 001)
+            2. tone-maps HDR to SDR when needed (unless -T)
             3. extracts audio/subtitle streams and video frames
             4. processes frames with the selected NCNN method
             5. merges frames back into video and re-attaches the streams
@@ -116,6 +117,8 @@ $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -Q ] [ -S ]
     ${LIME}-s${DODGERBLUE1}  first three-digit chunk number to process, for example [-s 003] (default: ${CYAN}001${DODGERBLUE1})
     ${LIME}-r${DODGERBLUE1}  resume: skip chunks already finished by an earlier run of the same movie and method
           in this directory; combinable with -s
+    ${LIME}-T${DODGERBLUE1}  no tone mapping: an HDR video is processed as HDR, without conversion to SDR
+          (colours of the processed frames may differ; a warning is shown)
     ${LIME}-Q${DODGERBLUE1}  calculate VMAF (quality check) for each processed chunk
     ${LIME}-S${DODGERBLUE1}  silent: no terminal output; everything is written to the run's silent log
     ${LIME}-v${DODGERBLUE1}  verbose diagnostics
@@ -129,7 +132,8 @@ SILENT=no
 VERBOSE=no
 QUALITY_CHECK=no
 RESUME=no
-while getopts ":o:O:i:N:s:rvShQ" ARG
+TONE_MAPPING=yes
+while getopts ":o:O:i:N:s:rTvShQ" ARG
 do
   case "${ARG}" in
         i)
@@ -156,6 +160,9 @@ do
             ;;
         r)
             RESUME=yes
+            ;;
+        T)
+            TONE_MAPPING=no
             ;;
         S)
             SILENT=yes
@@ -317,6 +324,8 @@ trap "stop_background_jobs" EXIT
 start_time_collecting
 START_TIME_WHOLE=${START_TIME}
 SPLIT_TIME_SEC="60"
+# a video of up to this length is processed as one chunk (001) instead of being split
+NO_SPLIT_MAX_SEC="90"
 # preparation, analysis, all calculations and information - START
 
 if [[ ${FILE_NAME_EXTENSION} == mp4 ]]
@@ -335,18 +344,17 @@ then
 fi
 VIDEO_LENGTH=$(printf "%.0f\n" "${VIDEO_DURATION_RAW}")
 
-#if [ ${VIDEO_LENGTH} -le 90 ]
-#then
-#  cp "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" "video_part_minute_000.mkv"
-#  CURRENTLY_MANAGED_VIDEO_PART_FILENAME="video_part_minute_000.mkv"
-#  interpolation_video_file "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}"
-#  ERROR_CODE="$?"
-#  sleep 1
-#  clear
-#else
-#    mkvmerge -o "video_part_minute_${SPLIT_PART_START}.mkv" --split parts:00:06:00-00:07:00 "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
-mkvmerge -o "video_part_minute_%03d.mkv" --split ${SPLIT_TIME_SEC}s "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
-mkvtoolnix_status "$?" "splitting video into ${SPLIT_TIME_SEC}s chunks" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log"
+if [ "${VIDEO_LENGTH}" -le "${NO_SPLIT_MAX_SEC}" ]
+then
+  # mkvmerge without --split copies the whole video into chunk 001 and writes the same
+  # log lines as a split, so the chunk loop below works unchanged
+  inf "  video is ${YELLOW}${VIDEO_LENGTH}s${CYAN} long (<= ${NO_SPLIT_MAX_SEC}s), so it is processed as one chunk, without splitting"
+  mkvmerge -o "video_part_minute_001.mkv" "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
+  mkvtoolnix_status "$?" "copying the video into one chunk" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log"
+else
+  mkvmerge -o "video_part_minute_%03d.mkv" --split ${SPLIT_TIME_SEC}s "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
+  mkvtoolnix_status "$?" "splitting video into ${SPLIT_TIME_SEC}s chunks" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log"
+fi
 LAST_VIDEO_FRAGMENT_ID=$(grep "video_part_minute_" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" | tail -n1 | sed "s/\.mkv.*$//g;s/^.*_minute_//g")
 if [[ ! ${LAST_VIDEO_FRAGMENT_ID} =~ ^[0-9]{3}$ ]]
 then
