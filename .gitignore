@@ -18,3 +18,4 @@ movies/**/*
 movies
 statistics.txt
 tmp/
+*.swp
