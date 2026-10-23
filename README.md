@@ -141,7 +141,7 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 | `-s` | `NNN` | First three-digit chunk number to process, such as `003`. Defaults to `001`; this lets a run skip earlier chunks. |
 | `-r` | — | Resume: skip chunks already finished by an earlier run of the same movie and method in this directory (see "Resumable and predictable runs"). Can be combined with `-s`. |
 | `-T` | — | No tone mapping: an HDR video is processed as HDR, without conversion to SDR. A warning is shown, because the colours of the processed frames may differ. Without `-T`, HDR is tone-mapped to SDR automatically. |
-| `-Q` | — | Run the VMAF quality check for each processed chunk. Requires an FFmpeg build with `libvmaf` and the configured VMAF model. |
+| `-Q` | — | Run the VMAF quality check for each processed chunk (processed chunk = distorted, first input; original chunk = reference, second input). For interpolation (`rife`, `dain`, `cain`) only the frames at original positions are compared, because in-between frames have no reference; the score shows what frame merging and encoding lost, not the quality of the interpolation itself. Uses all CPU cores. Requires an FFmpeg build with `libvmaf` and the configured VMAF model. Off by default, because it takes a long time. |
 | `-S` | — | Silent: no terminal output; everything is written to `LOG/interpolation_nncn_silent_<timestamp>.log`. |
 | `-v` | — | Enable verbose diagnostics. |
 | `-h` | — | Print usage information. |

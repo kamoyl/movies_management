@@ -149,6 +149,31 @@ OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers "${HDR_SETUP}"'; rm -f
 assert_status   "default: HDR is tone-mapped" 0 "${STATUS}"
 assert_contains "default: hdr.mkv points to the SDR version" "${OUTPUT}" "SDR_LINKED"
 
+echo "encoding_quality_metric (ffmpeg replaced by a fake that records the filter graph)"
+mkdir -p "${WORK_DIR}/vmafbin"
+cat > "${WORK_DIR}/vmafbin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+# fake ffmpeg: saves the -lavfi graph and writes a VMAF result to the graph's log_path
+while [ $# -gt 0 ]
+do
+  if [ "$1" = "-lavfi" ]
+  then
+    printf '%s\n' "$2" > graph.txt
+    LOG_PATH="${2#*log_path=}"
+    printf '{"pooled_metrics":{"vmaf":{"min":90,"max":99,"mean":95.5}}}\n' > "${LOG_PATH%%:*}"
+  fi
+  shift
+done
+EOF
+chmod +x "${WORK_DIR}/vmafbin/ffmpeg"
+OUTPUT="$(PATH="${WORK_DIR}/vmafbin:${PATH}" run_with_helpers 'TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; TARGET_FRAME_COUNT=2; INTER_FRAMES_COUNT=2880; INPUT_FPS=23.976; encoding_quality_metric merged.mkv original.mkv; echo "MEAN=${VMAF_MEAN}"; cat graph.txt' 2>&1)"; STATUS=$?
+assert_status   "VMAF run succeeds" 0 "${STATUS}"
+assert_contains "reads the VMAF mean" "${OUTPUT}" "MEAN=95.5"
+assert_contains "compares only original-position frames" "${OUTPUT}" "[0:v]select='not(mod(n\\,2))',setpts=N/(23.976*TB)[distorted]"
+assert_contains "renumbers the reference the same way" "${OUTPUT}" "[1:v]setpts=N/(23.976*TB)[reference]"
+assert_contains "distorted first, reference second" "${OUTPUT}" "[distorted][reference]libvmaf"
+assert_contains "uses all CPU cores" "${OUTPUT}" "libvmaf=n_threads="
+
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"
 [ "${FAILED}" -eq 0 ]

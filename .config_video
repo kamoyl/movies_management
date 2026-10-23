@@ -1368,14 +1368,27 @@ encoding_quality_metric()
   fi
   SHOW_FUNCTION_NAME=${FUNCNAME[0]}
   start_time_collecting
-  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${ENCODED_VIDEO_FILE}" -i "${REFERENCE_VIDEO_FILE}" -lavfi "libvmaf=model=path=/usr/share/model/vmaf_v0.6.1.json:log_path=${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json:log_fmt=json" -f null - > "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log" 2>&1 & echo "$!" > "${TMP}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.pid"
+  # interpolation (rife/dain/cain) puts TARGET_FRAME_COUNT output frames per original frame:
+  # output 0 = original 0, output 1 = in-between, output 2 = original 1, ...
+  # in-between frames have no reference, so only every VMAF_FRAME_STEP-th frame is compared;
+  # setpts renumbers both inputs, so frame N is paired with frame N
+  local VMAF_FRAME_STEP="${TARGET_FRAME_COUNT:-1}"
+  local VMAF_THREADS
+  VMAF_THREADS="$(nproc 2>/dev/null)"
+  if [[ ! ${VMAF_THREADS} =~ ^[0-9]+$ ]]
+  then
+    VMAF_THREADS="1"
+  fi
+  local VMAF_FRAMES_COUNT=$((INTER_FRAMES_COUNT / VMAF_FRAME_STEP))
+  local VMAF_GRAPH="[0:v]select='not(mod(n\,${VMAF_FRAME_STEP}))',setpts=N/(${INPUT_FPS}*TB)[distorted];[1:v]setpts=N/(${INPUT_FPS}*TB)[reference];[distorted][reference]libvmaf=n_threads=${VMAF_THREADS}:model=path=/usr/share/model/vmaf_v0.6.1.json:log_path=${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json:log_fmt=json"
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${ENCODED_VIDEO_FILE}" -i "${REFERENCE_VIDEO_FILE}" -lavfi "${VMAF_GRAPH}" -f null - > "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log" 2>&1 & echo "$!" > "${TMP}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.pid"
   QUALITY_METRIC_CHECK_PID=$(cat ${TMP}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.pid)
   while ps --pid ${QUALITY_METRIC_CHECK_PID} > /dev/null 2>&1
   do
     if [ -s "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log" ]
     then
       CURRENT_ANALYSED_FRAME=$(tail -n$((TARGET_FRAME_COUNT*6)) "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log" | grep "frame=" | tail -n1 | sed "s/frame=//g")
-      CURRENT_ANALYSED_FRAME_PERCENT="$(echo "(${CURRENT_ANALYSED_FRAME}/${INTER_FRAMES_COUNT}) * 100" | bc -l)"
+      CURRENT_ANALYSED_FRAME_PERCENT="$(echo "(${CURRENT_ANALYSED_FRAME}/${VMAF_FRAMES_COUNT}) * 100" | bc -l)"
       CURRENT_ANALYSED_FRAME_PERCENT="$(printf "%.0f\n" "${CURRENT_ANALYSED_FRAME_PERCENT}")"
       if [[ ${VERBOSE} == no ]]
       then
