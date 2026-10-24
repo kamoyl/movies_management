@@ -217,7 +217,7 @@ checking_space_bg()
   fi
   SHOW_FUNCTION_NAME=${FUNCNAME[0]}
   (
-    while ps --pid ${CHECK_PID} > /dev/null 2>&1
+    while ps -p ${CHECK_PID} > /dev/null 2>&1
     do
       SPACE_TAKEN_DIR=$(du -sk "${TMP}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}" 2>/dev/null | awk '{print $1}')
       SPACE_TAKEN_DIR="$(printf "%.0f\n" "$(echo "${SPACE_TAKEN_DIR}/1024" | bc -l)")"
@@ -263,7 +263,7 @@ checking_space_background()
     MAX_SPACE_TAKEN_OUTPUT_DIR=$(cat "${TMP}/MAX_SPACE_TAKEN_OUTPUT_DIR")
   fi
   (
-    while ps --pid ${CHECK_PID} > /dev/null 2>&1
+    while ps -p ${CHECK_PID} > /dev/null 2>&1
     do
       SPACE_TAKEN_INPUT_DIR=$(du -sm "${VIDEO_IN_DIR}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}" 2>/dev/null | awk '{print $1}')
       SPACE_TAKEN_INPUT_DIR="$(printf "%.0f\n" "$(echo "${SPACE_TAKEN_INPUT_DIR}/1000" | bc -l)")"
@@ -375,7 +375,7 @@ extracting_mkv_streams()
     echo "${SUBS_EXTRACT_PID}" > "${TMP}/${VIDEO_FILE_NAME}_extract_subs.pid"
   fi
   (
-    while [ -n "${AUDIO_EXTRACT_PID}" ] && ps --pid "${AUDIO_EXTRACT_PID}" > /dev/null 2>&1
+    while [ -n "${AUDIO_EXTRACT_PID}" ] && ps -p "${AUDIO_EXTRACT_PID}" > /dev/null 2>&1
     do
       sleep 1
     done
@@ -389,14 +389,12 @@ converting_hdr2sdr()
 {
   if [ $# -ne 1 ]
   then
-    error "Function ${LIME}${FUNCNAME[0]}${RED} needs one parameter: ${YELLOW}VIDEO_FILE_NAME which is check if HDR and then converts to SDR (interpolating process is SDR only)"
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs one parameter: ${YELLOW}VIDEO_FILE_NAME which is checked if HDR (interpolating process is SDR only)"
     ERROR_CODE="1"
     failed
   else
     local VIDEO_FILE_NAME="${1}"
   fi
-  local SHOW_FUNCTION_NAME=${FUNCNAME[0]}
-  start_time_collecting
   COLOR_SPACE=$(jq -r '.frames[].color_space' "${TMP}/${MOVIE_NAME_ARRAY[*]}_mastering_display.json")
   COLOR_PRIMARIES=$(jq -r '.frames[].color_primaries' "${TMP}/${MOVIE_NAME_ARRAY[*]}_mastering_display.json")
   export COLOR_PRIMARIES
@@ -407,51 +405,18 @@ converting_hdr2sdr()
     debug "    COLOR_PRIMARIES=${COLOR_PRIMARIES}"
     debug "    COLOR_TRANSFER=${COLOR_TRANSFER}"
   fi
+  # the tone mapping itself is done by the frames extraction (and by the VMAF check for its
+  # reference) with this filter: no separate SDR copy of the chunk is encoded anymore, because
+  # that lossless x265 encode took ~2/3 of the stage, while libplacebo itself is fast
+  TONE_MAPPING_FILTER=""
   # TONE_MAPPING=no comes from interpolation_nncn -T
   if [[ ${COLOR_PRIMARIES} != "bt709" ]] && [[ ${TONE_MAPPING:-yes} == no ]]
   then
     warn "  HDR video (${COLOR_PRIMARIES}), but tone mapping is switched off (-T): frames are processed as HDR, colours may differ"
   elif [[ ${COLOR_PRIMARIES} != "bt709" ]]
   then
-    inf "  tone mapping (HDR to SDR)"
-    ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${VIDEO_FILE_NAME}.mkv" -vf "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:format=yuv420p" -c:v libx265 -crf 0 -c:a copy "${VIDEO_FILE_NAME}_sdr.mkv" > "${LOG}/${VIDEO_FILE_NAME}_tonemapping.log" 2>&1 &
-    TONEMAPPING_PID=$!
-    echo "${TONEMAPPING_PID}" > "${TMP}/${VIDEO_FILE_NAME}_tonemapping.pid"
-    sleep 1
-    while ps --pid ${TONEMAPPING_PID} > /dev/null 2>&1
-    do
-      if [ -s "${LOG}/${VIDEO_FILE_NAME}_tonemapping.log" ]
-      then
-        CURRENT_TONEMAPPED_FRAME=$(tail -n$((TARGET_FRAME_COUNT*6)) "${LOG}/${VIDEO_FILE_NAME}_tonemapping.log" | grep "frame=" | tail -n1 | sed "s/frame=//g")
-        # empty when ffmpeg failed before writing the first frame
-        if [[ ! ${CURRENT_TONEMAPPED_FRAME} =~ ^[0-9]+$ ]]
-        then
-          CURRENT_TONEMAPPED_FRAME="0"
-        fi
-        CURRENT_TONEMAPPED_FRAME_PERCENT="$(echo "(${CURRENT_TONEMAPPED_FRAME}/${INPUT_FRAMES_COUNT}) * 100" | bc -l)"
-        CURRENT_TONEMAPPED_FRAME_PERCENT="$(printf "%.0f\n" "${CURRENT_TONEMAPPED_FRAME_PERCENT}")"
-        if [[ ${VERBOSE} == no ]]
-        then
-          printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 19))" "             ${MAGENTA2}currently tone-mapped frame ${BROWN}${CURRENT_TONEMAPPED_FRAME} ${LIGHT_MAGENTA}${CURRENT_TONEMAPPED_FRAME_PERCENT} [%]" 2>/dev/null
-        fi
-      fi
-      # without a pause this loop would keep one CPU core busy during tone mapping
-      sleep 1
-    done
-    wait "${TONEMAPPING_PID}"
-    local TONEMAPPING_STATUS=$?
-    if [ "${TONEMAPPING_STATUS}" -ne 0 ]
-    then
-      error "  tone mapping of ${YELLOW}${VIDEO_FILE_NAME}.mkv${RED} failed with exit code ${TONEMAPPING_STATUS} (see log: ${LOG}/${VIDEO_FILE_NAME}_tonemapping.log)"
-      ERROR_CODE="1"
-      failed
-    fi
-    require_output "${VIDEO_FILE_NAME}_sdr.mkv" "HDR to SDR tone mapping" "${LOG}/${VIDEO_FILE_NAME}_tonemapping.log"
-    mv "${VIDEO_FILE_NAME}.mkv" "${VIDEO_FILE_NAME}_hdr.mkv"
-    ln -sf "${VIDEO_FILE_NAME}_sdr.mkv" "${VIDEO_FILE_NAME}.mkv"
-    tput sc
-    end_time_collecting
-    echo ${RUNTIME} > "${TMP}/HDR_2_SDR"
+    inf "  tone mapping (HDR to SDR) is done during frames extraction"
+    TONE_MAPPING_FILTER="libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:format=yuv420p"
   fi
   }
 
@@ -474,7 +439,15 @@ extracting_mkv_frames()
   fi
   tput sc
   start_time_collecting
-  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${VIDEO_FILE_NAME}.mkv" "${VIDEO_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/"%08d.png > "${LOG}/${VIDEO_FILE_NAME}_inter_inframes.log" 2>&1 & echo "$!" > "${TMP}/${VIDEO_FILE_NAME}_inter_inframes.pid"
+  # set by converting_hdr2sdr for HDR input (empty: frames are extracted as they are)
+  local EXTRACTION_FILTER=()
+  if [ -n "${TONE_MAPPING_FILTER}" ]
+  then
+    EXTRACTION_FILTER=(-vf "${TONE_MAPPING_FILTER}")
+  fi
+  # passthrough: one PNG per decoded frame (= INPUT_FRAMES_COUNT); the image2 default (cfr) would
+  # duplicate frames at timestamp gaps, so NCNN, the placeholders and VMAF would not match anymore
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${VIDEO_FILE_NAME}.mkv" "${EXTRACTION_FILTER[@]}" -fps_mode passthrough "${VIDEO_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/"%08d.png > "${LOG}/${VIDEO_FILE_NAME}_inter_inframes.log" 2>&1 & echo "$!" > "${TMP}/${VIDEO_FILE_NAME}_inter_inframes.pid"
   FFMPEG_EX_BACKGROUND_PROCESS_PID=$(cat "${TMP}/${VIDEO_FILE_NAME}_inter_inframes.pid")
   if [[ ${VERBOSE} == yes ]]
   then
@@ -482,7 +455,7 @@ extracting_mkv_frames()
   fi
   sleep 5
   (
-    while ps --pid ${FFMPEG_EX_BACKGROUND_PROCESS_PID} > /dev/null 2>&1
+    while ps -p ${FFMPEG_EX_BACKGROUND_PROCESS_PID} > /dev/null 2>&1
     do
       CURRENT_EXTRACTED_FRAME=$(tail -n$((TARGET_FRAME_COUNT*6)) "${LOG}/${VIDEO_FILE_NAME}_inter_inframes.log" | grep "frame=" | tail -n1 | sed "s/frame=//g")
       if [[ ${CURRENT_EXTRACTED_FRAME} != "" ]]
@@ -501,6 +474,56 @@ extracting_mkv_frames()
     # frames may be removed meanwhile by the interpolation monitor, which is not an error
     find "${VIDEO_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/" -ignore_readdir_race -iname '*.png' -type f -empty -delete
     ) &
+  }
+
+# NCNN gets the full frame count up front (empty split placeholders), so it must never read a frame
+# ffmpeg has not written yet: such a frame fails to decode and NCNN may crash. When extraction is
+# slower than NCNN (e.g. tone mapping on a GPU shared with NCNN), NCNN is paused (SIGSTOP) while it is
+# closer than NCNN_EXTRACTION_MARGIN input frames to the extraction, and resumed (SIGCONT) when the
+# extraction is twice the margin ahead (or finished); the gap covers NCNN's read-ahead queue (8 tasks).
+# Pausing keeps both running in parallel, unlike starting NCNN only after the extraction.
+NCNN_EXTRACTION_MARGIN="${NCNN_EXTRACTION_MARGIN:-50}"
+# throttling_ncnn NCNN_PID EXTRACTION_LOG NCNN_LOG - one check; NCNN_PAUSED (yes/no) keeps the state
+throttling_ncnn()
+{
+  local NCNN_PID="${1}"
+  local EXTRACTION_LOG="${2}"
+  local NCNN_LOG="${3}"
+  local EXTRACTED_FRAME
+  local NCNN_FRAME
+  EXTRACTED_FRAME="$(grep "^frame=" "${EXTRACTION_LOG}" 2>/dev/null | tail -n1 | sed "s/frame=//g")"
+  if [[ ! ${EXTRACTED_FRAME} =~ ^[0-9]+$ ]]
+  then
+    EXTRACTED_FRAME="0"
+  fi
+  # the last processed pair: "<in0>.png <in1>.png <time> -> <out>.png done"
+  NCNN_FRAME="$(grep " done$" "${NCNN_LOG}" 2>/dev/null | tail -n1 | awk '{print $2}' | awk -F/ '{print $NF}' | sed "s/\.png//g")"
+  if [[ ${NCNN_FRAME} =~ ^[0-9]+$ ]]
+  then
+    NCNN_FRAME="$((10#${NCNN_FRAME}))"
+  else
+    NCNN_FRAME="0"
+  fi
+  if [[ ${NCNN_PAUSED:-no} == no ]] && [ $((EXTRACTED_FRAME - NCNN_FRAME)) -lt "${NCNN_EXTRACTION_MARGIN}" ]
+  then
+    if kill -STOP "${NCNN_PID}" 2>/dev/null
+    then
+      NCNN_PAUSED="yes"
+      # how often and how long NCNN waited for the extraction
+      printf '%s paused  (NCNN frame %s, extracted %s)\n' "$(date +%T)" "${NCNN_FRAME}" "${EXTRACTED_FRAME}" >> "${NCNN_LOG%.log}_throttle.log"
+    fi
+  elif [[ ${NCNN_PAUSED:-no} == yes ]] && [ $((EXTRACTED_FRAME - NCNN_FRAME)) -ge $((NCNN_EXTRACTION_MARGIN * 2)) ]
+  then
+    resuming_ncnn "${NCNN_PID}"
+    printf '%s resumed (NCNN frame %s, extracted %s)\n' "$(date +%T)" "${NCNN_FRAME}" "${EXTRACTED_FRAME}" >> "${NCNN_LOG%.log}_throttle.log"
+  fi
+  }
+
+# resuming_ncnn NCNN_PID - lets a paused NCNN continue (also before it is waited for or stopped)
+resuming_ncnn()
+{
+  kill -CONT "${1}" 2>/dev/null
+  NCNN_PAUSED="no"
   }
 
 # GPUs used by NCNN (-g) and its threads (-j load:proc,proc:save, one proc value per GPU) depend on
@@ -558,7 +581,11 @@ interpolating_extracted_frames()
     OUTPUT_FPS_ROUND="${NCNN_SCALE}"
     NCNN_PARAMETERS=(-v -g "${NCNN_GPUS}" -j "${NCNN_THREADS}" -t 0,0 -n 4 -x)
   fi
-  (exec 2>/dev/null "${NCNN_METHOD}-ncnn-vulkan" "${NCNN_PARAMETERS[@]}" -i "${FRAMES_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}" -o "${FRAMES_OUT_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}" > "${LOG}/${LOG_FILE}.log" 2>&1 ) & echo "$!" > "${TMP}/${LOG_FILE}.pid"
+  # NCNN looks for its models (e.g. rife-v4.6) next to the path it was started with; started through a
+  # symlink (e.g. /usr/local/bin on macOS) it would not find them, so the real path is used
+  local NCNN_BINARY
+  NCNN_BINARY="$(readlink -f "$(command -v "${NCNN_METHOD}-ncnn-vulkan")")"
+  (exec 2>/dev/null "${NCNN_BINARY}" "${NCNN_PARAMETERS[@]}" -i "${FRAMES_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}" -o "${FRAMES_OUT_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}" > "${LOG}/${LOG_FILE}.log" 2>&1 ) & echo "$!" > "${TMP}/${LOG_FILE}.pid"
   NCNN_BACKGROUND_PROCESS_PID=$(cat "${TMP}/${LOG_FILE}.pid")
   export NCNN_BACKGROUND_PROCESS_PID
   LAST_MANAGED_FRAME=""
@@ -569,7 +596,7 @@ interpolating_extracted_frames()
   MANAGED_FILE_TO_REMOVE=""
   local REMOVED_INPUT_FRAMES_UP_TO="0"
   (
-    while ps --pid ${NCNN_BACKGROUND_PROCESS_PID} > /dev/null 2>&1
+    while ps -p ${NCNN_BACKGROUND_PROCESS_PID} > /dev/null 2>&1
     do
       if [ -s "${LOG}/${LOG_FILE}.log" ]
       then
@@ -719,7 +746,7 @@ merging_frames_mkv()
   export MERGING_INTERFRAMES_PROCESS_PID
   local REMOVED_MERGED_FRAMES_UP_TO="0"
   (
-    while ps --pid ${MERGING_INTERFRAMES_PROCESS_PID} > /dev/null 2>&1
+    while ps -p ${MERGING_INTERFRAMES_PROCESS_PID} > /dev/null 2>&1
     do
       LAST_MERGED_FFMPEG_FRAME=$(tail -n50 "${LOG}/${FFMPEG_LOCAL_LOG_FILENAME}.log" | grep "frame=" | tail -n1 | awk -F\= '{print $2}')
       BEFORE_LAST_MERGED_FFMPEG_FRAME=$((LAST_MERGED_FFMPEG_FRAME-1))
@@ -976,11 +1003,6 @@ interpolation_video_file()
   tput civis
   # it will eliminate part of frame analysis as not needed anymore
   converting_hdr2sdr              "${MOVIE_NAME_ARRAY[*]}"
-  if [[ ${VERBOSE} == yes ]]
-  then
-    warn "      VERBOSE, so waiting till the end of converting_hdr2sdr function"
-    wait
-  fi
   extracting_mkv_frames           "${MOVIE_NAME_ARRAY[*]}"            "${TMP_OUT}"    "${TMP}"
   if [[ ${VERBOSE} == yes ]]
   then
@@ -997,16 +1019,20 @@ interpolation_video_file()
   then
     checking_space_background       "${NCNN_BACKGROUND_PROCESS_PID}"    "${TMP_OUT}"    "${TMP}"
   fi
-  # NCNN that stops early (e.g. invalid GPU) is reported at once, not only after the extraction
-  while ps --pid "${FFMPEG_EX_BACKGROUND_PROCESS_PID}" > /dev/null 2>&1
+  # NCNN that stops early (e.g. invalid GPU) is reported at once, not only after the extraction;
+  # meanwhile NCNN is kept behind the extraction (throttling_ncnn)
+  NCNN_PAUSED="no"
+  while ps -p "${FFMPEG_EX_BACKGROUND_PROCESS_PID}" > /dev/null 2>&1
   do
-    if ! ps --pid "${NCNN_BACKGROUND_PROCESS_PID}" > /dev/null 2>&1
+    if ! ps -p "${NCNN_BACKGROUND_PROCESS_PID}" > /dev/null 2>&1
     then
       wait_for_step "${NCNN_BACKGROUND_PROCESS_PID}" "interpolation (${NCNN_METHOD}-ncnn-vulkan)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
       break
     fi
+    throttling_ncnn "${NCNN_BACKGROUND_PROCESS_PID}" "${LOG}/${MOVIE_NAME_ARRAY[*]}_inter_inframes.log" "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
     sleep 1
   done
+  resuming_ncnn "${NCNN_BACKGROUND_PROCESS_PID}"
   wait_for_step "${FFMPEG_EX_BACKGROUND_PROCESS_PID}" "frames extraction (ffmpeg)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_inter_inframes.log"
   wait_for_step "${NCNN_BACKGROUND_PROCESS_PID}" "interpolation (${NCNN_METHOD}-ncnn-vulkan)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
   wait
@@ -1489,10 +1515,22 @@ encoding_quality_metric()
     VMAF_THREADS="1"
   fi
   local VMAF_FRAMES_COUNT=$((INTER_FRAMES_COUNT / VMAF_FRAME_STEP))
-  local VMAF_GRAPH="[0:v]select='not(mod(n\,${VMAF_FRAME_STEP}))',setpts=N/(${INPUT_FPS}*TB)[distorted];[1:v]setpts=N/(${INPUT_FPS}*TB)[reference];[distorted][reference]libvmaf=n_threads=${VMAF_THREADS}:model=path=/usr/share/model/vmaf_v0.6.1.json:log_path=${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json:log_fmt=json"
+  # an HDR reference is tone-mapped the same way as the extracted frames were (converting_hdr2sdr)
+  local REFERENCE_FILTER=""
+  if [ -n "${TONE_MAPPING_FILTER}" ]
+  then
+    REFERENCE_FILTER="${TONE_MAPPING_FILTER},"
+  fi
+  # the model file of the Linux packages, otherwise the model built into libvmaf (e.g. Homebrew)
+  local VMAF_MODEL="version=vmaf_v0.6.1"
+  if [ -s /usr/share/model/vmaf_v0.6.1.json ]
+  then
+    VMAF_MODEL="path=/usr/share/model/vmaf_v0.6.1.json"
+  fi
+  local VMAF_GRAPH="[0:v]select='not(mod(n\,${VMAF_FRAME_STEP}))',setpts=N/(${INPUT_FPS}*TB)[distorted];[1:v]${REFERENCE_FILTER}setpts=N/(${INPUT_FPS}*TB)[reference];[distorted][reference]libvmaf=n_threads=${VMAF_THREADS}:model=${VMAF_MODEL}:log_path=${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json:log_fmt=json"
   ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${ENCODED_VIDEO_FILE}" -i "${REFERENCE_VIDEO_FILE}" -lavfi "${VMAF_GRAPH}" -f null - > "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log" 2>&1 & echo "$!" > "${TMP}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.pid"
   QUALITY_METRIC_CHECK_PID=$(cat ${TMP}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.pid)
-  while ps --pid ${QUALITY_METRIC_CHECK_PID} > /dev/null 2>&1
+  while ps -p ${QUALITY_METRIC_CHECK_PID} > /dev/null 2>&1
   do
     if [ -s "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log" ]
     then

@@ -101,8 +101,8 @@ $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -T ] [ -k ]
           in this directory; combinable with -s
     ${LIME}-T${DODGERBLUE1}  no tone mapping: an HDR video is processed as HDR, without conversion to SDR
           (colours of the processed frames may differ; a warning is shown)
-    ${LIME}-k${DODGERBLUE1}  keep intermediate files of finished chunks (the frames-only video in -O, _sdr/_hdr
-          chunks and the chunk's frame directories); by default they are removed once the chunk is done
+    ${LIME}-k${DODGERBLUE1}  keep intermediate files of finished chunks (the frames-only video in -O and the
+          chunk's frame directories); by default they are removed once the chunk is done
     ${LIME}-Q${DODGERBLUE1}  calculate VMAF (quality check) for each processed chunk
     ${LIME}-S${DODGERBLUE1}  silent: no terminal output; everything is written to the run's silent log
     ${LIME}-v${DODGERBLUE1}  verbose diagnostics
@@ -306,6 +306,8 @@ stop_background_jobs()
   for CHILD_PID in $(pgrep -P $$ 2>/dev/null)
   do
     kill "${CHILD_PID}" 2>/dev/null
+    # a process paused by throttling_ncnn (SIGSTOP) handles SIGTERM only after SIGCONT
+    kill -CONT "${CHILD_PID}" 2>/dev/null
   done
   }
 
@@ -447,7 +449,7 @@ fi
     # frames-only video in TMP_OUT is a full copy of the video track of _merged.mkv
     if [[ ${KEEP_INTERMEDIATES} == no ]]
     then
-      rm -f -- "${TMP_OUT}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" "${MOVIE_NAME_ARRAY[*]}_sdr.mkv" "${MOVIE_NAME_ARRAY[*]}_hdr.mkv"
+      rm -f -- "${TMP_OUT}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv"
       # frame directories: input frames are in TMP_OUT, processed frames in TMP
       rm -rf -- "${TMP_OUT:?}/${IN_DIR:?}" "${TMP_OUT:?}/${OUT_DIR:?}" "${TMP:?}/${IN_DIR:?}" "${TMP:?}/${OUT_DIR:?}"
     fi
@@ -456,11 +458,9 @@ fi
     end_time_collecting
     PART_VIDEO_RUNTIME=${RUNTIME}
     inf "    following video management took: ${DARKCYAN}${PART_VIDEO_RUNTIME}"
-    if [ -s "${TMP}/HDR_2_SDR" ]
-    then
-      HDR_2_SDR_RUNTIME=$(cat "${TMP}/HDR_2_SDR")
-      inf "      tone-mapping process took: ${DARKCYAN}${HDR_2_SDR_RUNTIME}"
-    fi
+    # tone mapping is part of the frames extraction now; the statistics column is kept, so
+    # older and newer statistics.txt files have the same columns
+    HDR_2_SDR_RUNTIME="-"
     inf "      extracting"
     if [ -s "${TMP}/EXTRACTING_STREAMS_RUNTIME" ]
     then
@@ -520,11 +520,6 @@ fi
 if [[ ${WHOLE_VIDEO_IN_ONE_CHUNK} == yes ]] && [ -e "video_part_minute_001_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv.done" ]
 then
   RESULT_SUFFIXES=("_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" "_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv.done")
-  # _sdr/_hdr exist only when this run did the tone mapping (TMP is new for every run) and -k kept them
-  if [ -s "${TMP}/HDR_2_SDR" ]
-  then
-    RESULT_SUFFIXES+=("_sdr.mkv" "_hdr.mkv")
-  fi
   for RESULT_SUFFIX in "${RESULT_SUFFIXES[@]}"
   do
     if [ -e "video_part_minute_001${RESULT_SUFFIX}" ]

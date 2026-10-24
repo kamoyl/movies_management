@@ -142,13 +142,13 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 | `-s` | `NNN` | First three-digit chunk number to process, such as `003`. Defaults to `001`; this lets a run skip earlier chunks. |
 | `-r` | — | Resume: skip chunks already finished by an earlier run of the same movie and method in this directory (see "Resumable and predictable runs"). Can be combined with `-s`. |
 | `-T` | — | No tone mapping: an HDR video is processed as HDR, without conversion to SDR. A warning is shown, because the colours of the processed frames may differ. Without `-T`, HDR is tone-mapped to SDR automatically. |
-| `-k` | — | Keep the intermediate files of finished chunks: the frames-only video in `TMP_OUT`, the `_sdr`/`_hdr` chunks, and the chunk's frame directories. Without `-k` they are removed once the chunk is done (its `.done` marker is written). The frames-only video is a full copy of the video track of `_merged.mkv`, so keeping it doubles the space needed per chunk. |
-| `-Q` | — | Run the VMAF quality check for each processed chunk (processed chunk = distorted, first input; original chunk = reference, second input). For interpolation (`rife`, `dain`, `cain`) only the frames at original positions are compared, because in-between frames have no reference; the score shows what frame merging and encoding lost, not the quality of the interpolation itself. Uses all CPU cores. Requires an FFmpeg build with `libvmaf` and the configured VMAF model. Off by default, because it takes a long time. |
+| `-k` | — | Keep the intermediate files of finished chunks: the frames-only video in `TMP_OUT` and the chunk's frame directories. Without `-k` they are removed once the chunk is done (its `.done` marker is written). The frames-only video is a full copy of the video track of `_merged.mkv`, so keeping it doubles the space needed per chunk. |
+| `-Q` | — | Run the VMAF quality check for each processed chunk (processed chunk = distorted, first input; original chunk = reference, second input). For interpolation (`rife`, `dain`, `cain`) only the frames at original positions are compared, because in-between frames have no reference; the score shows what frame merging and encoding lost, not the quality of the interpolation itself. Uses all CPU cores. Requires an FFmpeg build with `libvmaf`; the model is `/usr/share/model/vmaf_v0.6.1.json` when that file exists (Linux packages), otherwise the `vmaf_v0.6.1` model built into libvmaf (for example Homebrew). An HDR reference is tone-mapped with the same filter as the extracted frames. Off by default, because it takes a long time. |
 | `-S` | — | Silent: no terminal output; everything is written to `LOG/interpolation_nncn_silent_<timestamp>.log`. |
 | `-v` | — | Enable verbose diagnostics. |
 | `-h` | — | Print usage information. |
 
-The script divides input into 60-second MKV chunks in the current working directory. A video of up to 90 seconds (`NO_SPLIT_MAX_SEC`) is not split: it is copied unchanged into one chunk, `video_part_minute_001.mkv`, and processed in one go; `-r`, `-Q`, and the statistics work the same way. It processes chunks from the selected start number, retains per-chunk merged outputs, and removes intermediate chunk data as it completes. The final whole-video concatenation code is currently commented out, so the script does **not** automatically create one combined output video. After each chunk, a `~`-separated row is appended to `TMP/statistics.txt` with stage runtimes, peak space use, the VMAF mean (with `-Q`), and the total chunk runtime.
+The script divides input into 60-second MKV chunks in the current working directory. A video of up to 90 seconds (`NO_SPLIT_MAX_SEC`) is not split: it is copied unchanged into one chunk, `video_part_minute_001.mkv`, and processed in one go; `-r`, `-Q`, and the statistics work the same way. It processes chunks from the selected start number, retains per-chunk merged outputs, and removes intermediate chunk data as it completes. The final whole-video concatenation code is currently commented out, so the script does **not** automatically create one combined output video. After each chunk, a `~`-separated row is appended to `TMP/statistics.txt` with stage runtimes, peak space use, the VMAF mean (with `-Q`), and the total chunk runtime. The `tone_mapping_runtime` column is always `-` now, because tone mapping is part of the frame extraction (`extracting_frames_runtime`); the column stays so older and newer files have the same columns.
 
 The processed frames of each chunk are encoded into an intermediate video. HandBrake (`movies_encoding`) makes the final encode later. Choose its codec with the `INTERMEDIATE_CODEC` environment variable. The script checks the name and the FFmpeg encoder at start-up: an unknown name exits with `2`, and a missing encoder exits with `127`.
 
@@ -232,6 +232,10 @@ NCNN_GPUS=0,1 NCNN_THREADS=4:2,2:6 ./interpolation_nncn -i "Episode.mkv"
 
 With a wrong GPU number, NCNN stops at once (`invalid gpu device` in its log); the script reports it immediately instead of after the frame extraction.
 
+NCNN is started through the real path of its executable (symlinks resolved), because it looks for its models (for example `rife-v4.6`) next to the path it was started with; a symlink such as `/usr/local/bin/rife-ncnn-vulkan` would otherwise make every frame fail.
+
+NCNN and the frame extraction run in parallel, and NCNN sees all input frames from the start (empty placeholder files). If NCNN gets closer than `NCNN_EXTRACTION_MARGIN` input frames (default 50) to the extraction, the script pauses it (`SIGSTOP`) and resumes it (`SIGCONT`) once the extraction is twice the margin ahead or finished, so NCNN never reads a frame that is not written yet. Each pause and resume is logged in `LOG/<chunk>_ncnn_<method>_throttle.log`; no such file means NCNN never had to wait.
+
 #### Blu-ray (BDMV/M2TS) stream details
 
 The `.mpls` playlist describes all streams:
@@ -300,7 +304,7 @@ From `statistics.txt` rows for chunks 018–024 (RIFE, 60 s chunks), each chunk 
 
 | Stage | Time per chunk | Notes |
 |---|---|---|
-| HDR → SDR tone mapping | ~250 s | sequential; writes a lossless x265 `_sdr.mkv` |
+| HDR → SDR tone mapping | ~250 s | sequential; writes an x265 `-crf 0` `_sdr.mkv` |
 | Frame extraction | ~100 s | runs in parallel with NCNN |
 | NCNN interpolation | ~290 s | GPU; parameters already tuned (`-j`, `-u`) |
 | Merging frames into MKV | ~117 s | SVT-AV1 encode |
@@ -324,6 +328,17 @@ Peak space use per chunk was 30–37 GB of PNG frames.
    - The frames-only video in `TMP_OUT` was never removed, so each chunk was stored twice (this filled the disk on Linux). It is now removed with the `_sdr`/`_hdr` chunks and frame directories once a chunk is done; `-k` keeps them.
    - NCNN that stops early (for example a wrong GPU number) is reported at once, before its frame-removal monitor deletes the frames the extraction is still writing.
    - FFmpeg features are checked at start-up (`libplacebo` for HDR unless `-T`, `libvmaf` with `-Q`); GPUs and NCNN threads follow the OS (macOS or the Linux rig) and can be overridden (`NCNN_GPUS`, `NCNN_THREADS`); `amdmemtweak` (no measurable gain) was removed.
+6. **Tone mapping inside frame extraction.**
+   - The `libplacebo` filter is now applied by the extraction `ffmpeg` (`-vf`), and VMAF applies the same filter to its reference. No `_sdr.mkv`/`_hdr.mkv` copies or symlink are made anymore; the chunk stays as it is.
+   - Measured on the Mac, 300 frames of chunk 029 (4K HDR): old flow 186 s (x265 encode 122 s + extraction 64 s), new flow 62 s. `libplacebo` alone took 2.7 s, so the cost was the x265 encode, not the tone mapping. On Linux this should remove most of the ~250–340 s stage and 1.3 GB of disk per chunk.
+   - The old `_sdr.mkv` was not lossless: x265 `-crf 0` is not lossless mode (PSNR 49.8 dB against the new frames). The extracted frames are now exact.
+   - Extraction uses `-fps_mode passthrough`: one PNG per decoded frame. The image2 default (cfr) duplicated frames at timestamp gaps (260 PNGs from 252 frames in a test clip), so frame counts, NCNN and VMAF would not match.
+   - Tested with a local FFmpeg 9.0.2 build on the Mac (Homebrew `libplacebo`, MoltenVK): `./configure --enable-gpl --enable-libplacebo --enable-vulkan --enable-libzimg --enable-libx264 --enable-libx265 --enable-libsvtav1 --enable-libvmaf`.
+7. **First complete run on macOS.** A 14 s HDR clip of chunk 029 now runs end to end (VMAF 99.35). It needed:
+   - `ps -p` instead of `ps --pid`: macOS `ps` has no `--pid`, so every monitor loop ended at once. The extraction monitor then deleted the empty placeholder frames after 5 s, so NCNN mapped frames wrongly and the merge found no frames.
+   - NCNN started through its real path (models next to a symlink were not found).
+   - NCNN paused while it is too close to the extraction (`NCNN_EXTRACTION_MARGIN`). On the Mac, extraction with tone mapping shares the GPU with NCNN and was slower, so NCNN read unwritten frames and crashed (exit 139).
+   - The VMAF model built into libvmaf when `/usr/share/model/vmaf_v0.6.1.json` does not exist.
 
 ### Codec benchmark
 
@@ -361,11 +376,10 @@ Decision: lossless x264 `ultrafast` is the default because it is the fastest and
 
 ### Planned (in agreed order)
 
-1. **Tone mapping inside frame extraction.** Apply the tonemap filter (for example `libplacebo`) inside the extraction `ffmpeg` instead of first writing a lossless x265 `_sdr.mkv`. Expected saving: most of ~250 s per chunk. VMAF then needs the same filter on its reference, because `video_part_minute_NNN.mkv` is currently a symlink to the `_sdr` file.
-2. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It also lets NCNN run without `-v`, because the monitor no longer needs its log lines. The result is lower peak space use, which makes the next items possible.
-3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the ~117 s merge overlaps with interpolation.
-4. **VMAF in the background,** running alongside the next chunk.
-5. **Smaller items:**
+1. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It could also let NCNN run without `-v`, if the NCNN pause (`throttling_ncnn`, which reads the last `done` line) also used the output frames instead of the log. The result is lower peak space use, which makes the next items possible.
+2. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the ~117 s merge overlaps with interpolation.
+3. **VMAF in the background,** running alongside the next chunk.
+4. **Smaller items:**
    - replace fixed sleeps (`sleep 5` in extraction, `sleep 10` in the chunk loop, other 1–3 s sleeps) with event-based waits;
    - lower the PNG `-compression_level` (faster writes, larger files);
    - frames on tmpfs (RAM disk, `huge=always`) once peak space use is low enough for 64 GB RAM;

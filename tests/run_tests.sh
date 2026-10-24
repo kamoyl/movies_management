@@ -138,16 +138,34 @@ OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkdir
 assert_status   "converts a dotted, spaced name" 0 "${STATUS}"
 assert_contains "keeps every dot in the name" "${OUTPUT}" "RESULT=My.Movie 2024.mkv"
 
-echo "converting_hdr2sdr (ffmpeg replaced by the same fake)"
+echo "converting_hdr2sdr (only decides; tone mapping is done by the frames extraction)"
 HDR_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; MOVIE_NAME_ARRAY=(hdr); echo x > hdr.mkv
 echo "{\"frames\":[{\"color_space\":\"bt2020nc\",\"color_primaries\":\"bt2020\",\"color_transfer\":\"smpte2084\"}]}" > "$TMP/hdr_mastering_display.json"'
-OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers "${HDR_SETUP}"'; TONE_MAPPING=no; converting_hdr2sdr hdr; [ ! -e hdr_sdr.mkv ] && echo "NO_SDR"' 2>&1)"; STATUS=$?
+OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers "${HDR_SETUP}"'; TONE_MAPPING=no; converting_hdr2sdr hdr; echo "FILTER=[${TONE_MAPPING_FILTER}]"' 2>&1)"; STATUS=$?
 assert_status   "-T: HDR is left as it is" 0 "${STATUS}"
 assert_contains "-T: warns that tone mapping is off" "${OUTPUT}" "tone mapping is switched off"
-assert_contains "-T: ffmpeg is not run" "${OUTPUT}" "NO_SDR"
-OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers "${HDR_SETUP}"'; rm -f hdr_sdr.mkv; converting_hdr2sdr hdr; [ -s hdr_sdr.mkv ] && [ -L hdr.mkv ] && echo "SDR_LINKED"' 2>&1)"; STATUS=$?
-assert_status   "default: HDR is tone-mapped" 0 "${STATUS}"
-assert_contains "default: hdr.mkv points to the SDR version" "${OUTPUT}" "SDR_LINKED"
+assert_contains "-T: no tone-mapping filter" "${OUTPUT}" "FILTER=[]"
+OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers "${HDR_SETUP}"'; converting_hdr2sdr hdr; echo "FILTER=[${TONE_MAPPING_FILTER}]"; ls *.mkv | tr "\n" " "; if [ -L hdr.mkv ]; then echo "LINKED"; fi' 2>&1)"; STATUS=$?
+assert_status   "default: HDR is detected" 0 "${STATUS}"
+assert_contains "default: libplacebo filter is set" "${OUTPUT}" "FILTER=[libplacebo=tonemapping=bt.2390:"
+assert_contains "default: no _sdr/_hdr copies are made" "${OUTPUT}" "hdr.mkv "
+if [[ ${OUTPUT} == *_sdr.mkv* || ${OUTPUT} == *_hdr.mkv* || ${OUTPUT} == *LINKED* ]]; then fail "default: chunk is left untouched" "${OUTPUT}"; else pass "default: chunk is left untouched"; fi
+OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers 'TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; MOVIE_NAME_ARRAY=(sdr); echo "{\"frames\":[{\"color_primaries\":\"bt709\"}]}" > "$TMP/sdr_mastering_display.json"; TONE_MAPPING_FILTER=stale; converting_hdr2sdr sdr; echo "FILTER=[${TONE_MAPPING_FILTER}]"' 2>&1)"
+assert_contains "SDR: no filter (a previous chunk's filter is cleared)" "${OUTPUT}" "FILTER=[]"
+
+echo "extracting_mkv_frames (ffmpeg replaced by a fake that records its arguments)"
+mkdir -p "${WORK_DIR}/argsbin"
+cat > "${WORK_DIR}/argsbin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+# fake ffmpeg: saves its arguments, one per line
+printf '%s\n' "$@" > ffmpeg_args.txt
+EOF
+chmod +x "${WORK_DIR}/argsbin/ffmpeg"
+EXTRACT_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; IN_DIR=in; TARGET_FRAME_COUNT=2; INPUT_FRAMES_COUNT=10; mkdir -p "$TMP" "$LOG" o/in/c; rm -f ffmpeg_args.txt'
+OUTPUT="$(PATH="${WORK_DIR}/argsbin:${PATH}" run_with_helpers "${EXTRACT_SETUP}"'; TONE_MAPPING_FILTER="libplacebo=tm"; extracting_mkv_frames c o t; wait; tr "\n" " " < ffmpeg_args.txt' 2>&1)"
+assert_contains "HDR: frames are extracted through the tone-mapping filter" "${OUTPUT}" "-i c.mkv -vf libplacebo=tm -fps_mode passthrough o/in/c/%08d.png"
+OUTPUT="$(PATH="${WORK_DIR}/argsbin:${PATH}" run_with_helpers "${EXTRACT_SETUP}"'; TONE_MAPPING_FILTER=""; extracting_mkv_frames c o t; wait; tr "\n" " " < ffmpeg_args.txt' 2>&1)"
+assert_contains "SDR: frames are extracted without a filter" "${OUTPUT}" "-i c.mkv -fps_mode passthrough o/in/c/%08d.png"
 
 echo "encoding_quality_metric (ffmpeg replaced by a fake that records the filter graph)"
 mkdir -p "${WORK_DIR}/vmafbin"
@@ -173,6 +191,10 @@ assert_contains "compares only original-position frames" "${OUTPUT}" "[0:v]selec
 assert_contains "renumbers the reference the same way" "${OUTPUT}" "[1:v]setpts=N/(23.976*TB)[reference]"
 assert_contains "distorted first, reference second" "${OUTPUT}" "[distorted][reference]libvmaf"
 assert_contains "uses all CPU cores" "${OUTPUT}" "libvmaf=n_threads="
+if [ -s /usr/share/model/vmaf_v0.6.1.json ]; then EXPECTED_MODEL="model=path=/usr/share/model/vmaf_v0.6.1.json:"; else EXPECTED_MODEL="model=version=vmaf_v0.6.1:"; fi
+assert_contains "VMAF model: package file, otherwise built into libvmaf" "${OUTPUT}" "${EXPECTED_MODEL}"
+OUTPUT="$(PATH="${WORK_DIR}/vmafbin:${PATH}" run_with_helpers 'TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; TARGET_FRAME_COUNT=2; INTER_FRAMES_COUNT=2880; INPUT_FPS=23.976; TONE_MAPPING_FILTER="libplacebo=tm"; encoding_quality_metric merged.mkv original.mkv; cat graph.txt' 2>&1)"
+assert_contains "HDR: the reference is tone-mapped like the extracted frames" "${OUTPUT}" "[1:v]libplacebo=tm,setpts=N/(23.976*TB)[reference]"
 
 echo "intermediate_codec_options (ffmpeg replaced by a fake encoder list)"
 mkdir -p "${WORK_DIR}/codecbin"
@@ -227,6 +249,30 @@ OUTPUT="$(unset NCNN_GPUS NCNN_THREADS; PATH="${WORK_DIR}/macbin:${PATH}" run_wi
 assert_contains "macOS defaults: GPU 0" "${OUTPUT}" "G=0 J=1:2:2"
 OUTPUT="$(NCNN_GPUS=0 NCNN_THREADS=1:2:2 run_with_helpers 'echo "G=${NCNN_GPUS} J=${NCNN_THREADS}"' 2>&1)"
 assert_contains "environment overrides them" "${OUTPUT}" "G=0 J=1:2:2"
+
+echo "throttling_ncnn (a sleeping process stands in for NCNN)"
+THROTTLE_TEST='sleep 60 & PID=$!; mkdir -p l; NCNN_EXTRACTION_MARGIN=50
+state() { ps -o stat= -p "$PID" | cut -c1; }
+printf "frame=100\n" > l/ex.log; printf "/x/00000060.png /x/00000061.png 0.5 -> /y/00000121.png done\n" > l/nc.log
+throttling_ncnn "$PID" l/ex.log l/nc.log; echo "GAP39=$(state) $NCNN_PAUSED"
+printf "frame=150\n" >> l/ex.log; throttling_ncnn "$PID" l/ex.log l/nc.log; echo "GAP89=$(state) $NCNN_PAUSED"
+printf "frame=161\n" >> l/ex.log; throttling_ncnn "$PID" l/ex.log l/nc.log; echo "GAP100=$(state) $NCNN_PAUSED"
+throttling_ncnn "$PID" l/ex.log l/nc.log; echo "AGAIN=$(state) $NCNN_PAUSED"
+printf "/x/00000130.png /x/00000131.png 0.5 -> /y/00000261.png done\n" >> l/nc.log; throttling_ncnn "$PID" l/ex.log l/nc.log; echo "CLOSE=$(state) $NCNN_PAUSED"
+resuming_ncnn "$PID"; echo "RESUMED=$(state) $NCNN_PAUSED"
+: > l/nc.log; printf "frame=0\n" > l/ex.log; throttling_ncnn "$PID" l/ex.log l/nc.log; echo "START=$(state) $NCNN_PAUSED"
+resuming_ncnn "$PID"; kill "$PID"'
+OUTPUT="$(run_with_helpers "${THROTTLE_TEST}" 2>&1)"
+assert_contains "pauses NCNN closer than the margin" "${OUTPUT}" "GAP39=T yes"
+assert_contains "keeps it paused below twice the margin" "${OUTPUT}" "GAP89=T yes"
+assert_contains "resumes at twice the margin" "${OUTPUT}" "GAP100=S no"
+assert_contains "stays running when far enough ahead" "${OUTPUT}" "AGAIN=S no"
+assert_contains "pauses again when NCNN catches up" "${OUTPUT}" "CLOSE=T yes"
+assert_contains "resuming_ncnn continues it" "${OUTPUT}" "RESUMED=S no"
+assert_contains "pauses before anything is extracted" "${OUTPUT}" "START=T yes"
+
+echo "portability"
+if grep -n -- "ps --pid" "${REPO_ROOT}/.config_video" "${REPO_ROOT}/interpolation_nncn" "${REPO_ROOT}/movies_encoding" > /dev/null; then fail "no ps --pid (macOS ps has no --pid; use ps -p)"; else pass "no ps --pid (macOS ps has no --pid; use ps -p)"; fi
 
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"
