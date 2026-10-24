@@ -192,6 +192,42 @@ assert_status   "unknown codec exits 2" 2 $?
 INTERMEDIATE_CODEC=svtav1_crf10 PATH="${WORK_DIR}/codecbin:${PATH}" run_with_helpers 'intermediate_codec_options' > /dev/null 2>&1
 assert_status   "missing encoder exits 127" 127 $?
 
+echo "ffmpeg_feature_checks (fake ffmpeg filter list without libplacebo and libvmaf)"
+mkdir -p "${WORK_DIR}/featurebin"
+cat > "${WORK_DIR}/featurebin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+printf ' .S tonemap           V->V       Conversion to/from different dynamic ranges.\n'
+EOF
+cat > "${WORK_DIR}/featurebin/ffprobe" <<'EOF'
+#!/usr/bin/env bash
+# the file name decides the colour primaries: hdr* is bt2020, everything else bt709
+for ARG in "$@"; do LAST="${ARG}"; done
+if [[ ${LAST} == hdr* ]]; then echo bt2020; else echo bt709; fi
+EOF
+chmod +x "${WORK_DIR}/featurebin/ffmpeg" "${WORK_DIR}/featurebin/ffprobe"
+PATH="${WORK_DIR}/featurebin:${PATH}" run_with_helpers 'TONE_MAPPING=yes; ffmpeg_feature_checks hdr.mkv' > /dev/null 2>&1
+assert_status   "HDR without libplacebo exits 127" 127 $?
+OUTPUT="$(PATH="${WORK_DIR}/featurebin:${PATH}" run_with_helpers 'TONE_MAPPING=yes; ffmpeg_feature_checks hdr.mkv' 2>&1)"
+assert_contains "error suggests -T" "${OUTPUT}" "use -T"
+PATH="${WORK_DIR}/featurebin:${PATH}" run_with_helpers 'TONE_MAPPING=no; ffmpeg_feature_checks hdr.mkv' > /dev/null 2>&1
+assert_status   "HDR with -T needs no libplacebo" 0 $?
+PATH="${WORK_DIR}/featurebin:${PATH}" run_with_helpers 'TONE_MAPPING=yes; ffmpeg_feature_checks sdr.mkv' > /dev/null 2>&1
+assert_status   "SDR needs no libplacebo" 0 $?
+PATH="${WORK_DIR}/featurebin:${PATH}" run_with_helpers 'TONE_MAPPING=yes; QUALITY_CHECK=yes; ffmpeg_feature_checks sdr.mkv' > /dev/null 2>&1
+assert_status   "-Q without libvmaf exits 127" 127 $?
+
+echo "NCNN GPUs and threads (fake uname decides the OS)"
+mkdir -p "${WORK_DIR}/linuxbin" "${WORK_DIR}/macbin"
+printf '#!/usr/bin/env bash\necho Linux\n' > "${WORK_DIR}/linuxbin/uname"
+printf '#!/usr/bin/env bash\necho Darwin\n' > "${WORK_DIR}/macbin/uname"
+chmod +x "${WORK_DIR}/linuxbin/uname" "${WORK_DIR}/macbin/uname"
+OUTPUT="$(unset NCNN_GPUS NCNN_THREADS; PATH="${WORK_DIR}/linuxbin:${PATH}" run_with_helpers 'echo "G=${NCNN_GPUS} J=${NCNN_THREADS}"' 2>&1)"
+assert_contains "Linux defaults: two GPUs" "${OUTPUT}" "G=1,2 J=6:2,2:8"
+OUTPUT="$(unset NCNN_GPUS NCNN_THREADS; PATH="${WORK_DIR}/macbin:${PATH}" run_with_helpers 'echo "G=${NCNN_GPUS} J=${NCNN_THREADS}"' 2>&1)"
+assert_contains "macOS defaults: GPU 0" "${OUTPUT}" "G=0 J=1:2:2"
+OUTPUT="$(NCNN_GPUS=0 NCNN_THREADS=1:2:2 run_with_helpers 'echo "G=${NCNN_GPUS} J=${NCNN_THREADS}"' 2>&1)"
+assert_contains "environment overrides them" "${OUTPUT}" "G=0 J=1:2:2"
+
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"
 [ "${FAILED}" -eq 0 ]

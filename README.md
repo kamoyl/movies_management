@@ -26,7 +26,7 @@ what changed and why. Speed work has its own section:
 - `.config_video` checks the results of MP4→MKV conversion, HDR→SDR tone mapping, stream and frame merging, `mkvmerge`/`mkvpropedit` calls, and OMDb/TheMovieDB responses. `mkvpropedit` output goes to `LOG/<name>_mkvpropedit.log` instead of `/dev/null`. A failed VMAF check is reported and recorded as `error` in the statistics, but does not stop the run. Optional steps (cover download, permissions, tag cleanup) produce warnings only.
 - `encoding_process` fails early when the destination directory is not writable. It encodes the eng/pol/dut audio tracks (numbered among audio tracks, as HandBrakeCLI `-a` expects); with no such track it takes all audio tracks, and with no audio at all it uses `-a none`. Without an eng/pol/dut subtitle track it encodes without subtitles (`-s none`). Each fallback is reported with a warning. It reports a HandBrake start-up failure, and otherwise says clearly that the encode was only *started* in the background.
 - `movies_encoding` also checks for `mediainfo`, `mkvpropedit`, and, with `-e`, `HandBrakeCLI`.
-- `interpolation_nncn` checks the required tools (missing tool: exit 127) before doing any work, and accepts only `rife`, `dain`, `cain`, and `realsr`. An invalid `-s` value or unsupported method exits with code 2. It validates the video duration, the `mkvmerge` split result, the last chunk number, and each chunk file. NCNN failures are reported as errors, and Ctrl+C reports the matching method's logs and exits with code 130.
+- `interpolation_nncn` checks the required tools (missing tool: exit 127) and the FFmpeg features it will need (the intermediate codec's encoder; `libplacebo` for an HDR video unless `-T`; `libvmaf` with `-Q`) before doing any work, and accepts only `rife`, `dain`, `cain`, and `realsr`. An invalid `-s` value or unsupported method exits with code 2. It validates the video duration, the `mkvmerge` split result, the last chunk number, and each chunk file. NCNN failures are reported as errors, and Ctrl+C reports the matching method's logs and exits with code 130.
 
 Exit codes: `0` success, `1` processing error, `2` invalid usage or input, `127` missing tool, `130` interrupted. When an external tool fails, its own exit code is shown in the error message, but the script still exits with `1`, so a tool's code (for example `mkvmerge` exit `2`) is never mistaken for invalid usage.
 
@@ -63,7 +63,7 @@ bash tests/run_tests.sh    # behavior tests; no extra test framework needed
 
 ## Requirements and configuration
 
-These are Linux-oriented Bash scripts and rely on external command-line tools. The movie script checks for `curl`, `mkvmerge`, `ffprobe`, `jq`, ImageMagick's `convert`, and `wget`. The workflows also use tools including `ffmpeg`, `mediainfo`, `HandBrakeCLI`, `mkvpropedit`, `bc`, `tput`, and `sudo`; the interpolation workflow additionally needs the matching `*-ncnn-vulkan` executable, Vulkan-capable hardware/drivers, and `amdmemtweak`. Install the tools needed for the workflow and selected interpolation method; this repository does not install dependencies.
+These are Linux-oriented Bash scripts and rely on external command-line tools. The movie script checks for `curl`, `mkvmerge`, `ffprobe`, `jq`, ImageMagick's `convert`, and `wget`. The workflows also use tools including `ffmpeg`, `mediainfo`, `HandBrakeCLI`, `mkvpropedit`, `bc`, `tput`, and `sudo`; the interpolation workflow additionally needs the matching `*-ncnn-vulkan` executable and Vulkan-capable hardware/drivers. `interpolation_nncn` no longer runs `amdmemtweak` (changing the memory refresh made no measurable difference). Install the tools needed for the workflow and selected interpolation method; this repository does not install dependencies.
 
 On macOS the scripts look for GNU `greadlink`, but other commands and options are Linux/GNU-specific. A compatible GNU toolchain may be needed, and macOS execution is not guaranteed.
 
@@ -142,6 +142,7 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 | `-s` | `NNN` | First three-digit chunk number to process, such as `003`. Defaults to `001`; this lets a run skip earlier chunks. |
 | `-r` | — | Resume: skip chunks already finished by an earlier run of the same movie and method in this directory (see "Resumable and predictable runs"). Can be combined with `-s`. |
 | `-T` | — | No tone mapping: an HDR video is processed as HDR, without conversion to SDR. A warning is shown, because the colours of the processed frames may differ. Without `-T`, HDR is tone-mapped to SDR automatically. |
+| `-k` | — | Keep the intermediate files of finished chunks: the frames-only video in `TMP_OUT`, the `_sdr`/`_hdr` chunks, and the chunk's frame directories. Without `-k` they are removed once the chunk is done (its `.done` marker is written). The frames-only video is a full copy of the video track of `_merged.mkv`, so keeping it doubles the space needed per chunk. |
 | `-Q` | — | Run the VMAF quality check for each processed chunk (processed chunk = distorted, first input; original chunk = reference, second input). For interpolation (`rife`, `dain`, `cain`) only the frames at original positions are compared, because in-between frames have no reference; the score shows what frame merging and encoding lost, not the quality of the interpolation itself. Uses all CPU cores. Requires an FFmpeg build with `libvmaf` and the configured VMAF model. Off by default, because it takes a long time. |
 | `-S` | — | Silent: no terminal output; everything is written to `LOG/interpolation_nncn_silent_<timestamp>.log`. |
 | `-v` | — | Enable verbose diagnostics. |
@@ -151,19 +152,19 @@ The script divides input into 60-second MKV chunks in the current working direct
 
 The processed frames of each chunk are encoded into an intermediate video. HandBrake (`movies_encoding`) makes the final encode later. Choose its codec with the `INTERMEDIATE_CODEC` environment variable. The script checks the name and the FFmpeg encoder at start-up: an unknown name exits with `2`, and a missing encoder exits with `127`.
 
-| `INTERMEDIATE_CODEC` | FFmpeg settings | Quality | Time / size per 60 s chunk* |
+| `INTERMEDIATE_CODEC` | FFmpeg settings | Size per 60 s chunk, 4K* | VMAF* |
 |---|---|---|---|
-| `x264_lossless` (default) | `libx264 -qp 0 -preset ultrafast` | lossless | ~14 s / ~3.3 GB |
-| `ffv1` | `ffv1 -level 3 -slices 24` | lossless | ~32 s / ~2.7 GB |
-| `svtav1_crf10` | `libsvtav1 -crf 10 -preset 8` | near-lossless | ~20 s / ~150 MB |
-| `x264_crf10` | `libx264 -crf 10 -preset veryfast` | near-lossless | ~31 s / ~350 MB |
+| `x264_lossless` (default) | `libx264 -qp 0 -preset ultrafast` | ~10.9 GB | 99.99 (lossless) |
+| `ffv1` | `ffv1 -level 3 -slices 24` | about 0.8 × x264 lossless | lossless |
+| `x264_crf10` | `libx264 -crf 10 -preset veryfast` | ~900 MB | 97.9 |
+| `svtav1_crf10` | `libsvtav1 -crf 10 -preset 8` | ~330 MB | 93.3 |
 
-\* Measured with 3000 frames (1920×800, 50 fps); it will differ on other machines. Before this setting existed, the encoder was SVT-AV1 with `rc=1`, which is VBR at about 2 Mbps: ~80 s and 18 MB per chunk, at a lossy PSNR of ~46.6 dB.
+\* Chunk 029 at its native 3840×1600, interpolated to 50 fps; see [Performance optimization](#performance-optimization) for times and the full comparison. Before this setting existed, the encoder was SVT-AV1 with `rc=1`, which is VBR at only about 2 Mbps (lossy).
 
-The lossless codecs need a lot of disk space: about 3.3 GB per minute of output, or ~400 GB for a 2-hour movie, because every per-chunk output is kept. If space is short, use `svtav1_crf10`:
+The lossless codecs need a lot of disk space. At 4K, that is about 11 GB per minute of output, or ~1.3 TB for a 2-hour movie, because every per-chunk `_merged.mkv` is kept. At 1080p it is roughly a quarter of that. If space is short, use `x264_crf10` (about 12× smaller, VMAF 97.9):
 
 ```bash
-INTERMEDIATE_CODEC=svtav1_crf10 ./interpolation_nncn -i "Movie.mkv"
+INTERMEDIATE_CODEC=x264_crf10 ./interpolation_nncn -i "Movie.mkv"
 ```
 
 The method names listed by the script's help include `cain`, `dain`, `rife`, `ifrnet`, `realsr`, `Real-ESRGAN`, `srmd`, `waifu2x`, `realcugan`, and `zimage`. However, the current processing configuration has explicit parameter sets only for `rife`, `dain`, `cain`, `realsr`, `realesrgan`, and `srmd`. `rife` is the default and doubles the frame rate; `dain` and `cain` also use the interpolation path. `realsr` is configured for 4x scaling, while `realesrgan` and `srmd` use 2x scaling. Other names shown in the help do not currently have equivalent method setup in `.config_video`; do not assume they will run successfully. Method spelling must match the executable name used by the script (for example, `realesrgan`).
@@ -222,6 +223,14 @@ NCNN thread settings (`-j load:process:save`) measured on the same chunk:
 | `4:2,2:6` | 3:09 |
 | `6:2,2:8` (memory REF 5 & 30) | 2:01 |
 | `8:2,2:10` | 1:48 |
+
+The GPUs and threads depend on the machine, not on a choice per run, so the script picks them by OS: on Linux `-g 1,2 -j 6:2,2:8` (the two AMD GPUs, tuned above), on macOS `-g 0 -j 1:2:2` (one GPU). A machine with another GPU set can override both with the environment variables `NCNN_GPUS` and `NCNN_THREADS`; `-j` needs one process value per GPU, for example:
+
+```bash
+NCNN_GPUS=0,1 NCNN_THREADS=4:2,2:6 ./interpolation_nncn -i "Episode.mkv"
+```
+
+With a wrong GPU number, NCNN stops at once (`invalid gpu device` in its log); the script reports it immediately instead of after the frame extraction.
 
 #### Blu-ray (BDMV/M2TS) stream details
 
@@ -310,10 +319,33 @@ Peak space use per chunk was 30–37 GB of PNG frames.
 3. **`-T` turns off tone mapping** (commit `b590ff5`): this skips the ~250 s stage when SDR output is not needed.
 4. **Selectable intermediate codec** (`INTERMEDIATE_CODEC`, default `x264_lossless`; see the [`interpolation_nncn`](#interpolation_nncn) section).
    - The old setting was `libsvtav1 -crf 0 -preset 5 -svtav1-params rc=1:...`. In SVT-AV1, `rc=1` means **VBR**: it overrides `-crf`, and the encoder log showed a target bitrate of 2000 kbps. That explains the small files. Despite `-crf 0`, the result was lossy (PSNR ~46.6 dB).
+   - Measured on Linux (second machine), chunk 029: merging frames **36 s** (was ~117 s), whole chunk **791 s** (was ~1400 s, together with the VMAF fix).
+5. **Disk space and robustness:**
+   - The frames-only video in `TMP_OUT` was never removed, so each chunk was stored twice (this filled the disk on Linux). It is now removed with the `_sdr`/`_hdr` chunks and frame directories once a chunk is done; `-k` keeps them.
+   - NCNN that stops early (for example a wrong GPU number) is reported at once, before its frame-removal monitor deletes the frames the extraction is still writing.
+   - FFmpeg features are checked at start-up (`libplacebo` for HDR unless `-T`, `libvmaf` with `-Q`); GPUs and NCNN threads follow the OS (macOS or the Linux rig) and can be overridden (`NCNN_GPUS`, `NCNN_THREADS`); `amdmemtweak` (no measurable gain) was removed.
 
 ### Codec benchmark
 
-Test material: 500 PNG frames from `video_part_minute_029.mkv`, scaled to 1920×800 and encoded as 50 fps. Times are scaled to a 60 s chunk of 3000 frames. Run on a Mac (Apple M5, 10 cores); Linux numbers will differ. The quality of the encoded frames was compared with the source PNGs using PSNR.
+**Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
+
+| Codec / settings | Time (Mac) | Size | VMAF |
+|---|---|---|---|
+| **x264 `-qp 0 -preset ultrafast`** (default) | 107 s | 10.9 GB | 99.99 |
+| x264 `-crf 10 -preset veryfast` | 187 s | 903 MB | 97.90 |
+| svtav1 `-crf 5 -preset 8` | 141 s | 742 MB | 93.55 |
+| svtav1 `-crf 10 -preset 8` | 141 s | 328 MB | 93.35 |
+| svtav1 VBR 40 Mbps (`rc=1`) | 151 s | 296 MB | 92.15 |
+| svtav1 VBR 20 Mbps (`rc=1`) | 147 s | 142 MB | 89.52 |
+
+Findings:
+
+- Lossless at 4K is ~11 GB per chunk, which matches the 7–13 GB per chunk seen on Linux.
+- VBR is not better than CRF: at about the same size, CRF 10 (328 MB) scores higher than VBR 40 Mbps (296 MB). VBR aims at a size, CRF at a quality, so CRF fits an intermediate file better.
+- SVT-AV1 seems to stop near VMAF 93.5 with `tune=0` (visual-quality tuning): CRF 5 is more than twice the size of CRF 10 for +0.2. `x264_crf10` reaches 97.9 at ~0.9 GB per chunk, about 12× smaller than lossless.
+- On Linux, the lossless merge took 36 s versus 107 s here, so the Mac times are only relative.
+
+**First run, scaled to 1920×800.** Test material: 500 PNG frames from `video_part_minute_029.mkv`, scaled to 1920×800 and encoded as 50 fps. Times are scaled to a 60 s chunk of 3000 frames. Run on a Mac (Apple M5, 10 cores); Linux numbers will differ. The quality of the encoded frames was compared with the source PNGs using PSNR.
 
 | Codec / settings | Time | Size | Quality |
 |---|---|---|---|
@@ -325,7 +357,7 @@ Test material: 500 PNG frames from `video_part_minute_029.mkv`, scaled to 1920×
 | x264 `-qp 0 -preset superfast` | ~44 s | 3.0 GB | lossless |
 | svtav1 `lossless=1 -preset 8` | ~109 s | 3.1 GB | lossless (111 dB) |
 
-Decision: lossless x264 `ultrafast` is the default because it is the fastest and loses nothing before the final HandBrake encode. The other codecs stay selectable for when disk space is short.
+Decision: lossless x264 `ultrafast` is the default because it is the fastest and loses nothing before the final HandBrake encode. The other codecs stay selectable for when disk space is short; at 4K, `x264_crf10` is the best trade-off of the lossy ones.
 
 ### Planned (in agreed order)
 

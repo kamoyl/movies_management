@@ -423,6 +423,11 @@ converting_hdr2sdr()
       if [ -s "${LOG}/${VIDEO_FILE_NAME}_tonemapping.log" ]
       then
         CURRENT_TONEMAPPED_FRAME=$(tail -n$((TARGET_FRAME_COUNT*6)) "${LOG}/${VIDEO_FILE_NAME}_tonemapping.log" | grep "frame=" | tail -n1 | sed "s/frame=//g")
+        # empty when ffmpeg failed before writing the first frame
+        if [[ ! ${CURRENT_TONEMAPPED_FRAME} =~ ^[0-9]+$ ]]
+        then
+          CURRENT_TONEMAPPED_FRAME="0"
+        fi
         CURRENT_TONEMAPPED_FRAME_PERCENT="$(echo "(${CURRENT_TONEMAPPED_FRAME}/${INPUT_FRAMES_COUNT}) * 100" | bc -l)"
         CURRENT_TONEMAPPED_FRAME_PERCENT="$(printf "%.0f\n" "${CURRENT_TONEMAPPED_FRAME_PERCENT}")"
         if [[ ${VERBOSE} == no ]]
@@ -493,9 +498,24 @@ extracting_mkv_frames()
     done
     end_time_collecting
     echo ${RUNTIME} > "${TMP}/EXTRACTING_FRAMES_RUNTIME"
-    find "${VIDEO_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/" -iname '*.png' -type f -empty -delete
+    # frames may be removed meanwhile by the interpolation monitor, which is not an error
+    find "${VIDEO_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/" -ignore_readdir_race -iname '*.png' -type f -empty -delete
     ) &
   }
+
+# GPUs used by NCNN (-g) and its threads (-j load:proc,proc:save, one proc value per GPU) depend on
+# the machine, so the defaults follow the OS: macOS (one GPU, 0) or the Linux rig (two AMD GPUs, 1 and 2,
+# -j tuned in README); a machine with another GPU set can override both from the environment
+if [[ $(uname -s) == Darwin ]]
+then
+  NCNN_GPUS_DEFAULT="0"
+  NCNN_THREADS_DEFAULT="1:2:2"
+else
+  NCNN_GPUS_DEFAULT="1,2"
+  NCNN_THREADS_DEFAULT="6:2,2:8"
+fi
+NCNN_GPUS="${NCNN_GPUS:-${NCNN_GPUS_DEFAULT}}"
+NCNN_THREADS="${NCNN_THREADS:-${NCNN_THREADS_DEFAULT}}"
 
 interpolating_extracted_frames()
 {
@@ -515,29 +535,28 @@ interpolating_extracted_frames()
   inf "  interpolating, ${NCNN_METHOD} (${MAROON1}${INPUT_FPS} -> ${OUTPUT_FPS} [fps]${CYAN}) of ${YELLOW}${VIDEO_FILE_NAME}.${FILE_NAME_EXTENSION}"
   tput sc
   start_time_collecting
-  sudo amdmemtweak --i 0,1 --ref 30 > "${LOG}/${LOG_FILE}.log"
   # shellcheck disable=SC2054 # commas belong to NCNN values (e.g. -g 1,2), they are not array separators
   if [[ ${NCNN_METHOD} == rife ]]
   then
-    NCNN_PARAMETERS=(-v -g 1,2 -j 6:2,2:8 -u -n ${INTER_FRAMES_COUNT} -m rife-v4.6)
+    NCNN_PARAMETERS=(-v -g "${NCNN_GPUS}" -j "${NCNN_THREADS}" -u -n ${INTER_FRAMES_COUNT} -m rife-v4.6)
   elif [[ ${NCNN_METHOD} == dain ]] || [[ ${NCNN_METHOD} == cain ]]
   then
-    NCNN_PARAMETERS=(-v -t 256,256 -g 1,2 -j 6:2,2:8 -n ${INTER_FRAMES_COUNT})
+    NCNN_PARAMETERS=(-v -t 256,256 -g "${NCNN_GPUS}" -j "${NCNN_THREADS}" -n ${INTER_FRAMES_COUNT})
   elif [[ ${NCNN_METHOD} == realsr ]]
   then
     NCNN_SCALE=4
     OUTPUT_FPS_ROUND="${NCNN_SCALE}"
-    NCNN_PARAMETERS=(-v -g 1,2 -j 6:2,2:8 -s ${NCNN_SCALE} -t 0,0 -x -m models-DF2K)
+    NCNN_PARAMETERS=(-v -g "${NCNN_GPUS}" -j "${NCNN_THREADS}" -s ${NCNN_SCALE} -t 0,0 -x -m models-DF2K)
   elif [[ ${NCNN_METHOD} == realesrgan ]]
   then
     NCNN_SCALE=2 # or 3 or 4
     OUTPUT_FPS_ROUND="${NCNN_SCALE}"
-    NCNN_PARAMETERS=(-v -g 1,2 -j 6:2,2:8 -s ${NCNN_SCALE} -t 0,0 -n 4 -x)
+    NCNN_PARAMETERS=(-v -g "${NCNN_GPUS}" -j "${NCNN_THREADS}" -s ${NCNN_SCALE} -t 0,0 -n 4 -x)
   elif [[ ${NCNN_METHOD} == srmd ]]
   then
     NCNN_SCALE=2 # or 3 or 4
     OUTPUT_FPS_ROUND="${NCNN_SCALE}"
-    NCNN_PARAMETERS=(-v -g 1,2 -j 6:2,2:8 -t 0,0 -n 4 -x)
+    NCNN_PARAMETERS=(-v -g "${NCNN_GPUS}" -j "${NCNN_THREADS}" -t 0,0 -n 4 -x)
   fi
   (exec 2>/dev/null "${NCNN_METHOD}-ncnn-vulkan" "${NCNN_PARAMETERS[@]}" -i "${FRAMES_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}" -o "${FRAMES_OUT_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}" > "${LOG}/${LOG_FILE}.log" 2>&1 ) & echo "$!" > "${TMP}/${LOG_FILE}.pid"
   NCNN_BACKGROUND_PROCESS_PID=$(cat "${TMP}/${LOG_FILE}.pid")
@@ -563,7 +582,13 @@ interpolating_extracted_frames()
           LAST_MANAGED_FRAME_PERCENT="$(echo "(${LAST_MANAGED_FRAME}/${INPUT_FRAMES_COUNT}) * 100" | bc -l)"
           LAST_MANAGED_FRAME_PERCENT="$(printf "%.0f\n" "${LAST_MANAGED_FRAME_PERCENT}" 2>/dev/null | tee "${TMP}/LAST_MANAGED_FRAME_PERCENT")"
           MANAGED_FRAME_TO_REMOVE=$(echo "${LAST_MANAGED_FRAME} - (${TARGET_FRAME_COUNT}*150)" | bc -l )
-          MANAGED_FILE_TO_REMOVE="$(printf "%08d\n" "${MANAGED_FRAME_TO_REMOVE}")"
+          if [[ ${MANAGED_FRAME_TO_REMOVE} =~ ^[0-9]+$ ]]
+          then
+            MANAGED_FILE_TO_REMOVE="$(printf "%08d\n" "${MANAGED_FRAME_TO_REMOVE}")"
+          else
+            # still within the safety margin at the start of a chunk, nothing to remove yet
+            MANAGED_FILE_TO_REMOVE="-"
+          fi
           if [[ ${MANAGED_FRAME_TO_REMOVE} =~ ^[0-9]+$ ]] && [ ${MANAGED_FRAME_TO_REMOVE} -gt 50 ]
           then
             # MANAGED_FILE_TO_REMOVE="$(printf "%08d\n" "${MANAGED_FRAME_TO_REMOVE}")"
@@ -595,11 +620,12 @@ interpolating_extracted_frames()
 
 # Codec of the intermediate video made from the processed frames (HandBrake encodes the final video later).
 # Can be overridden from the environment, e.g. INTERMEDIATE_CODEC=ffv1 ./interpolation_nncn ...
-# Measured on a 1920x800, 50 fps chunk of 60 s (3000 frames):
-#   x264_lossless - libx264 -qp 0 -preset ultrafast: lossless, fastest (~14 s), ~3.3 GB per chunk
-#   ffv1          - lossless, ~32 s, ~2.7 GB per chunk
-#   svtav1_crf10  - libsvtav1 -crf 10 -preset 8: near-lossless, ~20 s, ~150 MB per chunk
-#   x264_crf10    - libx264 -crf 10 -preset veryfast: near-lossless, ~31 s, ~350 MB per chunk
+# Size per 60 s chunk at 3840x1600, 50 fps (3000 frames); VMAF against the source frames
+# (details: README, "Performance optimization"):
+#   x264_lossless - libx264 -qp 0 -preset ultrafast: lossless, fastest, ~10.9 GB
+#   ffv1          - lossless, slower, about 0.8x the size of x264_lossless
+#   x264_crf10    - libx264 -crf 10 -preset veryfast: ~900 MB, VMAF 97.9
+#   svtav1_crf10  - libsvtav1 -crf 10 -preset 8: ~330 MB, VMAF 93.3
 INTERMEDIATE_CODEC="${INTERMEDIATE_CODEC:-x264_lossless}"
 
 # intermediate_codec_options - sets INTERMEDIATE_CODEC_OPTIONS from INTERMEDIATE_CODEC and checks that
@@ -634,6 +660,33 @@ intermediate_codec_options()
   if ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -qw "${INTERMEDIATE_ENCODER}"
   then
     error "  ffmpeg has no ${YELLOW}${INTERMEDIATE_ENCODER}${RED} encoder, needed for INTERMEDIATE_CODEC=${INTERMEDIATE_CODEC}"
+    ERROR_CODE="127"
+    failed
+  fi
+  }
+
+# ffmpeg_feature_checks VIDEO_FILE - checks ffmpeg filters this run will need, before any work:
+# libplacebo for an HDR video (unless -T), libvmaf with -Q; a missing one exits 127
+ffmpeg_feature_checks()
+{
+  local VIDEO_FILE="${1}"
+  local FFMPEG_FILTERS
+  local INPUT_COLOR_PRIMARIES
+  FFMPEG_FILTERS="$(ffmpeg -hide_banner -filters 2>/dev/null | awk '{print $2}')"
+  if [[ ${TONE_MAPPING:-yes} != no ]]
+  then
+    # the same rule as converting_hdr2sdr: everything not bt709 is tone-mapped
+    INPUT_COLOR_PRIMARIES="$(ffprobe -v error -select_streams v:0 -show_entries stream=color_primaries -of default=nw=1:nk=1 "${VIDEO_FILE}" 2>/dev/null)"
+    if [[ ${INPUT_COLOR_PRIMARIES} != "bt709" ]] && ! grep -qx libplacebo <<< "${FFMPEG_FILTERS}"
+    then
+      error "  ${YELLOW}${VIDEO_FILE}${RED} is HDR (${INPUT_COLOR_PRIMARIES:-unknown}), but ffmpeg has no ${YELLOW}libplacebo${RED} filter for tone mapping (use -T to process it as HDR)"
+      ERROR_CODE="127"
+      failed
+    fi
+  fi
+  if [[ ${QUALITY_CHECK:-no} == yes ]] && ! grep -qx libvmaf <<< "${FFMPEG_FILTERS}"
+  then
+    error "  -Q needs the ffmpeg ${YELLOW}libvmaf${RED} filter, which this ffmpeg does not have"
     ERROR_CODE="127"
     failed
   fi
@@ -887,10 +940,10 @@ interpolation_video_file()
     MAX_TSPACE="1"
   fi
 
-  split -d -a 8 -n$((INPUT_FRAMES_COUNT+1)) --additional-suffix=".png"  /dev/null "${TMP_OUT}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}/" &
+  # empty placeholders 00000001..N, so NCNN sees the full frame count from the start (ffmpeg
+  # overwrites them, also numbering from 1); fast enough (~0.3 s per 3000) to run in the foreground
+  split --numeric-suffixes=1 -a 8 -n "${INPUT_FRAMES_COUNT}" --additional-suffix=".png" /dev/null "${TMP_OUT}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}/"
   # split -d -a 8 -n$((INTER_FRAMES_COUNT-1)) --additional-suffix=".png"  /dev/null "${TMP}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/" &
-  sleep 0.5
-  rm -f -- "${TMP_OUT}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}/00000000.png"
   # rm -rf "${TMP}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/00000000.png"
 
   inf "  video details"
@@ -944,6 +997,16 @@ interpolation_video_file()
   then
     checking_space_background       "${NCNN_BACKGROUND_PROCESS_PID}"    "${TMP_OUT}"    "${TMP}"
   fi
+  # NCNN that stops early (e.g. invalid GPU) is reported at once, not only after the extraction
+  while ps --pid "${FFMPEG_EX_BACKGROUND_PROCESS_PID}" > /dev/null 2>&1
+  do
+    if ! ps --pid "${NCNN_BACKGROUND_PROCESS_PID}" > /dev/null 2>&1
+    then
+      wait_for_step "${NCNN_BACKGROUND_PROCESS_PID}" "interpolation (${NCNN_METHOD}-ncnn-vulkan)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
+      break
+    fi
+    sleep 1
+  done
   wait_for_step "${FFMPEG_EX_BACKGROUND_PROCESS_PID}" "frames extraction (ffmpeg)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_inter_inframes.log"
   wait_for_step "${NCNN_BACKGROUND_PROCESS_PID}" "interpolation (${NCNN_METHOD}-ncnn-vulkan)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
   wait

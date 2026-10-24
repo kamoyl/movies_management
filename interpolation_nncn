@@ -64,7 +64,7 @@ usage()
   fi
 echo "
 ${CYAN}Usage:${BRIGHT}${WHITE}
-$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -T ] [ -Q ] [ -S ] [ -v ] [ -h ]
+$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -T ] [ -k ] [ -Q ] [ -S ] [ -v ] [ -h ]
 
     ${NORMAL}${CYAN}Description: processes a video with a neural network (NCNN/Vulkan) tool, in 60-second chunks:
             1. converts MP4 to MKV when needed, then splits it into chunks
@@ -101,6 +101,8 @@ $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -T ] [ -Q ]
           in this directory; combinable with -s
     ${LIME}-T${DODGERBLUE1}  no tone mapping: an HDR video is processed as HDR, without conversion to SDR
           (colours of the processed frames may differ; a warning is shown)
+    ${LIME}-k${DODGERBLUE1}  keep intermediate files of finished chunks (the frames-only video in -O, _sdr/_hdr
+          chunks and the chunk's frame directories); by default they are removed once the chunk is done
     ${LIME}-Q${DODGERBLUE1}  calculate VMAF (quality check) for each processed chunk
     ${LIME}-S${DODGERBLUE1}  silent: no terminal output; everything is written to the run's silent log
     ${LIME}-v${DODGERBLUE1}  verbose diagnostics
@@ -115,7 +117,8 @@ VERBOSE=no
 QUALITY_CHECK=no
 RESUME=no
 TONE_MAPPING=yes
-while getopts ":o:O:i:N:s:rTvShQ" ARG
+KEEP_INTERMEDIATES=no
+while getopts ":o:O:i:N:s:rTkvShQ" ARG
 do
   case "${ARG}" in
         i)
@@ -145,6 +148,9 @@ do
             ;;
         T)
             TONE_MAPPING=no
+            ;;
+        k)
+            KEEP_INTERMEDIATES=yes
             ;;
         S)
             SILENT=yes
@@ -329,6 +335,9 @@ then
 fi
 VIDEO_LENGTH=$(printf "%.0f\n" "${VIDEO_DURATION_RAW}")
 
+# ffmpeg filters needed for this video and options (tone mapping, VMAF), checked before any work
+ffmpeg_feature_checks "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
+
 if [ "${VIDEO_LENGTH}" -le "${NO_SPLIT_MAX_SEC}" ]
 then
   # mkvmerge without --split copies the whole video into chunk 001 and writes the same
@@ -434,6 +443,14 @@ fi
     rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
     # chunk names are the same for every movie, so the marker remembers which movie it belongs to
     printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" > "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv.done"
+    # the chunk is done, so its intermediate files are not needed anymore (kept with -k); the
+    # frames-only video in TMP_OUT is a full copy of the video track of _merged.mkv
+    if [[ ${KEEP_INTERMEDIATES} == no ]]
+    then
+      rm -f -- "${TMP_OUT}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" "${MOVIE_NAME_ARRAY[*]}_sdr.mkv" "${MOVIE_NAME_ARRAY[*]}_hdr.mkv"
+      # frame directories: input frames are in TMP_OUT, processed frames in TMP
+      rm -rf -- "${TMP_OUT:?}/${IN_DIR:?}" "${TMP_OUT:?}/${OUT_DIR:?}" "${TMP:?}/${IN_DIR:?}" "${TMP:?}/${OUT_DIR:?}"
+    fi
     
     START_TIME=${START_TIME_FRAGMENT_ID}
     end_time_collecting
@@ -503,7 +520,7 @@ fi
 if [[ ${WHOLE_VIDEO_IN_ONE_CHUNK} == yes ]] && [ -e "video_part_minute_001_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv.done" ]
 then
   RESULT_SUFFIXES=("_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" "_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv.done")
-  # _sdr/_hdr exist only when this run did the tone mapping (TMP is new for every run)
+  # _sdr/_hdr exist only when this run did the tone mapping (TMP is new for every run) and -k kept them
   if [ -s "${TMP}/HDR_2_SDR" ]
   then
     RESULT_SUFFIXES+=("_sdr.mkv" "_hdr.mkv")

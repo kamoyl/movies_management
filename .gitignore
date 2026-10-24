@@ -19,3 +19,4 @@ movies
 statistics.txt
 tmp/
 *.swp
+var/
