@@ -10,6 +10,7 @@ var_*
 **/*.json
 **/*.mp4
 **/*.mkv
+**/*.mkv.done
 bak/**/*
 waiting_room/*
 temporary_files/**/*
