@@ -934,8 +934,8 @@ interpolation_video_file()
     mkdir -p "${WORK_DIR}"
   done
 
-  FRAME_COLOR_SPACE="$(mediainfo --Output=JSON "${TMP}/frame_analysis/output0002.png" | jq -r '.media.track[] | select(."@type" != "General").BitDepth')"
-  FRAME_BIT_DEPTH="$(mediainfo --Output=JSON "${TMP}/frame_analysis/output0002.png" | jq -r '.media.track[] | select(."@type" != "General").BitDepth')"
+  FRAME_COLOR_SPACE="$(mediainfo --Output=JSON "${TMP}/frame_analysis/output0001.png" | jq -r '.media.track[] | select(."@type" != "General").BitDepth')"
+  FRAME_BIT_DEPTH="$(mediainfo --Output=JSON "${TMP}/frame_analysis/output0001.png" | jq -r '.media.track[] | select(."@type" != "General").BitDepth')"
   if [[ ${FRAME_BIT_DEPTH} != 8 ]] && [[ ${FRAME_BIT_DEPTH} != 16 ]]
   then
     error "  could not read bit depth of analysed frames (got: '${FRAME_BIT_DEPTH}', expected 8 or 16, see log: ${LOG}/frame_analysis.log)"
@@ -1391,9 +1391,12 @@ subtitles_management()
   fi
 }
 
-encoding_process_details()
+# HandBrake settings shared by movies_encoding (-e) and interpolation_nncn (-E): destination,
+# profile (ANIMATION/GRAIN/HIGHMOTION, film by default) and encoder options
+handbrake_encode_settings()
 {
-  DESTINATION_DIR="/media/ready"
+  # can be overridden from the environment, e.g. DESTINATION_DIR=/media/other ./movies_encoding ...
+  DESTINATION_DIR="${DESTINATION_DIR:-/media/ready}"
   if [[ ${ANIMATION} == yes ]]
   then
     # doc: https://keithwiley.com/astroPhotography/imageSharpening.shtml
@@ -1417,32 +1420,25 @@ encoding_process_details()
   
   VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts tune=0:enable-overlays=1:aq-mode=2)
   AUDIO_ENCODER="copy"
-  DISPLAY_DIMENSIONS=$(jq -r '.tracks[] | select(.type == "video").properties.display_dimensions' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
-  PIXEL_DIMENTIONS=$(jq -r '.tracks[] | select(.type == "video").properties.pixel_dimensions' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
-  debug "      DISPLAY_DIMENSIONS=${DISPLAY_DIMENSIONS}"
-  debug "      PIXEL_DIMENTIONS=${PIXEL_DIMENTIONS}"
-  for TRACK_TYPE in $(jq -r '.tracks[].type' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json" | sort -u)
-  do
-    debug "  for TRACK_TYPE = ${TRACK_TYPE}"
-    for TRACK_ID in $(jq -r --arg track_type ${TRACK_TYPE} '.tracks[] | select(.type == $track_type).id' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
-    do
-      TRACK_CODEC=$(jq -r --arg track_type ${TRACK_TYPE} --arg track_id ${TRACK_ID} '.tracks[] | select(.type == $track_type) | select((.id|tostring) == $track_id).codec' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
-      TRACK_LANGUAGE=$(jq -r --arg track_type ${TRACK_TYPE} --arg track_id ${TRACK_ID} '.tracks[] | select(.type == $track_type) | select((.id|tostring) == $track_id).properties.language' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
-      debug "    TRACK_ID=${TRACK_ID}, TRACK_CODEC=${TRACK_CODEC}, TRACK_LANGUAGE=${TRACK_LANGUAGE}"
-    done
-  done
+  }
+
+# handbrake_streams_options FFPROBE_JSON - sets HANDBRAKE_STREAMS (audio and subtitle options of
+# HandBrakeCLI) from the ffprobe -show_streams JSON of the video to encode
+handbrake_streams_options()
+{
+  local FFPROBE_JSON="${1}"
   # HandBrakeCLI -a counts audio tracks from 1 (not ffprobe stream indexes, which include video and subtitles)
-  AUDIO_TRACKS=$(jq -r '[.streams[] | select(.codec_type == "audio")] | to_entries[] | select(.value.tags.language == "eng" or .value.tags.language == "pol" or .value.tags.language == "dut" or .value.tags.language == "nld").key + 1' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.json" | tr '\n' ',' | sed "s/,$//g")
+  AUDIO_TRACKS=$(jq -r '[.streams[] | select(.codec_type == "audio")] | to_entries[] | select(.value.tags.language == "eng" or .value.tags.language == "pol" or .value.tags.language == "dut" or .value.tags.language == "nld").key + 1' "${FFPROBE_JSON}" | tr '\n' ',' | sed "s/,$//g")
   if [ -z "${AUDIO_TRACKS}" ]
   then
-    AUDIO_TRACKS=$(jq -r '[.streams[] | select(.codec_type == "audio")] | to_entries[] | .key + 1' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.json" | tr '\n' ',' | sed "s/,$//g")
+    AUDIO_TRACKS=$(jq -r '[.streams[] | select(.codec_type == "audio")] | to_entries[] | .key + 1' "${FFPROBE_JSON}" | tr '\n' ',' | sed "s/,$//g")
     if [ -n "${AUDIO_TRACKS}" ]
     then
       warn "  no eng/pol/dut audio track found, encoding all audio tracks (${AUDIO_TRACKS})"
     fi
   fi
   inf "    encoding AUDIO_TRACKS=${MAGENTA}${AUDIO_TRACKS}"
-  SUBTITLE_TRACKS=$(jq -r '.streams[] | select(.codec_type == "subtitle") | select(.tags.language == "eng" or .tags.language == "pol" or .tags.language == "dut").index' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.json" | tr '\n' ',' | sed "s/,$//g")
+  SUBTITLE_TRACKS=$(jq -r '.streams[] | select(.codec_type == "subtitle") | select(.tags.language == "eng" or .tags.language == "pol" or .tags.language == "dut").index' "${FFPROBE_JSON}" | tr '\n' ',' | sed "s/,$//g")
   inf "    encoding SUBTITLE_TRACKS=${MAGENTA}${SUBTITLE_TRACKS}"
   # audio and subtitles are optional: without matching tracks HandBrakeCLI gets "none"
   if [ -n "${AUDIO_TRACKS}" ]
@@ -1460,6 +1456,26 @@ encoding_process_details()
     warn "  no eng/pol/dut subtitle track found, encoding without subtitles"
     HANDBRAKE_STREAMS+=(-s none)
   fi
+  }
+
+encoding_process_details()
+{
+  handbrake_encode_settings
+  DISPLAY_DIMENSIONS=$(jq -r '.tracks[] | select(.type == "video").properties.display_dimensions' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
+  PIXEL_DIMENTIONS=$(jq -r '.tracks[] | select(.type == "video").properties.pixel_dimensions' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
+  debug "      DISPLAY_DIMENSIONS=${DISPLAY_DIMENSIONS}"
+  debug "      PIXEL_DIMENTIONS=${PIXEL_DIMENTIONS}"
+  for TRACK_TYPE in $(jq -r '.tracks[].type' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json" | sort -u)
+  do
+    debug "  for TRACK_TYPE = ${TRACK_TYPE}"
+    for TRACK_ID in $(jq -r --arg track_type ${TRACK_TYPE} '.tracks[] | select(.type == $track_type).id' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
+    do
+      TRACK_CODEC=$(jq -r --arg track_type ${TRACK_TYPE} --arg track_id ${TRACK_ID} '.tracks[] | select(.type == $track_type) | select((.id|tostring) == $track_id).codec' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
+      TRACK_LANGUAGE=$(jq -r --arg track_type ${TRACK_TYPE} --arg track_id ${TRACK_ID} '.tracks[] | select(.type == $track_type) | select((.id|tostring) == $track_id).properties.language' "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mkvmerge.json")
+      debug "    TRACK_ID=${TRACK_ID}, TRACK_CODEC=${TRACK_CODEC}, TRACK_LANGUAGE=${TRACK_LANGUAGE}"
+    done
+  done
+  handbrake_streams_options "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}.json"
   inf "    nohup HandBrakeCLI -i \"${MOVIE_NAME_ARRAY[*]}.mkv\" -o \"${DESTINATION_DIR}/${MOVIE_NAME_ARRAY[*]}.mkv\" --encoder ${VIDEO_ENCODER[*]} --no-markers ${HANDBRAKE_STREAMS[*]} > \"${DESTINATION_DIR}/${MOVIE_NAME_ARRAY[*]}.mkv.log\" 2>&1 &"
   }
 
@@ -1494,7 +1510,12 @@ encoding_process()
   fi
   }
 
-encoding_quality_metric()
+# VMAF of a processed chunk runs in two steps, so it can run alongside the next chunk:
+#   starting_quality_metric ENCODED REFERENCE - starts VMAF in the background and returns at once
+#   finishing_quality_metric                   - waits for it, sets VMAF_MIN/MAX/MEAN and
+#                                                QUALITY_METRIC_RUNTIME (VMAF's own runtime)
+# encoding_quality_metric ENCODED REFERENCE does both (VMAF in the foreground)
+starting_quality_metric()
 {
   if [ $# -ne 2 ]
   then
@@ -1505,8 +1526,6 @@ encoding_quality_metric()
     ENCODED_VIDEO_FILE="${1}"
     REFERENCE_VIDEO_FILE="${2}"
   fi
-  SHOW_FUNCTION_NAME=${FUNCNAME[0]}
-  start_time_collecting
   # interpolation (rife/dain/cain) puts TARGET_FRAME_COUNT output frames per original frame:
   # output 0 = original 0, output 1 = in-between, output 2 = original 1, ...
   # in-between frames have no reference, so only every VMAF_FRAME_STEP-th frame is compared;
@@ -1518,12 +1537,17 @@ encoding_quality_metric()
   then
     VMAF_THREADS="1"
   fi
-  local VMAF_FRAMES_COUNT=$((INTER_FRAMES_COUNT / VMAF_FRAME_STEP))
+  VMAF_FRAMES_COUNT=$((INTER_FRAMES_COUNT / VMAF_FRAME_STEP))
   # an HDR reference is tone-mapped the same way as the extracted frames were (converting_hdr2sdr)
   local REFERENCE_FILTER=""
   if [ -n "${TONE_MAPPING_FILTER}" ]
   then
     REFERENCE_FILTER="${TONE_MAPPING_FILTER},"
+  fi
+  # a cropped final encode (-E) is compared with the reference cropped the same way
+  if [ -n "${VMAF_REFERENCE_CROP}" ]
+  then
+    REFERENCE_FILTER="${REFERENCE_FILTER}${VMAF_REFERENCE_CROP},"
   fi
   # the model file of the Linux packages, otherwise the model built into libvmaf (e.g. Homebrew)
   local VMAF_MODEL="version=vmaf_v0.6.1"
@@ -1531,41 +1555,234 @@ encoding_quality_metric()
   then
     VMAF_MODEL="path=/usr/share/model/vmaf_v0.6.1.json"
   fi
-  local VMAF_GRAPH="[0:v]select='not(mod(n\,${VMAF_FRAME_STEP}))',setpts=N/(${INPUT_FPS}*TB)[distorted];[1:v]${REFERENCE_FILTER}setpts=N/(${INPUT_FPS}*TB)[reference];[distorted][reference]libvmaf=n_threads=${VMAF_THREADS}:model=${VMAF_MODEL}:log_path=${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json:log_fmt=json"
-  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${ENCODED_VIDEO_FILE}" -i "${REFERENCE_VIDEO_FILE}" -lavfi "${VMAF_GRAPH}" -f null - > "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log" 2>&1 & echo "$!" > "${TMP}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.pid"
-  QUALITY_METRIC_CHECK_PID=$(cat ${TMP}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.pid)
-  while ps -p ${QUALITY_METRIC_CHECK_PID} > /dev/null 2>&1
+  local VMAF_FILES="${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}"
+  local VMAF_GRAPH="[0:v]select='not(mod(n\,${VMAF_FRAME_STEP}))',setpts=N/(${INPUT_FPS}*TB)[distorted];[1:v]${REFERENCE_FILTER}setpts=N/(${INPUT_FPS}*TB)[reference];[distorted][reference]libvmaf=n_threads=${VMAF_THREADS}:model=${VMAF_MODEL}:log_path=${LOG}/${VMAF_FILES}_vmaf.json:log_fmt=json"
+  rm -f -- "${TMP}/${VMAF_FILES}_quality_metric.status" "${TMP}/${VMAF_FILES}_quality_metric.runtime"
+  # the subshell measures VMAF's own runtime and keeps ffmpeg's exit code, both read by
+  # finishing_quality_metric; ffmpeg runs with nice, so the next chunk's frame extraction and
+  # NCNN get the CPU first and VMAF uses what is left; stop_background_jobs stops the subshell
+  # (SIGTERM), which then stops ffmpeg
+  (
+    trap 'kill "${VMAF_FFMPEG_PID}" 2>/dev/null' TERM
+    start_time_collecting
+    nice -n 10 ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${ENCODED_VIDEO_FILE}" -i "${REFERENCE_VIDEO_FILE}" -lavfi "${VMAF_GRAPH}" -f null - > "${LOG}/${VMAF_FILES}_quality_metric.log" 2>&1 &
+    VMAF_FFMPEG_PID=$!
+    wait "${VMAF_FFMPEG_PID}"
+    VMAF_FFMPEG_STATUS=$?
+    end_time_collecting
+    echo "${RUNTIME}" > "${TMP}/${VMAF_FILES}_quality_metric.runtime"
+    echo "${VMAF_FFMPEG_STATUS}" > "${TMP}/${VMAF_FILES}_quality_metric.status"
+  ) &
+  QUALITY_METRIC_CHECK_PID=$!
+  echo "${QUALITY_METRIC_CHECK_PID}" > "${TMP}/${VMAF_FILES}_quality_metric.pid"
+  }
+
+finishing_quality_metric()
+{
+  if [ -z "${QUALITY_METRIC_CHECK_PID}" ]
+  then
+    return
+  fi
+  SHOW_FUNCTION_NAME=${FUNCNAME[0]}
+  local VMAF_FILES="${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}"
+  # usually VMAF finished long ago (it ran alongside the next chunk); otherwise show its progress
+  while ps -p "${QUALITY_METRIC_CHECK_PID}" > /dev/null 2>&1
   do
-    if [ -s "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log" ]
+    CURRENT_ANALYSED_FRAME=$(tail -n$((TARGET_FRAME_COUNT*6)) "${LOG}/${VMAF_FILES}_quality_metric.log" 2>/dev/null | grep "frame=" | tail -n1 | sed "s/frame=//g")
+    if [[ ${CURRENT_ANALYSED_FRAME} =~ ^[0-9]+$ ]] && [ "${VMAF_FRAMES_COUNT}" -gt 0 ] && [[ ${VERBOSE} == no ]]
     then
-      CURRENT_ANALYSED_FRAME=$(tail -n$((TARGET_FRAME_COUNT*6)) "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log" | grep "frame=" | tail -n1 | sed "s/frame=//g")
-      CURRENT_ANALYSED_FRAME_PERCENT="$(echo "(${CURRENT_ANALYSED_FRAME}/${VMAF_FRAMES_COUNT}) * 100" | bc -l)"
-      CURRENT_ANALYSED_FRAME_PERCENT="$(printf "%.0f\n" "${CURRENT_ANALYSED_FRAME_PERCENT}")"
-      if [[ ${VERBOSE} == no ]]
-      then
-        printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 14))" "        ${MAGENTA2}currently analysed frame ${BROWN}${CURRENT_ANALYSED_FRAME} ${LIGHT_MAGENTA}${CURRENT_ANALYSED_FRAME_PERCENT} [%]" 2>/dev/null
-      fi
+      CURRENT_ANALYSED_FRAME_PERCENT=$((CURRENT_ANALYSED_FRAME * 100 / VMAF_FRAMES_COUNT))
+      printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 14))" "        ${MAGENTA2}currently analysed frame ${BROWN}${CURRENT_ANALYSED_FRAME} ${LIGHT_MAGENTA}${CURRENT_ANALYSED_FRAME_PERCENT} [%]" 2>/dev/null
     fi
     # without a pause this loop polls as fast as the CPU allows (busy-wait), competing with ffmpeg
     sleep 2
   done
-  wait "${QUALITY_METRIC_CHECK_PID}"
-  local QUALITY_METRIC_STATUS=$?
-  if [ "${QUALITY_METRIC_STATUS}" -ne 0 ] || [ ! -s "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json" ]
+  wait "${QUALITY_METRIC_CHECK_PID}" 2>/dev/null
+  QUALITY_METRIC_CHECK_PID=""
+  local QUALITY_METRIC_STATUS
+  QUALITY_METRIC_STATUS="$(cat "${TMP}/${VMAF_FILES}_quality_metric.status" 2>/dev/null)"
+  if [[ ! ${QUALITY_METRIC_STATUS} =~ ^[0-9]+$ ]]
+  then
+    # no status: the subshell was stopped before ffmpeg ended
+    QUALITY_METRIC_STATUS="1"
+  fi
+  QUALITY_METRIC_RUNTIME="$(cat "${TMP}/${VMAF_FILES}_quality_metric.runtime" 2>/dev/null)"
+  if [ -z "${QUALITY_METRIC_RUNTIME}" ]
+  then
+    QUALITY_METRIC_RUNTIME="0"
+  fi
+  if [ "${QUALITY_METRIC_STATUS}" -ne 0 ] || [ ! -s "${LOG}/${VMAF_FILES}_vmaf.json" ]
   then
     # a failed measurement is reported loudly, but does not stop the (long) processing run
-    error "  VMAF check failed with exit code ${QUALITY_METRIC_STATUS} (see log: ${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_quality_metric.log)"
+    error "  VMAF check failed with exit code ${QUALITY_METRIC_STATUS} (see log: ${LOG}/${VMAF_FILES}_quality_metric.log)"
     VMAF_MIN="error"
     VMAF_MAX="error"
     VMAF_MEAN="error"
   else
-    VMAF_MIN="$(jq -r '.pooled_metrics.vmaf.min' "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json")"
-    VMAF_MAX="$(jq -r '.pooled_metrics.vmaf.max' "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json")"
-    VMAF_MEAN="$(jq -r '.pooled_metrics.vmaf.mean' "${LOG}/${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}_vmaf.json")"
+    VMAF_MIN="$(jq -r '.pooled_metrics.vmaf.min' "${LOG}/${VMAF_FILES}_vmaf.json")"
+    VMAF_MAX="$(jq -r '.pooled_metrics.vmaf.max' "${LOG}/${VMAF_FILES}_vmaf.json")"
+    VMAF_MEAN="$(jq -r '.pooled_metrics.vmaf.mean' "${LOG}/${VMAF_FILES}_vmaf.json")"
   fi
-  end_time_collecting
-  echo ${RUNTIME} > "${TMP}/QUALITY_METRIC_RUNTIME"
-  printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 13))" "          ${MAGENTA2}VAMF mean:${BROWN} ${VMAF_MEAN}" 2>/dev/null
+  inf "    VMAF of ${YELLOW}${ENCODED_VIDEO_FILE}${CYAN}: mean ${DARKCYAN}${VMAF_MEAN}${CYAN}, took ${DARKCYAN}${QUALITY_METRIC_RUNTIME}"
+  }
+
+encoding_quality_metric()
+{
+  starting_quality_metric "$@"
+  finishing_quality_metric
+  }
+
+# detecting_crop VIDEO_FILE - sets HANDBRAKE_CROP (top:bottom:left:right) from one HandBrake scan of
+# the whole video; every part of interpolation_nncn -E gets this crop, because HandBrake's own
+# autocrop of a single minute can differ between parts (a dark scene looks like black borders)
+detecting_crop()
+{
+  local VIDEO_FILE="${1}"
+  local CROP_SCAN_LOG="${LOG}/handbrake_crop_scan.log"
+  local CROP_SCAN_JSON="${LOG}/handbrake_crop_scan.json"
+  # stdout holds the JSON, stderr the log lines, which would break the JSON if mixed in
+  if ! HandBrakeCLI -i "${VIDEO_FILE}" --scan --json --previews 30:0 -t 1 > "${CROP_SCAN_JSON}" 2> "${CROP_SCAN_LOG}"
+  then
+    error "  HandBrake scan of ${YELLOW}${VIDEO_FILE}${RED} failed (see log: ${CROP_SCAN_LOG})"
+    ERROR_CODE="1"
+    failed
+  fi
+  HANDBRAKE_CROP="$(sed -n '/^JSON Title Set:/,$p' "${CROP_SCAN_JSON}" | sed '1s/^JSON Title Set: *//' | jq -r '.TitleList[0].Crop | map(tostring) | join(":")' 2>/dev/null)"
+  if [[ ! ${HANDBRAKE_CROP} =~ ^[0-9]+:[0-9]+:[0-9]+:[0-9]+$ ]]
+  then
+    error "  could not read the crop of ${YELLOW}${VIDEO_FILE}${RED} from the HandBrake scan (got: '${HANDBRAKE_CROP}', see: ${CROP_SCAN_JSON} and ${CROP_SCAN_LOG})"
+    ERROR_CODE="1"
+    failed
+  fi
+  inf "  crop for the final encode of every part (top:bottom:left:right): ${YELLOW}${HANDBRAKE_CROP}"
+  }
+
+# Final encode of a processed part (interpolation_nncn -E) runs in two steps, like VMAF, so it
+# can run alongside the next chunk:
+#   starting_part_encoding MERGED ENCODED REFERENCE - starts HandBrake in the background and returns
+#                                                     at once; with a REFERENCE (the source chunk)
+#                                                     VMAF of the encoded part follows in the same job
+#   finishing_part_encoding                         - waits for the encode, sets ENCODING_RUNTIME and
+#                                                     marks the encoded part as finished (.done)
+# finishing_quality_metric then waits for the VMAF, as without -E
+starting_part_encoding()
+{
+  if [ $# -ne 3 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs three parameters: ${YELLOW}MERGED_VIDEO_FILE, ${ORANGE1}ENCODED_VIDEO_FILE, ${DEEPPINK1}REFERENCE_VIDEO_FILE (empty: no VMAF)"
+    ERROR_CODE="1"
+    failed
+  fi
+  PART_MERGED_FILE="${1}"
+  PART_ENCODED_FILE="${2}"
+  PART_REFERENCE_FILE="${3}"
+  PART_ENCODING_LOG="${LOG}/${PART_ENCODED_FILE}_handbrake.log"
+  local FFPROBE_JSON="${TMP}/${PART_MERGED_FILE%.mkv}_ffprobe.json"
+  ffprobe -v quiet -print_format json -show_streams "${PART_MERGED_FILE}" > "${FFPROBE_JSON}"
+  handbrake_streams_options "${FFPROBE_JSON}"
+  # the crop was read from the source; realsr parts are TARGET_FRAME_SCALE (4) times bigger
+  # (a resumed chunk may be encoded before interpolation_video_file has set it)
+  local CROP_SCALE="1"
+  if [[ ${NCNN_METHOD} == realsr ]]
+  then
+    CROP_SCALE="${TARGET_FRAME_SCALE:-4}"
+  fi
+  local CROP_TOP CROP_BOTTOM CROP_LEFT CROP_RIGHT
+  IFS=: read -r CROP_TOP CROP_BOTTOM CROP_LEFT CROP_RIGHT <<< "${HANDBRAKE_CROP}"
+  local PART_CROP="$((CROP_TOP * CROP_SCALE)):$((CROP_BOTTOM * CROP_SCALE)):$((CROP_LEFT * CROP_SCALE)):$((CROP_RIGHT * CROP_SCALE))"
+  VMAF_REFERENCE_CROP=""
+  if [[ ${HANDBRAKE_CROP} != 0:0:0:0 ]]
+  then
+    VMAF_REFERENCE_CROP="crop=iw-${CROP_LEFT}-${CROP_RIGHT}:ih-${CROP_TOP}-${CROP_BOTTOM}:${CROP_LEFT}:${CROP_TOP}"
+  fi
+  rm -f -- "${PART_ENCODED_FILE}" "${PART_ENCODED_FILE}.done" "${TMP}/${PART_ENCODED_FILE}_encoding.status" "${TMP}/${PART_ENCODED_FILE}_encoding.runtime"
+  # HandBrake runs with nice, so the next chunk's frame extraction and NCNN get the CPU first;
+  # stop_background_jobs stops the subshell (SIGTERM), which then stops HandBrake or the VMAF
+  (
+    trap 'kill "${PART_HANDBRAKE_PID}" "${QUALITY_METRIC_CHECK_PID}" 2>/dev/null; exit 143' TERM
+    QUALITY_METRIC_CHECK_PID=""
+    start_time_collecting
+    nice -n 10 HandBrakeCLI -i "${PART_MERGED_FILE}" -o "${PART_ENCODED_FILE}" --encoder "${VIDEO_ENCODER[@]}" --crop "${PART_CROP}" --no-markers "${HANDBRAKE_STREAMS[@]}" > "${PART_ENCODING_LOG}" 2>&1 &
+    PART_HANDBRAKE_PID=$!
+    wait "${PART_HANDBRAKE_PID}"
+    PART_HANDBRAKE_STATUS=$?
+    end_time_collecting
+    echo "${RUNTIME}" > "${TMP}/${PART_ENCODED_FILE}_encoding.runtime"
+    echo "${PART_HANDBRAKE_STATUS}" > "${TMP}/${PART_ENCODED_FILE}_encoding.status"
+    if [ "${PART_HANDBRAKE_STATUS}" -eq 0 ] && [ -n "${PART_REFERENCE_FILE}" ]
+    then
+      starting_quality_metric "${PART_ENCODED_FILE}" "${PART_REFERENCE_FILE}"
+      wait "${QUALITY_METRIC_CHECK_PID}"
+    fi
+  ) &
+  PART_ENCODING_PID=$!
+  if [ -n "${PART_REFERENCE_FILE}" ]
+  then
+    # the VMAF runs at the end of the same job, so finishing_quality_metric waits for the job
+    QUALITY_METRIC_CHECK_PID="${PART_ENCODING_PID}"
+    ENCODED_VIDEO_FILE="${PART_ENCODED_FILE}"
+    REFERENCE_VIDEO_FILE="${PART_REFERENCE_FILE}"
+    VMAF_FRAMES_COUNT=$((INTER_FRAMES_COUNT / ${TARGET_FRAME_COUNT:-1}))
+  fi
+  }
+
+finishing_part_encoding()
+{
+  if [ -z "${PART_ENCODING_PID}" ]
+  then
+    return
+  fi
+  SHOW_FUNCTION_NAME=${FUNCNAME[0]}
+  local STATUS_FILE="${TMP}/${PART_ENCODED_FILE}_encoding.status"
+  # usually the encode finished long ago (it ran alongside the next chunk); otherwise show its progress
+  while ps -p "${PART_ENCODING_PID}" > /dev/null 2>&1 && [ ! -e "${STATUS_FILE}" ]
+  do
+    CURRENT_ENCODED_PERCENT=$(tail -c 400 "${PART_ENCODING_LOG}" 2>/dev/null | tr '\r' '\n' | grep -a "Encoding:" | tail -n1 | sed -n 's/^.*, \([0-9.]*\) %.*$/\1/p')
+    if [ -n "${CURRENT_ENCODED_PERCENT}" ] && [[ ${VERBOSE} == no ]]
+    then
+      printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 14))" "        ${MAGENTA2}final encoding of ${BROWN}${PART_ENCODED_FILE} ${LIGHT_MAGENTA}${CURRENT_ENCODED_PERCENT} [%]" 2>/dev/null
+    fi
+    sleep 2
+  done
+  if [ "${PART_ENCODING_PID}" != "${QUALITY_METRIC_CHECK_PID}" ]
+  then
+    wait "${PART_ENCODING_PID}" 2>/dev/null
+  fi
+  PART_ENCODING_PID=""
+  local PART_ENCODING_STATUS
+  PART_ENCODING_STATUS="$(cat "${STATUS_FILE}" 2>/dev/null)"
+  if [[ ! ${PART_ENCODING_STATUS} =~ ^[0-9]+$ ]]
+  then
+    # no status: the job was stopped before HandBrake ended
+    PART_ENCODING_STATUS="1"
+  fi
+  ENCODING_RUNTIME="$(cat "${TMP}/${PART_ENCODED_FILE}_encoding.runtime" 2>/dev/null)"
+  if [ -z "${ENCODING_RUNTIME}" ]
+  then
+    ENCODING_RUNTIME="0"
+  fi
+  if [ "${PART_ENCODING_STATUS}" -ne 0 ] || [ ! -s "${PART_ENCODED_FILE}" ]
+  then
+    # a failed part is reported loudly, but does not stop the (long) processing run; its merged
+    # part stays, so a later run with -r -E encodes it again
+    error "  final encoding of ${YELLOW}${PART_MERGED_FILE}${RED} failed with exit code ${PART_ENCODING_STATUS} (see log: ${PART_ENCODING_LOG}); it is kept, run again with -r -E to encode it"
+    rm -f -- "${PART_ENCODED_FILE}"
+    if [ -n "${QUALITY_METRIC_CHECK_PID}" ]
+    then
+      # the VMAF of a failed encode was never started
+      wait "${QUALITY_METRIC_CHECK_PID}" 2>/dev/null
+      QUALITY_METRIC_CHECK_PID=""
+      VMAF_MEAN="error"
+    fi
+    return
+  fi
+  printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" > "${PART_ENCODED_FILE}.done"
+  inf "    final encoding of ${YELLOW}${PART_MERGED_FILE}${CYAN} took ${DARKCYAN}${ENCODING_RUNTIME}"
+  # the encoded part replaces the merged one (kept with -k)
+  if [[ ${KEEP_INTERMEDIATES} == no ]]
+  then
+    rm -f -- "${PART_MERGED_FILE}"
+  fi
   }
 
 reading_cursor_position()

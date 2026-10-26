@@ -123,7 +123,7 @@ An update can remove existing tags, chapters, and selected attachments; it can a
 
 ### Changing the encode destination
 
-The encode destination is currently hard-coded as `/media/ready` in `.config_video` (`DESTINATION_DIR`). Create that directory and ensure it is writable, or change the setting locally before using `-e`. The output is written with the source filename, and the HandBrake log is written beside it. The encoder is currently configured for SVT-AV1 10-bit at quality 22 and preset 5; audio is copied, and selected audio/subtitle tracks depend on language metadata in the input.
+The encode destination defaults to `/media/ready` (`DESTINATION_DIR` in `handbrake_encode_settings`, `.config_video`); set the `DESTINATION_DIR` environment variable to use another directory. Create it and ensure it is writable before using `-e`. `interpolation_nncn -E` uses the same function, so both scripts share the destination and encoder settings. The output is written with the source filename, and the HandBrake log is written beside it. The encoder is currently configured for SVT-AV1 10-bit at quality 22 and preset 5; audio is copied, and selected audio/subtitle tracks depend on language metadata in the input.
 
 ## `interpolation_nncn`
 
@@ -143,19 +143,36 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 | `-r` | — | Resume: skip chunks already finished by an earlier run of the same movie and method in this directory (see "Resumable and predictable runs"). Can be combined with `-s`. |
 | `-T` | — | No tone mapping: an HDR video is processed as HDR, without conversion to SDR. A warning is shown, because the colours of the processed frames may differ. Without `-T`, HDR is tone-mapped to SDR automatically. |
 | `-k` | — | Keep the intermediate files of finished chunks: the frames-only video in `TMP_OUT` and the chunk's frame directories. Without `-k` they are removed once the chunk is done (its `.done` marker is written). The frames-only video is a full copy of the video track of `_merged.mkv`, so keeping it doubles the space needed per chunk. |
-| `-Q` | — | Run the VMAF quality check for each processed chunk (processed chunk = distorted, first input; original chunk = reference, second input). For interpolation (`rife`, `dain`, `cain`) only the frames at original positions are compared, because in-between frames have no reference; the score shows what frame merging and encoding lost, not the quality of the interpolation itself. Uses all CPU cores. Requires an FFmpeg build with `libvmaf`; the model is `/usr/share/model/vmaf_v0.6.1.json` when that file exists (Linux packages), otherwise the `vmaf_v0.6.1` model built into libvmaf (for example Homebrew). An HDR reference is tone-mapped with the same filter as the extracted frames. Off by default, because it takes a long time. |
+| `-Q` | — | Run the VMAF quality check for each processed chunk (processed chunk = distorted, first input; original chunk = reference, second input). For interpolation (`rife`, `dain`, `cain`) only the frames at original positions are compared, because in-between frames have no reference; the score shows what frame merging and encoding lost, not the quality of the interpolation itself. Uses all CPU cores. Requires an FFmpeg build with `libvmaf`; the model is `/usr/share/model/vmaf_v0.6.1.json` when that file exists (Linux packages), otherwise the `vmaf_v0.6.1` model built into libvmaf (for example Homebrew). An HDR reference is tone-mapped with the same filter as the extracted frames. VMAF runs in the background with lower priority (`nice -n 10`) alongside the next chunk; the source chunk is kept until its VMAF is done, and the last chunk's VMAF is waited for at the end. Off by default. |
+| `-E` | — | Final encode of each part: after a chunk is merged, HandBrake encodes it in the background (`nice -n 10`) alongside the next chunk, with the same settings as `movies_encoding` (SVT-AV1 10-bit, quality 22, preset 5, audio copied). The crop is detected once, from the whole input, and passed to every part (HandBrake's automatic crop differs from part to part). After a successful encode the `_merged.mkv` part is removed (kept with `-k`). At the end the encoded parts are joined with `mkvmerge --append-mode track` into `DESTINATION_DIR/<input name>.mkv` (default `/media/ready`) and removed (kept with `-k`). The run stops at start-up if the destination is missing or not writable (exit 1) or the final file already exists (exit 2). With `-Q`, VMAF compares the encoded part (not the merged one) with the source chunk, cropped the same way. A failed encode keeps its merged part and stops the join; run again with `-r -E`. See [Final encode of each part](#final-encode-of-each-part--e). |
+| `-a` | — | With `-E`: animation profile (as `movies_encoding -a`). Without `-E`: exit 2. |
+| `-g` | — | With `-E`: grain profile (as `movies_encoding -g`). Without `-E`: exit 2. |
+| `-H` | — | With `-E`: high-motion profile (as `movies_encoding -H`). Without `-E`: exit 2. |
 | `-S` | — | Silent: no terminal output; everything is written to `LOG/interpolation_nncn_silent_<timestamp>.log`. |
 | `-v` | — | Enable verbose diagnostics. |
 | `-h` | — | Print usage information. |
 
-The script divides input into 60-second MKV chunks in the current working directory. A video of up to 90 seconds (`NO_SPLIT_MAX_SEC`) is not split: it is copied unchanged into one chunk, `video_part_minute_001.mkv`, and processed in one go; `-r`, `-Q`, and the statistics work the same way. It processes chunks from the selected start number, retains per-chunk merged outputs, and removes intermediate chunk data as it completes. The final whole-video concatenation code is currently commented out, so the script does **not** automatically create one combined output video. To join the parts yourself, use mkvmerge with `--append-mode track`:
+The script divides input into 60-second MKV chunks in the current working directory. A video of up to 90 seconds (`NO_SPLIT_MAX_SEC`) is not split: it is copied unchanged into one chunk, `video_part_minute_001.mkv`, and processed in one go; `-r`, `-Q`, and the statistics work the same way. It processes chunks from the selected start number, retains per-chunk merged outputs, and removes intermediate chunk data as it completes. Without `-E` the script does **not** create one combined output video. To join the merged parts yourself, use mkvmerge with `--append-mode track`:
 
 ```bash
 mkvmerge --append-mode track -o joined.mkv video_part_minute_001_rife_50_merged.mkv \
   + video_part_minute_002_rife_50_merged.mkv + video_part_minute_003_rife_50_merged.mkv
 ```
 
-Without it, mkvmerge starts each part after the longest track of the previous one. A subtitle line that crosses the 60 s split keeps its full length (e.g. until 64 s), so audio and video get a gap at that join, and an encoder later shows a frozen picture there. After each chunk, a `~`-separated row is appended to `TMP/statistics.txt` with stage runtimes, peak space use, the VMAF mean (with `-Q`), and the total chunk runtime. Tone mapping has no column of its own: it is part of the frame extraction, so its time is included in `extracting_frames_runtime`. (Files from older versions have an extra second column, `tone_mapping_runtime`.)
+Without it, mkvmerge starts each part after the longest track of the previous one. A subtitle line that crosses the 60 s split keeps its full length (e.g. until 64 s), so audio and video get a gap at that join, and an encoder later shows a frozen picture there. After each chunk, a `~`-separated row is appended to `TMP/statistics.txt` with stage runtimes, peak space use, the VMAF mean (with `-Q`), and the total chunk runtime. With `-Q` or `-E` a chunk's row is written once its VMAF and encode are done, so after the next chunk; `encoding_runtime` is the HandBrake encode of the part (`-E`), `quality_check_runtime` is VMAF's own runtime, and `runtime` no longer includes it, because VMAF runs alongside the next chunk. Tone mapping has no column of its own: it is part of the frame extraction, so its time is included in `extracting_frames_runtime`. (Files from older versions have an extra second column, `tone_mapping_runtime`, and no `encoding_runtime` column.)
+
+### Final encode of each part (`-E`)
+
+```bash
+INTERMEDIATE_CODEC=x264_crf10 ./interpolation_nncn -i "Episode.mkv" -E -Q
+DESTINATION_DIR="$HOME/ready" ./interpolation_nncn -i "Episode.mkv" -E -g
+```
+
+- Each part is encoded while the next chunk is processed (~100 s per 4K 50 fps minute on the Linux rig, against ~6 min per chunk), so the final encode adds almost no time.
+- The merged part is only a short-lived intermediate (HandBrake cannot read PNG frames or a pipe). It is removed right after its encode, so even lossless `x264_lossless` needs space for about two parts only.
+- A finished part gets a `<part>_encoded.mkv.done` marker. With `-r -E`, encoded parts are skipped, and a merged part without its encode is encoded again. The join needs every part 001…last to be encoded; otherwise it stops with exit 1.
+- HandBrake logs: `LOG/<part>_encoded.mkv_handbrake.log`, crop scan `LOG/handbrake_crop_scan.json` (result) and `.log`, join `LOG/<movie>_joining_encoded_parts.log`.
+- Why per part and not one encode of the joined movie: see the measurement in [Performance optimization](#performance-optimization).
 
 The processed frames of each chunk are encoded into an intermediate video. HandBrake (`movies_encoding`) makes the final encode later. Choose its codec with the `INTERMEDIATE_CODEC` environment variable. The script checks the name and the FFmpeg encoder at start-up: an unknown name exits with `2`, and a missing encoder exits with `127`.
 
@@ -168,7 +185,7 @@ The processed frames of each chunk are encoded into an intermediate video. HandB
 
 \* Chunk 029 at its native 3840×1600, interpolated to 50 fps; see [Performance optimization](#performance-optimization) for times and the full comparison. Before this setting existed, the encoder was SVT-AV1 with `rc=1`, which is VBR at only about 2 Mbps (lossy).
 
-The lossless codecs need a lot of disk space. At 4K, that is about 11 GB per minute of output, or ~1.3 TB for a 2-hour movie, because every per-chunk `_merged.mkv` is kept. At 1080p it is roughly a quarter of that. If space is short, use `x264_crf10` (about 12× smaller, VMAF 97.9):
+The lossless codecs need a lot of disk space. At 4K, that is about 11 GB per minute of output, or ~1.3 TB for a 2-hour movie, because every per-chunk `_merged.mkv` is kept (with `-E` each one is removed after its encode). At 1080p it is roughly a quarter of that. If space is short, use `x264_crf10` (about 12× smaller, VMAF 97.9):
 
 ```bash
 INTERMEDIATE_CODEC=x264_crf10 ./interpolation_nncn -i "Movie.mkv"
@@ -346,6 +363,27 @@ Peak space use per chunk was 30–37 GB of PNG frames.
    - NCNN started through its real path (models next to a symlink were not found).
    - NCNN paused while it is too close to the extraction (`NCNN_EXTRACTION_MARGIN`). On the Mac, extraction with tone mapping shares the GPU with NCNN and was slower, so NCNN read unwritten frames and crashed (exit 139).
    - The VMAF model built into libvmaf when `/usr/share/model/vmaf_v0.6.1.json` does not exist.
+8. **VMAF in the background (`-Q`).** VMAF of chunk N runs alongside chunk N+1 instead of before it (on the Linux rig ~74 s per 4K chunk, about 16% of a chunk).
+   - `starting_quality_metric` starts it and returns at once; `finishing_quality_metric` collects the result at the end of the next chunk (usually long finished), so only one VMAF runs at a time and statistics rows stay in chunk order.
+   - `nice -n 10`: frame extraction and NCNN of the next chunk get the CPU first; VMAF uses what is left and keeps all its threads.
+   - The `.done` marker is written right after the merge, before VMAF: an interrupted VMAF loses only its score, not the chunk. The source chunk (VMAF's reference) is removed after VMAF.
+   - Ctrl+C or an error stops the background VMAF too (its subshell stops `ffmpeg` on SIGTERM).
+   - `encoding_quality_metric` still does both steps in the foreground.
+9. **Final encode of each part (`-E`).** Measured first: 5 minutes of 4K 50 fps (interpolated parts, `x264_crf10`), A = join the parts, then one HandBrake encode; B = encode each part, then join with mkvmerge.
+
+   | | A (join, encode) | B (encode, join) |
+   |---|---|---|
+   | Encode time | 534 s | 541 s |
+   | Size | 211.12 MB | 211.16 MB |
+   | VMAF mean (frames 0–9000) | 95.20 | 95.24 |
+   | VMAF ±5 frames at joins | ~93.6 | ~94.0 |
+   | Frames | 15102 (2 lost) | 15104 (all) |
+
+   - Size and quality are the same: SVT-AV1's look-ahead is short, so the longer context of A brings nothing measurable.
+   - A lost 2 frames after the third join (HandBrake's sync; its log says "0 dropped"), so VMAF by frame index fails after that point. B kept every frame.
+   - B can run in the background alongside the next chunk, so its encode time is hidden; A has to wait for the last chunk.
+   - B needs one crop for all parts: HandBrake's auto-crop gave 3840×1596 for one part and 2992×1600 for another. One scan of the whole source takes ~6 s.
+   - Audio: the source parts have a 16 ms gap at each join; B keeps them (as the merged parts do), A closed them (80 ms early by the end of 5 minutes).
 
 ### Codec benchmark
 
@@ -384,9 +422,8 @@ Decision: lossless x264 `ultrafast` is the default because it is the fastest and
 ### Planned (in agreed order)
 
 1. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It could also let NCNN run without `-v`, if the NCNN pause (`throttling_ncnn`, which reads the last `done` line) also used the output frames instead of the log. The result is lower peak space use, which makes the next items possible.
-2. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the ~117 s merge overlaps with interpolation.
-3. **VMAF in the background,** running alongside the next chunk.
-4. **Smaller items:**
+2. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
+3. **Smaller items:**
    - replace fixed sleeps (`sleep 5` in extraction, `sleep 10` in the chunk loop, other 1–3 s sleeps) with event-based waits;
    - lower the PNG `-compression_level` (faster writes, larger files);
    - frames on tmpfs (RAM disk, `huge=always`) once peak space use is low enough for 64 GB RAM;

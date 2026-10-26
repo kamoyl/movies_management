@@ -196,6 +196,110 @@ assert_contains "VMAF model: package file, otherwise built into libvmaf" "${OUTP
 OUTPUT="$(PATH="${WORK_DIR}/vmafbin:${PATH}" run_with_helpers 'TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; TARGET_FRAME_COUNT=2; INTER_FRAMES_COUNT=2880; INPUT_FPS=23.976; TONE_MAPPING_FILTER="libplacebo=tm"; encoding_quality_metric merged.mkv original.mkv; cat graph.txt' 2>&1)"
 assert_contains "HDR: the reference is tone-mapped like the extracted frames" "${OUTPUT}" "[1:v]libplacebo=tm,setpts=N/(23.976*TB)[reference]"
 
+echo "VMAF in the background (starting_quality_metric / finishing_quality_metric)"
+mkdir -p "${WORK_DIR}/slowvmafbin"
+cat > "${WORK_DIR}/slowvmafbin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+# fake slow ffmpeg: records its niceness, takes 2 s, then writes a VMAF result (or fails)
+ps -o ni= -p $$ | tr -d ' ' > nice.txt
+sleep 2
+if [ -e fail_vmaf ]
+then
+  exit 3
+fi
+while [ $# -gt 0 ]
+do
+  if [ "$1" = "-lavfi" ]
+  then
+    LOG_PATH="${2#*log_path=}"
+    printf '{"pooled_metrics":{"vmaf":{"min":90,"max":99,"mean":96.5}}}\n' > "${LOG_PATH%%:*}"
+  fi
+  shift
+done
+EOF
+chmod +x "${WORK_DIR}/slowvmafbin/ffmpeg"
+VMAF_BG_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; rm -f "$LOG"/*; TARGET_FRAME_COUNT=2; INTER_FRAMES_COUNT=2880; INPUT_FPS=25; VERBOSE=yes'
+OUTPUT="$(PATH="${WORK_DIR}/slowvmafbin:${PATH}" run_with_helpers "${VMAF_BG_SETUP}"'; S=$(date +%s); starting_quality_metric m.mkv o.mkv; echo "RETURNED_AFTER=$(( $(date +%s) - S ))"; finishing_quality_metric; echo "MEAN=${VMAF_MEAN} PID=[${QUALITY_METRIC_CHECK_PID}] NICE=$(cat nice.txt)"' 2>&1)"
+assert_contains "starting returns at once (VMAF keeps running)" "${OUTPUT}" "RETURNED_AFTER=0"
+assert_contains "finishing waits and reads the VMAF mean" "${OUTPUT}" "MEAN=96.5 PID=[]"
+assert_contains "VMAF runs with lower priority (nice 10)" "${OUTPUT}" "NICE=10"
+OUTPUT="$(PATH="${WORK_DIR}/slowvmafbin:${PATH}" run_with_helpers "${VMAF_BG_SETUP}"'; touch fail_vmaf; starting_quality_metric m.mkv o.mkv; finishing_quality_metric; rm -f fail_vmaf; echo "MEAN=${VMAF_MEAN}"' 2>&1)"; STATUS=$?
+assert_status   "failed VMAF does not stop the run" 0 "${STATUS}"
+assert_contains "failed VMAF is reported with ffmpeg's exit code" "${OUTPUT}" "VMAF check failed with exit code 3"
+assert_contains "failed VMAF is recorded as error" "${OUTPUT}" "MEAN=error"
+OUTPUT="$(run_with_helpers 'QUALITY_METRIC_CHECK_PID=""; finishing_quality_metric; echo "NOTHING_PENDING=ok"' 2>&1)"
+assert_contains "finishing without a started VMAF does nothing" "${OUTPUT}" "NOTHING_PENDING=ok"
+# the last chunk's VMAF must end before an unsplit result is renamed
+LINE_FINISH="$(grep -n '^finishing_previous_chunk$' "${REPO_ROOT}/interpolation_nncn" | tail -1 | cut -d: -f1)"
+LINE_RENAME="$(grep -n 'an unsplit video was processed as chunk 001' "${REPO_ROOT}/interpolation_nncn" | cut -d: -f1)"
+if [ -n "${LINE_FINISH}" ] && [ -n "${LINE_RENAME}" ] && [ "${LINE_FINISH}" -lt "${LINE_RENAME}" ]; then pass "last VMAF is waited for before results are renamed"; else fail "last VMAF is waited for before results are renamed"; fi
+
+echo "final encode of each part (-E; HandBrakeCLI and ffprobe replaced by fakes)"
+mkdir -p "${WORK_DIR}/hbbin"
+cat > "${WORK_DIR}/hbbin/HandBrakeCLI" <<'EOF'
+#!/usr/bin/env bash
+# fake HandBrakeCLI: a scan prints a title with the crop from crop.txt; an encode records its
+# niceness and arguments, takes 2 s and writes the -o file (or fails when fail_hb exists)
+if [[ " $* " == *" --scan "* ]]
+then
+  printf 'Version: {\n}\nJSON Title Set: {"TitleList": [{"Crop": [%s]}]}\n' "$(cat crop.txt)"
+  echo "HandBrake has exited." >&2
+  exit 0
+fi
+ps -o ni= -p $$ | tr -d ' ' > hb_nice.txt
+printf '%s\n' "$@" > hb_args.txt
+sleep 2
+if [ -e fail_hb ]
+then
+  exit 4
+fi
+while [ $# -gt 0 ]
+do
+  if [ "$1" = "-o" ]
+  then
+    echo "fake av1" > "$2"
+  fi
+  shift
+done
+EOF
+cat > "${WORK_DIR}/hbbin/ffprobe" <<'EOF'
+#!/usr/bin/env bash
+printf '{"streams":[{"index":0,"codec_type":"video"},{"index":1,"codec_type":"audio","tags":{"language":"eng"}},{"index":2,"codec_type":"subtitle","tags":{"language":"pol"}}]}\n'
+EOF
+chmod +x "${WORK_DIR}/hbbin/HandBrakeCLI" "${WORK_DIR}/hbbin/ffprobe"
+PART_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; rm -f "$LOG"/* *.done fail_hb; WHOLE_MOVIE_NAME_ARRAY=(My Movie); NCNN_METHOD=rife; KEEP_INTERMEDIATES=no; VERBOSE=yes; TARGET_FRAME_COUNT=2; INTER_FRAMES_COUNT=3000; INPUT_FPS=25; echo merged > p_merged.mkv; handbrake_encode_settings; HANDBRAKE_CROP=8:4:0:0'
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkdir -p "$LOG"; echo "8, 4, 0, 0" > crop.txt; detecting_crop whole.mkv; echo "CROP=${HANDBRAKE_CROP}"' 2>&1)"
+assert_contains "the crop is read from one scan of the whole video" "${OUTPUT}" "CROP=8:4:0:0"
+PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkdir -p "$LOG"; echo "" > crop.txt; detecting_crop whole.mkv' > /dev/null 2>&1
+assert_status "an unreadable crop stops the run with 1" 1 $?
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; S=$(date +%s); starting_part_encoding p_merged.mkv p_encoded.mkv ""; echo "RETURNED_AFTER=$(( $(date +%s) - S ))"; finishing_part_encoding; echo "DONE=$(cat p_encoded.mkv.done) RUNTIME=${ENCODING_RUNTIME} NICE=$(cat hb_nice.txt)"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; tr "\n" " " < hb_args.txt' 2>&1)"
+assert_contains "starting returns at once (the encode keeps running)" "${OUTPUT}" "RETURNED_AFTER=0"
+assert_contains "finishing marks the encoded part with the movie name" "${OUTPUT}" "DONE=My Movie RUNTIME=0s"
+assert_contains "the encode runs with lower priority (nice 10)" "${OUTPUT}" "NICE=10"
+assert_contains "every part gets the crop of the whole video" "${OUTPUT}" "--crop 8:4:0:0"
+assert_contains "the movies_encoding encoder settings are used" "${OUTPUT}" "--encoder svt_av1_10bit --quality 22"
+assert_contains "audio and subtitles are chosen from the part" "${OUTPUT}" "-E copy -a 1 --subtitle-lang-list eng,pol,dut --all-subtitles"
+if [[ ${OUTPUT} == *MERGED_KEPT* ]]; then fail "the merged part is removed after its encode"; else pass "the merged part is removed after its encode"; fi
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; KEEP_INTERMEDIATES=yes; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi' 2>&1)"
+assert_contains "-k keeps the merged part" "${OUTPUT}" "MERGED_KEPT"
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${WORK_DIR}/vmafbin:${PATH}" run_with_helpers "${PART_SETUP}"'; touch fail_hb; QUALITY_METRIC_CHECK_PID=""; starting_part_encoding p_merged.mkv p_encoded.mkv o.mkv; finishing_part_encoding; finishing_quality_metric; echo "MEAN=${VMAF_MEAN}"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_encoded.mkv.done ]; then echo MARKED; fi' 2>&1)"; STATUS=$?
+assert_status   "a failed encode does not stop the run" 0 "${STATUS}"
+assert_contains "a failed encode is reported with HandBrake's exit code" "${OUTPUT}" "failed with exit code 4"
+assert_contains "a failed encode keeps the merged part, VMAF is error" "${OUTPUT}" "MEAN=error"
+assert_contains "a failed encode keeps its merged part" "${OUTPUT}" "MERGED_KEPT"
+if [[ ${OUTPUT} == *MARKED* ]]; then fail "a failed encode is not marked as finished"; else pass "a failed encode is not marked as finished"; fi
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${WORK_DIR}/vmafbin:${PATH}" run_with_helpers "${PART_SETUP}"'; QUALITY_METRIC_CHECK_PID=""; starting_part_encoding p_merged.mkv p_encoded.mkv o.mkv; finishing_part_encoding; finishing_quality_metric; echo "MEAN=${VMAF_MEAN}"; cat graph.txt' 2>&1)"
+assert_contains "-Q: VMAF of the encoded part follows its encode" "${OUTPUT}" "MEAN=95.5"
+assert_contains "-Q: the reference is cropped like the encode" "${OUTPUT}" "[1:v]crop=iw-0-0:ih-8-4:0:8,setpts="
+OUTPUT="$(run_with_helpers 'GRAIN=yes; unset DESTINATION_DIR; handbrake_encode_settings; echo "DEST=${DESTINATION_DIR} ${VIDEO_ENCODER[*]}"; DESTINATION_DIR=/x; handbrake_encode_settings; echo "OVERRIDE=${DESTINATION_DIR}"' 2>&1)"
+assert_contains "shared settings: profile and default destination" "${OUTPUT}" "DEST=/media/ready svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune grain"
+assert_contains "shared settings: DESTINATION_DIR can be overridden" "${OUTPUT}" "OVERRIDE=/x"
+OUTPUT="$(TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -h 2>&1)"
+assert_contains "interpolation_nncn -h documents -E (final encode)" "${OUTPUT}" "-E  final encode"
+# the parts must be joined after the last encode is waited for
+LINE_JOIN="$(grep -n '^  joining_encoded_parts$' "${REPO_ROOT}/interpolation_nncn" | cut -d: -f1)"
+if [ -n "${LINE_FINISH}" ] && [ -n "${LINE_JOIN}" ] && [ "${LINE_FINISH}" -lt "${LINE_JOIN}" ]; then pass "the last encode is waited for before the parts are joined"; else fail "the last encode is waited for before the parts are joined"; fi
+
 echo "intermediate_codec_options (ffmpeg replaced by a fake encoder list)"
 mkdir -p "${WORK_DIR}/codecbin"
 cat > "${WORK_DIR}/codecbin/ffmpeg" <<'EOF'
@@ -276,6 +380,9 @@ if grep -n -- "ps --pid" "${REPO_ROOT}/.config_video" "${REPO_ROOT}/interpolatio
 
 echo "joining parts"
 if grep -A3 '^appending_mkvs()' "${REPO_ROOT}/.config_video" | grep -q -- "mkvmerge --append-mode track"; then pass "parts are joined with --append-mode track (no gaps from long subtitles)"; else fail "parts are joined with --append-mode track (no gaps from long subtitles)"; fi
+
+echo "short chunks"
+if grep -q 'frame_analysis/output0002' "${REPO_ROOT}/.config_video"; then fail "frame analysis reads the first sample (a chunk of up to 100 frames has only one)"; else pass "frame analysis reads the first sample (a chunk of up to 100 frames has only one)"; fi
 
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"
