@@ -377,7 +377,7 @@ then
   done
 fi
 
-  echo "video_id~tone_mapping_runtime~extracting_streams_runtime~extracting_frames_runtime~interpolating_runtime~merging_streams_runtime~merging_frames_runtime~quality_check_runtime~max_space [GB]~max_space [%]~VMAF [mean]~runtime" > "${TMP}/statistics.txt"
+  echo "video_id~extracting_streams_runtime~extracting_frames_runtime~interpolating_runtime~merging_streams_runtime~merging_frames_runtime~quality_check_runtime~max_space [GB]~max_space [%]~VMAF [mean]~runtime" > "${TMP}/statistics.txt"
   for VIDEO_FRAGMENT_ID in $(seq -w ${SPLIT_PART_START} ${LAST_VIDEO_FRAGMENT_ID})
   do
     start_time_collecting
@@ -456,9 +456,6 @@ fi
     end_time_collecting
     PART_VIDEO_RUNTIME=${RUNTIME}
     inf "    following video management took: ${DARKCYAN}${PART_VIDEO_RUNTIME}"
-    # tone mapping is part of the frames extraction now; the statistics column is kept, so
-    # older and newer statistics.txt files have the same columns
-    HDR_2_SDR_RUNTIME="-"
     inf "      extracting"
     if [ -s "${TMP}/EXTRACTING_STREAMS_RUNTIME" ]
     then
@@ -503,7 +500,7 @@ fi
       MAX_SPACE_TAKEN_PERCENT=$(printf "%.0f\n" "$(echo "(${MAX_SPACE_TAKEN_OVERALL}/${MAX_TSPACE})*100" | bc -l)")
       inf "    space used all together: ${DARKCYAN}${MAX_SPACE_TAKEN_OVERALL} [GB] ${CYAN}(which is only ${MAROON1}${MAX_SPACE_TAKEN_PERCENT} [%]${CYAN} of space which should be taken if not removed on-the-fly)"
     fi
-    echo "${VIDEO_FRAGMENT_ID}~${HDR_2_SDR_RUNTIME}~${EXTRACTING_STREAMS_RUNTIME}~${EXTRACTING_FRAMES_RUNTIME}~${INTERPOLATING_FRAMES_RUNTIME}~${MERGING_STREAMS_RUNTIME}~${MERGING_FRAMES_RUNTIME}~${QUALITY_METRIC_RUNTIME}~${MAX_SPACE_TAKEN_OVERALL}~${MAX_SPACE_TAKEN_PERCENT}~${VMAF_MEAN}~${PART_VIDEO_RUNTIME}" >> "${TMP}/statistics.txt"
+    echo "${VIDEO_FRAGMENT_ID}~${EXTRACTING_STREAMS_RUNTIME}~${EXTRACTING_FRAMES_RUNTIME}~${INTERPOLATING_FRAMES_RUNTIME}~${MERGING_STREAMS_RUNTIME}~${MERGING_FRAMES_RUNTIME}~${QUALITY_METRIC_RUNTIME}~${MAX_SPACE_TAKEN_OVERALL}~${MAX_SPACE_TAKEN_PERCENT}~${VMAF_MEAN}~${PART_VIDEO_RUNTIME}" >> "${TMP}/statistics.txt"
     # after the last chunk the screen stays as it is, so the summary remains visible
     if [[ ${VIDEO_FRAGMENT_ID} != "${LAST_VIDEO_FRAGMENT_ID}" ]]
     then
