@@ -319,9 +319,12 @@ splitting_video()
   inf "    splitting of ${YELLOW}${FILE_NAME}${CYAN} done successfully ${MAGENTA}${RUNTIME}"
   }
 
+# --append-mode track: each track continues from its own end. The default (file) mode starts
+# the next part after the LONGEST track of the previous one; a subtitle line crossing the
+# split keeps its full length (e.g. until 64 s), which left a gap in audio and video at the join
 appending_mkvs()
 {
-  mkvmerge -o "${WHOLE_MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_merge_${SPLIT_PART_START}-${LAST_VIDEO_FRAGMENT_ID}.mkv" $(ls --color=never video_part_minute_*_merged.mkv | sed "s/^/+/g" | tr "\n" " " | sed "s/^+//g")
+  mkvmerge --append-mode track -o "${WHOLE_MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_merge_${SPLIT_PART_START}-${LAST_VIDEO_FRAGMENT_ID}.mkv" $(ls --color=never video_part_minute_*_merged.mkv | sed "s/^/+/g" | tr "\n" " " | sed "s/^+//g")
   }
 
 extracting_mkv_streams()
@@ -957,7 +960,8 @@ interpolation_video_file()
   elif [ ${FRAME_BIT_DEPTH} -eq 16 ]
   then
     INTER_FRAMES_MAX_TSPACE=$(printf "%.0f\n" $(echo "(${TARGET_FRAME_COUNT}*(${AVERAGE_FRAME_SIZE}/2)*${INTER_FRAMES_COUNT})/1000" | bc -l))
-    AVERAGE_FRAME_SIZE=$(printf "%.0f\n" $(echo "${AVERAGE_FRAME_SIZE}/2" | bc -l))
+    # keep it fractional: dark frames (e.g. end credits) are < 1 MB, rounding gave 0 and bc divided by zero
+    AVERAGE_FRAME_SIZE=$(echo "${AVERAGE_FRAME_SIZE}/2" | bc -l)
   fi
   MAX_INTER_FRAMES_VAR_FREE_SPACE=$(echo "((${VAR_FREE_SPACE}*1000)/${AVERAGE_FRAME_SIZE})" | bc -l)
   MAX_INTER_SEC_VAR_FREE_SPACE=$(printf "%.0f\n" $(echo "${MAX_INTER_FRAMES_VAR_FREE_SPACE}/${OUTPUT_FPS}" | bc -l))

@@ -148,7 +148,14 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 | `-v` | — | Enable verbose diagnostics. |
 | `-h` | — | Print usage information. |
 
-The script divides input into 60-second MKV chunks in the current working directory. A video of up to 90 seconds (`NO_SPLIT_MAX_SEC`) is not split: it is copied unchanged into one chunk, `video_part_minute_001.mkv`, and processed in one go; `-r`, `-Q`, and the statistics work the same way. It processes chunks from the selected start number, retains per-chunk merged outputs, and removes intermediate chunk data as it completes. The final whole-video concatenation code is currently commented out, so the script does **not** automatically create one combined output video. After each chunk, a `~`-separated row is appended to `TMP/statistics.txt` with stage runtimes, peak space use, the VMAF mean (with `-Q`), and the total chunk runtime. The `tone_mapping_runtime` column is always `-` now, because tone mapping is part of the frame extraction (`extracting_frames_runtime`); the column stays so older and newer files have the same columns.
+The script divides input into 60-second MKV chunks in the current working directory. A video of up to 90 seconds (`NO_SPLIT_MAX_SEC`) is not split: it is copied unchanged into one chunk, `video_part_minute_001.mkv`, and processed in one go; `-r`, `-Q`, and the statistics work the same way. It processes chunks from the selected start number, retains per-chunk merged outputs, and removes intermediate chunk data as it completes. The final whole-video concatenation code is currently commented out, so the script does **not** automatically create one combined output video. To join the parts yourself, use mkvmerge with `--append-mode track`:
+
+```bash
+mkvmerge --append-mode track -o joined.mkv video_part_minute_001_rife_50_merged.mkv \
+  + video_part_minute_002_rife_50_merged.mkv + video_part_minute_003_rife_50_merged.mkv
+```
+
+Without it, mkvmerge starts each part after the longest track of the previous one. A subtitle line that crosses the 60 s split keeps its full length (e.g. until 64 s), so audio and video get a gap at that join, and an encoder later shows a frozen picture there. After each chunk, a `~`-separated row is appended to `TMP/statistics.txt` with stage runtimes, peak space use, the VMAF mean (with `-Q`), and the total chunk runtime. The `tone_mapping_runtime` column is always `-` now, because tone mapping is part of the frame extraction (`extracting_frames_runtime`); the column stays so older and newer files have the same columns.
 
 The processed frames of each chunk are encoded into an intermediate video. HandBrake (`movies_encoding`) makes the final encode later. Choose its codec with the `INTERMEDIATE_CODEC` environment variable. The script checks the name and the FFmpeg encoder at start-up: an unknown name exits with `2`, and a missing encoder exits with `127`.
 

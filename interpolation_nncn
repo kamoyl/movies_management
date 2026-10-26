@@ -373,8 +373,6 @@ then
   BEFORE_SPLIT_PART_START=$(printf "%03d" "$((10#${SPLIT_PART_START} - 1))")
   for VIDEO_FRAGMENT_ID in $(seq -w 001 ${BEFORE_SPLIT_PART_START})
   do
-    echo "VIDEO_FRAGMENT_ID=${VIDEO_FRAGMENT_ID}"
-    echo "  SPLIT_PART_START=${SPLIT_PART_START}, LAST_VIDEO_FRAGMENT_ID=${LAST_VIDEO_FRAGMENT_ID}, BEFORE_LAST_VIDEO_FRAGMENT_ID=${BEFORE_LAST_VIDEO_FRAGMENT_ID}"
     rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
   done
 fi
@@ -532,7 +530,7 @@ fi
 
 # for VIDEO_FRAGMENT_ID in $(seq -w ${SPLIT_PART_START} ${LAST_VIDEO_FRAGMENT_ID})
 # do
-# mkvmerge -o "${WHOLE_MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_merge_${SPLIT_PART_START}-${LAST_VIDEO_FRAGMENT_ID}.mkv" $(ls --color=never video_part_minute_*_merged.mkv | sed "s/^/+/g" | tr "\n" " " | sed "s/^+//g")
+# mkvmerge --append-mode track -o "${WHOLE_MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_merge_${SPLIT_PART_START}-${LAST_VIDEO_FRAGMENT_ID}.mkv" $(ls --color=never video_part_minute_*_merged.mkv | sed "s/^/+/g" | tr "\n" " " | sed "s/^+//g")
 # ERROR_CODE
 # ... rm -rf video_part_minute_[0-9][0-9][0-9].mkv
 

@@ -274,6 +274,9 @@ assert_contains "pauses before anything is extracted" "${OUTPUT}" "START=T yes"
 echo "portability"
 if grep -n -- "ps --pid" "${REPO_ROOT}/.config_video" "${REPO_ROOT}/interpolation_nncn" "${REPO_ROOT}/movies_encoding" > /dev/null; then fail "no ps --pid (macOS ps has no --pid; use ps -p)"; else pass "no ps --pid (macOS ps has no --pid; use ps -p)"; fi
 
+echo "joining parts"
+if grep -A3 '^appending_mkvs()' "${REPO_ROOT}/.config_video" | grep -q -- "mkvmerge --append-mode track"; then pass "parts are joined with --append-mode track (no gaps from long subtitles)"; else fail "parts are joined with --append-mode track (no gaps from long subtitles)"; fi
+
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"
 [ "${FAILED}" -eq 0 ]
