@@ -66,8 +66,9 @@ echo "
 ${CYAN}Usage:${BRIGHT}${WHITE}
 $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -T ] [ -k ] [ -Q ] [ -E [ -a | -g | -H ] ] [ -S ] [ -v ] [ -h ]
 
-    ${NORMAL}${CYAN}Description: processes a video with a neural network (NCNN/Vulkan) tool, in 60-second chunks:
-            1. converts MP4 to MKV when needed, then splits it into chunks
+    ${NORMAL}${CYAN}Description: processes a video with a neural network (NCNN/Vulkan) tool, in chunks of about 60 seconds:
+            1. converts MP4 to MKV when needed, then splits it into chunks at keyframes starting
+               a closed GOP (50-70 s), so no frame is lost at a split
                (a video of up to 90 seconds is not split: it is processed as one chunk, 001)
             2. tone-maps HDR to SDR when needed (unless -T)
             3. extracts audio/subtitle streams and video frames
@@ -434,6 +435,7 @@ joining_encoded_parts()
         rm -f -- "${MERGED_MARKER}"
       fi
     done
+    rm -f -- "${WHOLE_MOVIE_NAME_ARRAY[*]}_split_points.txt"
   fi
   }
 # no finished chunk is waiting for its statistics row yet
@@ -489,19 +491,35 @@ then
   detecting_crop "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
 fi
 
-if [ "${VIDEO_LENGTH}" -le "${NO_SPLIT_MAX_SEC}" ]
+SPLIT_TIMESTAMPS=""
+if [ "${VIDEO_LENGTH}" -gt "${NO_SPLIT_MAX_SEC}" ]
+then
+  # sets SPLIT_TIMESTAMPS: keyframes starting a closed GOP, so no frame is lost at a split
+  choosing_split_points "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
+  if [ -z "${SPLIT_TIMESTAMPS}" ]
+  then
+    warn "  no keyframe to split ${YELLOW}${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv${YELLOW} at, so it is processed as one chunk"
+  fi
+fi
+# -r continues only chunks split at the same points; the points are saved for the next -r
+checking_split_points_file
+
+if [ -z "${SPLIT_TIMESTAMPS}" ]
 then
   # mkvmerge without --split copies the whole video into chunk 001 and writes the same
   # log lines as a split, so the chunk loop below works unchanged; after the loop the
   # results are renamed from video_part_minute_001 to the input name
   WHOLE_VIDEO_IN_ONE_CHUNK="yes"
-  inf "  video is ${YELLOW}${VIDEO_LENGTH}s${CYAN} long (<= ${NO_SPLIT_MAX_SEC}s), so it is processed as one chunk, without splitting"
+  if [ "${VIDEO_LENGTH}" -le "${NO_SPLIT_MAX_SEC}" ]
+  then
+    inf "  video is ${YELLOW}${VIDEO_LENGTH}s${CYAN} long (<= ${NO_SPLIT_MAX_SEC}s), so it is processed as one chunk, without splitting"
+  fi
   mkvmerge -o "video_part_minute_001.mkv" "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
   mkvtoolnix_status "$?" "copying the video into one chunk" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log"
 else
   WHOLE_VIDEO_IN_ONE_CHUNK="no"
-  mkvmerge -o "video_part_minute_%03d.mkv" --split ${SPLIT_TIME_SEC}s "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
-  mkvtoolnix_status "$?" "splitting video into ${SPLIT_TIME_SEC}s chunks" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log"
+  mkvmerge -o "video_part_minute_%03d.mkv" --split "timestamps:${SPLIT_TIMESTAMPS}" "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" 2>&1
+  mkvtoolnix_status "$?" "splitting video into chunks of about ${SPLIT_TIME_SEC}s" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log"
 fi
 LAST_VIDEO_FRAGMENT_ID=$(grep "video_part_minute_" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" | tail -n1 | sed "s/\.mkv.*$//g;s/^.*_minute_//g")
 if [[ ! ${LAST_VIDEO_FRAGMENT_ID} =~ ^[0-9]{3}$ ]]

@@ -3,7 +3,7 @@
 This repository contains two Bash utilities for working with Matroska video:
 
 - `movies_encoding` collects and updates movie metadata, and can start an AV1 encode.
-- `interpolation_nncn` splits a video into one-minute chunks (a video of up to 90 seconds is processed as one chunk), processes the chunks with an NCNN/Vulkan image-processing tool, and merges each chunk's video with its audio and subtitle streams. Audio and subtitle tracks in Polish, Dutch, or English are extracted with `mkvmerge`, keeping their original language tags; if a chunk has audio but none in these languages, all its audio tracks are taken. Audio and subtitles are optional: a chunk without them is still processed, with a warning, and merged without them.
+- `interpolation_nncn` splits a video into chunks of about one minute, at closed-GOP keyframes (a video of up to 90 seconds is processed as one chunk), processes the chunks with an NCNN/Vulkan image-processing tool, and merges each chunk's video with its audio and subtitle streams. Audio and subtitle tracks in Polish, Dutch, or English are extracted with `mkvmerge`, keeping their original language tags; if a chunk has audio but none in these languages, all its audio tracks are taken. Audio and subtitles are optional: a chunk without them is still processed, with a warning, and merged without them.
 
 Both scripts load shared functions from `.config` (which loads `.config_colours` and `.config_video`) and use `.var_management` to create working, temporary, and log directories. Run the scripts from a working directory where you have space for the input, intermediate files, and outputs.
 
@@ -152,7 +152,7 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 | `-v` | — | Enable verbose diagnostics. |
 | `-h` | — | Print usage information. |
 
-The script divides input into 60-second MKV chunks in the current working directory. A video of up to 90 seconds (`NO_SPLIT_MAX_SEC`) is not split: it is copied unchanged into one chunk, `video_part_minute_001.mkv`, and processed in one go; `-r`, `-Q`, and the statistics work the same way. It processes chunks from the selected start number, retains per-chunk merged outputs, and removes intermediate chunk data as it completes. Without `-E` the script does **not** create one combined output video. To join the merged parts yourself, use mkvmerge with `--append-mode track`:
+The script divides input into MKV chunks of about 60 seconds (`SPLIT_TIME_SEC`) in the current working directory, see [Split points](#split-points). A video of up to 90 seconds (`NO_SPLIT_MAX_SEC`) is not split: it is copied unchanged into one chunk, `video_part_minute_001.mkv`, and processed in one go; `-r`, `-Q`, and the statistics work the same way. It processes chunks from the selected start number, retains per-chunk merged outputs, and removes intermediate chunk data as it completes. Without `-E` the script does **not** create one combined output video. To join the merged parts yourself, use mkvmerge with `--append-mode track`:
 
 ```bash
 mkvmerge --append-mode track -o joined.mkv video_part_minute_001_rife_50_merged.mkv \
@@ -160,6 +160,14 @@ mkvmerge --append-mode track -o joined.mkv video_part_minute_001_rife_50_merged.
 ```
 
 Without it, mkvmerge starts each part after the longest track of the previous one. A subtitle line that crosses the 60 s split keeps its full length (e.g. until 64 s), so audio and video get a gap at that join, and an encoder later shows a frozen picture there. After each chunk, a `~`-separated row is appended to `TMP/statistics.txt` with stage runtimes, peak space use, the VMAF mean (with `-Q`), and the total chunk runtime. With `-Q` or `-E` a chunk's row is written once its VMAF and encode are done, so after the next chunk; `encoding_runtime` is the HandBrake encode of the part (`-E`), `quality_check_runtime` is VMAF's own runtime, and `runtime` no longer includes it, because VMAF runs alongside the next chunk. Tone mapping has no column of its own: it is part of the frame extraction, so its time is included in `extracting_frames_runtime`. (Files from older versions have an extra second column, `tone_mapping_runtime`, and no `encoding_runtime` column.)
+
+### Split points
+
+- Splits are made at closed-GOP keyframes, so every chunk decodes on its own and no frame is lost. An open-GOP keyframe (HEVC CRA, for example) has frames before it in display order that need the previous chunk; with a plain 60 s split those frames were lost and NCNN crashed (see item 10 in [Performance optimization](#performance-optimization)).
+- For each split the script takes the closed-GOP keyframe nearest to 60 s after the previous split, within ±`SPLIT_KEYFRAME_WINDOW_SEC` (default 10), so chunks are 50–70 s long. If there is none, it uses the first keyframe after 60 s and warns that up to a few frames at the start of that chunk may be lost. The points are listed in `LOG/<movie>_split_points.log` (`pts closed|open`).
+- Each chunk's frame count is the number of decoded frames, not packets, so the count always matches the extracted frames.
+- If a chunk still starts with lost frames, its processed video is placed at the time of its first decoded frame (`mkvmerge --sync`), so picture and sound stay in sync. This also fixes a source whose video does not start at 0 (for example 83 ms), which before led the sound by that much.
+- The chosen points are saved in `<movie>_split_points.txt` in the current directory. With `-r`, or `-s` other than `001`, the run stops with exit 2 if the existing chunks were split at other points, or by an older version (chunks marked `.done` but no points file). Then start the movie again without `-r`/`-s`. Without `-k` the file is removed after the `-E` join.
 
 ### Final encode of each part (`-E`)
 
@@ -384,6 +392,12 @@ Peak space use per chunk was 30–37 GB of PNG frames.
    - B can run in the background alongside the next chunk, so its encode time is hidden; A has to wait for the last chunk.
    - B needs one crop for all parts: HandBrake's auto-crop gave 3840×1596 for one part and 2992×1600 for another. One scan of the whole source takes ~6 s.
    - Audio: the source parts have a 16 ms gap at each join; B keeps them (as the merged parts do), A closed them (80 ms early by the end of 5 minutes).
+10. **Split at closed-GOP keyframes.** "Edge of Tomorrow" (HEVC 1080p) crashed NCNN (exit 139, segfault) at 99% of chunk 005, also with `-r` and `-s 005`.
+    - The 60 s split fell on an open-GOP keyframe (CRA). The 3 frames before it in display order need the previous chunk to decode, so chunk 005 had 1522 packets but only 1519 decodable frames.
+    - The frame count came from packets (`-c copy`), so 3 placeholder PNGs stayed empty and NCNN crashed reading them. Without the crash, 3 frames (125 ms) would be lost and the picture would lead the sound by 125 ms.
+    - In the whole movie, plain 60 s splits hit 25 open keyframes of 107; the closed-GOP choice hits 6 of 113 (4 in the end credits, where every keyframe is open), with chunks of 50.9–69.5 s.
+    - Checked: 6 chunks cut at the chosen points have packets = decoded frames, 8460 in total, the same as the source.
+    - Cost: the packet scan of the 7.8 GB source takes ~3 s; counting decoded frames takes ~2 s per 1080p chunk and ~8 s per 4K HDR chunk.
 
 ### Codec benchmark
 

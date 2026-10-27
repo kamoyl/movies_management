@@ -799,7 +799,7 @@ merging_streams_mkv()
   fi
   start_time_collecting
   # audio and subtitles are optional, so each is added only when it was extracted
-  local MERGE_INPUTS=(--language 0:und "${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv")
+  local MERGE_INPUTS=(--language 0:und --sync "0:${VIDEO_START_MS:-0}" "${VIDEO_OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv")
   local MERGE_STEP="merging video"
   if [[ ${AUDIO_EXTRACTED} == yes ]]
   then
@@ -838,7 +838,9 @@ interpolation_video_file()
   WAITED_PIDS=""
   inf "  preparation of ${YELLOW}${MOVIE_NAME_ARRAY[*]}${CYAN} (video data analysing)"
   inf "   counting frames of ${YELLOW}${MOVIE_NAME_ARRAY[*]}"
-  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${MOVIE_NAME_ARRAY[*]}.mkv" -map 0:v:0 -c copy -f null - | grep "frame=" | sed "s/frame=//g" | tail -n1 > "${LOG}/${MOVIE_NAME_ARRAY[*]}_frames_count.log" 2>&1 & echo "$!" > "${TMP}/${MOVIE_NAME_ARRAY[*]}_frames_count.pid"
+  # decoded, not copied: a chunk split at an open-GOP keyframe has leading packets that cannot be
+  # decoded without the previous chunk; counted packets would give NCNN empty placeholder frames
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${MOVIE_NAME_ARRAY[*]}.mkv" -map 0:v:0 -f null - | grep "frame=" | sed "s/frame=//g" | tail -n1 > "${LOG}/${MOVIE_NAME_ARRAY[*]}_frames_count.log" 2>&1 & echo "$!" > "${TMP}/${MOVIE_NAME_ARRAY[*]}_frames_count.pid"
   inf "    analysing video metadata"
   if ! ffprobe -v quiet -print_format json -show_format -show_streams "${MOVIE_NAME_ARRAY[*]}.mkv" > "${TMP}/${MOVIE_NAME_ARRAY[*]}_ffprobe.json" 2>"${LOG}/${MOVIE_NAME_ARRAY[*]}_ffprobe.log"
   then
@@ -893,6 +895,18 @@ interpolation_video_file()
   then
     require_output "${TMP}/${MOVIE_NAME_ARRAY[*]}.mka" "audio extraction" "${LOG}/${MOVIE_NAME_ARRAY[*]}_extract_sound.log"
   fi
+  # time of the first decoded frame: audio and subtitles keep their timestamps, while the video
+  # made from frames starts at 0, so merging_streams_mkv delays it by this much to keep them in sync
+  # (non-zero for a video starting late, or for a chunk whose leading frames could not be decoded)
+  local VIDEO_START_SEC
+  VIDEO_START_SEC="$(ffprobe -v error -select_streams v:0 -show_entries frame=best_effort_timestamp_time -read_intervals "%+5" -of csv=p=0 "${MOVIE_NAME_ARRAY[*]}.mkv" 2>/dev/null | head -n1 | cut -d, -f1)"
+  if [[ ! ${VIDEO_START_SEC} =~ ^-?[0-9]+(\.[0-9]+)?$ ]]
+  then
+    error "  could not read the time of the first frame of ${YELLOW}${MOVIE_NAME_ARRAY[*]}.mkv${RED} (got: '${VIDEO_START_SEC}')"
+    ERROR_CODE="1"
+    failed
+  fi
+  VIDEO_START_MS="$(LC_ALL=C awk -v s="${VIDEO_START_SEC}" 'BEGIN { printf "%d", (s < 0 ? s * 1000 - 0.5 : s * 1000 + 0.5) }')"
   INPUT_FRAMES_LEADING=$(printf "%08d\n" ${INPUT_FRAMES_COUNT})
   INPUT_FPS=$(ffprobe -select_streams v -show_streams "${MOVIE_NAME_ARRAY[*]}.mkv" |& grep -i fps | awk -F"fps" '{print $1}' | awk -F\, '{print $NF}' | sed "s/[[:space:]]\+//g")
   if [[ ! ${INPUT_FPS} =~ ^[0-9]+(\.[0-9]+)?$ ]]
@@ -985,6 +999,7 @@ interpolation_video_file()
   debug "      INPUT_FRAMES_COUNT=${GOLD}${INPUT_FRAMES_COUNT}${DODGERBLUE1} (last file: ${MAROON1}${INPUT_FRAMES_LEADING}.png${DODGERBLUE1}), (max_space for extracted frames: ${MAROON1}${INPUT_FRAMES_MAX_TSPACE} [GB]${DODGERBLUE1}, bit depth ${MAGENTA1}${FRAME_BIT_DEPTH} [bit/channel]${DODGERBLUE1})"
   debug "      INTER_FRAMES_COUNT=${AQUAMARINE}${INTER_FRAMES_COUNT}${DODGERBLUE1} (last file: ${CORAL1}${INPUT_FRAMES_INTER_LEADING}.png${DODGERBLUE1}), (max_space for interpolated frames: ${CORAL1}${INTER_FRAMES_MAX_TSPACE} [GB]${DODGERBLUE1})"
   debug "        INPUT_FPS=${ROYALBLUE2}${INPUT_FPS}"
+  debug "        VIDEO_START_MS=${ROYALBLUE2}${VIDEO_START_MS}${DODGERBLUE1} (first frame; the processed video is delayed the same)"
   debug "        OUTPUT_FPS=${SLATEBLUE1}${OUTPUT_FPS}${DODGERBLUE1} (OUTPUT_FPS_ROUND=${LIGHTSEAGREEN}${OUTPUT_FPS_ROUND})"
   debug "         TARGET_FRAME_COUNT=${LAWNGREEN}${TARGET_FRAME_COUNT}"
   debug "          MAX_TSPACE=${DEEPSKYBLUE2}${MAX_TSPACE} [GB]"
@@ -1655,6 +1670,103 @@ detecting_crop()
     failed
   fi
   inf "  crop for the final encode of every part (top:bottom:left:right): ${YELLOW}${HANDBRAKE_CROP}"
+  }
+
+# Split points of interpolation_nncn: the keyframe nearest to every SPLIT_TIME_SEC (after the
+# previous split) within +-SPLIT_KEYFRAME_WINDOW_SEC that starts a closed GOP. At an open-GOP
+# keyframe the frames shown just before it are stored after it and need the previous chunk to be
+# decoded, so a split there loses them (in Edge of Tomorrow 3 frames, 125 ms). When there is no
+# closed-GOP keyframe in the window, the first keyframe after SPLIT_TIME_SEC is used (as mkvmerge
+# --split would) and a warning is shown; the lost frames then only shift that chunk's video, which
+# merging_streams_mkv corrects (VIDEO_START_MS).
+# Sets SPLIT_TIMESTAMPS ("60.935s,118.993s,..."; empty when there is nothing to split at).
+choosing_split_points()
+{
+  local VIDEO_FILE="${1}"
+  local PACKETS_FILE="${TMP}/${VIDEO_FILE%.mkv}_video_packets.csv"
+  local SPLIT_POINTS_LOG="${LOG}/${VIDEO_FILE%.mkv}_split_points.log"
+  inf "  choosing split points (keyframes starting a closed GOP, about every ${SPLIT_TIME_SEC}s)"
+  if ! ffprobe -v error -select_streams v:0 -show_entries packet=pts_time,flags -of csv=p=0 "${VIDEO_FILE}" > "${PACKETS_FILE}" 2> "${SPLIT_POINTS_LOG}"
+  then
+    error "  reading the video packets of ${YELLOW}${VIDEO_FILE}${RED} failed (see log: ${SPLIT_POINTS_LOG})"
+    ERROR_CODE="1"
+    failed
+  fi
+  # packets come in decode order; a keyframe is open-GOP when a packet after it, before the next
+  # keyframe, is shown earlier than the keyframe itself
+  LC_ALL=C awk -F, -v split_sec="${SPLIT_TIME_SEC}" -v window="${SPLIT_KEYFRAME_WINDOW_SEC:-10}" '
+    function add_keyframe() { if (kf_pts != "") { n++; KPTS[n] = kf_pts; KOPEN[n] = kf_open } }
+    $1 == "N/A" { next }
+    {
+      if ($2 ~ /K/) { add_keyframe(); kf_pts = $1 + 0; kf_open = 0 }
+      else if (kf_pts != "" && $1 + 0 < kf_pts) { kf_open = 1 }
+    }
+    END {
+      add_keyframe()
+      if (n == 0) { exit }
+      prev = KPTS[1]; first = 2
+      while (1) {
+        target = prev + split_sec; pick = 0; plain = 0; best = window + 1
+        while (first <= n && KPTS[first] <= prev) { first++ }
+        for (j = first; j <= n && KPTS[j] <= target + window; j++) {
+          if (!plain && KPTS[j] >= target) { plain = j }
+          d = KPTS[j] - target; if (d < 0) { d = -d }
+          if (!KOPEN[j] && d <= window && d < best) { best = d; pick = j }
+        }
+        if (!plain) { for (j = first; j <= n; j++) { if (KPTS[j] >= target) { plain = j; break } } }
+        if (!pick && !plain) { break }
+        if (pick) { printf "%.3f closed\n", KPTS[pick]; prev = KPTS[pick] }
+        else { printf "%.3f open\n", KPTS[plain]; prev = KPTS[plain] }
+      }
+    }' "${PACKETS_FILE}" > "${SPLIT_POINTS_LOG}"
+  SPLIT_TIMESTAMPS="$(awk '{ printf "%s%ss", (NR > 1 ? "," : ""), $1 }' "${SPLIT_POINTS_LOG}")"
+  local SPLIT_POINT
+  local SPLIT_STATE
+  while read -r SPLIT_POINT SPLIT_STATE
+  do
+    if [[ ${SPLIT_STATE} == open ]]
+    then
+      warn "  no closed-GOP keyframe within ${SPLIT_KEYFRAME_WINDOW_SEC:-10}s of the split at ${SPLIT_POINT}s: frames shown just before it are lost (the sync is kept)"
+    fi
+  done < "${SPLIT_POINTS_LOG}"
+  if [[ ${VERBOSE} == yes ]]
+  then
+    debug "    split points [s]: $(tr '\n' ' ' < "${SPLIT_POINTS_LOG}") (log: ${SPLIT_POINTS_LOG})"
+  fi
+  }
+
+# -r/-s may continue only with chunks split at the same points (an older version split at plain
+# 60 s keyframes). The points are kept in "<movie>_split_points.txt" next to the chunks.
+checking_split_points_file()
+{
+  local SPLIT_POINTS_FILE="${WHOLE_MOVIE_NAME_ARRAY[*]}_split_points.txt"
+  local NEW_SPLIT_POINTS="${SPLIT_TIMESTAMPS:-none}"
+  local MARKER
+  # -s also continues an earlier run: its chunks before -s are joined with the new ones
+  if [[ ${RESUME} == yes ]] || [[ ${SPLIT_PART_START:-001} != 001 ]]
+  then
+    if [ -e "${SPLIT_POINTS_FILE}" ]
+    then
+      if [[ "$(cat "${SPLIT_POINTS_FILE}")" != "${NEW_SPLIT_POINTS}" ]]
+      then
+        error "  the finished chunks were split at other points (see ${SPLIT_POINTS_FILE}), so -r/-s cannot continue them; start again without -r/-s"
+        ERROR_CODE="2"
+        failed
+      fi
+    elif [ -n "${SPLIT_TIMESTAMPS}" ]
+    then
+      for MARKER in video_part_minute_*.done
+      do
+        if [ -e "${MARKER}" ] && [[ "$(cat "${MARKER}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
+        then
+          error "  the finished chunks (${MARKER%.done}) were made by an older version with other split points, so -r/-s cannot continue them; start again without -r/-s"
+          ERROR_CODE="2"
+          failed
+        fi
+      done
+    fi
+  fi
+  echo "${NEW_SPLIT_POINTS}" > "${SPLIT_POINTS_FILE}"
   }
 
 # Final encode of a processed part (interpolation_nncn -E) runs in two steps, like VMAF, so it

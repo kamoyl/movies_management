@@ -234,6 +234,41 @@ LINE_FINISH="$(grep -n '^finishing_previous_chunk$' "${REPO_ROOT}/interpolation_
 LINE_RENAME="$(grep -n 'an unsplit video was processed as chunk 001' "${REPO_ROOT}/interpolation_nncn" | cut -d: -f1)"
 if [ -n "${LINE_FINISH}" ] && [ -n "${LINE_RENAME}" ] && [ "${LINE_FINISH}" -lt "${LINE_RENAME}" ]; then pass "last VMAF is waited for before results are renamed"; else fail "last VMAF is waited for before results are renamed"; fi
 
+echo "split points at closed-GOP keyframes (ffprobe replaced by a fake packet list)"
+mkdir -p "${WORK_DIR}/splitbin"
+cat > "${WORK_DIR}/splitbin/ffprobe" <<'EOF'
+#!/usr/bin/env bash
+# fake ffprobe: video packets in decode order (pts_time,flags) from packets.csv
+cat packets.csv
+EOF
+chmod +x "${WORK_DIR}/splitbin/ffprobe"
+# keyframes: 56 closed, 60 open (59.9 shown before it), 62 closed; around 122 only open ones
+SPLIT_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; SPLIT_TIME_SEC=60
+printf "%s\n" 0.000,K__ 0.100,___ N/A,___ 56.000,K__ 56.100,___ 60.000,K__ 59.900,___ 62.000,K__ 62.100,___ 118.000,K__ 117.900,___ 122.000,K__ 121.900,___ 126.000,K__ 125.900,___ 140.000,K__ 139.900,___ 150.000,___ > packets.csv'
+OUTPUT="$(PATH="${WORK_DIR}/splitbin:${PATH}" run_with_helpers "${SPLIT_SETUP}"'; choosing_split_points film.mkv; echo "POINTS=${SPLIT_TIMESTAMPS}"' 2>&1)"
+assert_contains "the closed-GOP keyframe nearest to 60 s is chosen, not the open one" "${OUTPUT}" "POINTS=62.000s,122.000s"
+assert_contains "without a closed-GOP keyframe nearby, the split warns" "${OUTPUT}" "of the split at 122.000s"
+OUTPUT="$(PATH="${WORK_DIR}/splitbin:${PATH}" run_with_helpers "${SPLIT_SETUP}"'; printf "%s\n" 0.000,K__ 30.000,___ 95.000,___ > packets.csv; choosing_split_points film.mkv; echo "POINTS=[${SPLIT_TIMESTAMPS}]"' 2>&1)"
+assert_contains "no keyframe after 60 s: nothing to split at" "${OUTPUT}" "POINTS=[]"
+GUARD_SETUP='WHOLE_MOVIE_NAME_ARRAY=(Film); SPLIT_TIMESTAMPS="62.000s"; SPLIT_PART_START=001; rm -f Film_split_points.txt video_part_minute_*.done'
+run_with_helpers "${GUARD_SETUP}"'; RESUME=yes; echo "60.000s" > Film_split_points.txt; checking_split_points_file' > /dev/null 2>&1
+assert_status "-r with chunks split at other points stops with 2" 2 $?
+run_with_helpers "${GUARD_SETUP}"'; RESUME=no; SPLIT_PART_START=005; echo Film > video_part_minute_001_rife_48_merged.mkv.done; checking_split_points_file' > /dev/null 2>&1
+assert_status "-s with chunks of an older version (no points file) stops with 2" 2 $?
+OUTPUT="$(run_with_helpers "${GUARD_SETUP}"'; RESUME=yes; echo "62.000s" > Film_split_points.txt; checking_split_points_file; echo "SAME=ok"; RESUME=no; echo Film > video_part_minute_001_rife_48_merged.mkv.done; SPLIT_TIMESTAMPS="70.000s"; checking_split_points_file; echo "SAVED=$(cat Film_split_points.txt)"' 2>&1)"
+assert_contains "-r with the same split points continues" "${OUTPUT}" "SAME=ok"
+assert_contains "a new run saves its split points" "${OUTPUT}" "SAVED=70.000s"
+
+echo "merging_streams_mkv keeps the video in sync (mkvmerge replaced by a fake)"
+mkdir -p "${WORK_DIR}/mkvbin"
+cat > "${WORK_DIR}/mkvbin/mkvmerge" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > mkvmerge_args.txt
+EOF
+chmod +x "${WORK_DIR}/mkvbin/mkvmerge"
+OUTPUT="$(PATH="${WORK_DIR}/mkvbin:${PATH}" run_with_helpers 'TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; NCNN_METHOD=rife; OUTPUT_FPS_ROUND=48; AUDIO_EXTRACTED=yes; VIDEO_START_MS=126; merging_streams_mkv c in out; tr "\n" " " < mkvmerge_args.txt' 2>&1)"
+assert_contains "the processed video starts at the time of the first decoded frame" "${OUTPUT}" "--language 0:und --sync 0:126 out/c_rife_48.mkv in/c.mka"
+
 echo "final encode of each part (-E; HandBrakeCLI and ffprobe replaced by fakes)"
 mkdir -p "${WORK_DIR}/hbbin"
 cat > "${WORK_DIR}/hbbin/HandBrakeCLI" <<'EOF'
