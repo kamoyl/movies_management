@@ -21,3 +21,6 @@ statistics.txt
 tmp/
 *.swp
 var/
+# local symlinks to work and download volumes
+/var
+/download
