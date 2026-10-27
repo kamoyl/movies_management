@@ -440,8 +440,9 @@ Decision: lossless x264 `ultrafast` is the default because it is the fastest and
 3. **Smaller items:**
    - replace fixed sleeps (`sleep 5` in extraction, `sleep 10` in the chunk loop, other 1–3 s sleeps) with event-based waits;
    - lower the PNG `-compression_level` (faster writes, larger files);
-   - frames on tmpfs (RAM disk, `huge=always`) once peak space use is low enough for 64 GB RAM;
    - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item).
+
+Dropped after measuring: **frames on tmpfs.** An 83 s 1080p clip (one chunk, `x264_crf10`), run twice with `-o`/`-O` on NVMe and twice on `/dev/shm`, took 115.6–115.7 s in every run (stages: extraction 21.1 s, NCNN 85.7–87.7 s, frame merge 17.7–18.2 s). PNG writing and reading are CPU work and NVMe keeps up, so RAM adds nothing; a 4K chunk (30–37 GB) would not fit anyway.
 
 ### How to measure
 
