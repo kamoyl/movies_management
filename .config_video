@@ -840,7 +840,7 @@ interpolation_video_file()
   inf "   counting frames of ${YELLOW}${MOVIE_NAME_ARRAY[*]}"
   # decoded, not copied: a chunk split at an open-GOP keyframe has leading packets that cannot be
   # decoded without the previous chunk; counted packets would give NCNN empty placeholder frames
-  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${MOVIE_NAME_ARRAY[*]}.mkv" -map 0:v:0 -f null - | grep "frame=" | sed "s/frame=//g" | tail -n1 > "${LOG}/${MOVIE_NAME_ARRAY[*]}_frames_count.log" 2>&1 & echo "$!" > "${TMP}/${MOVIE_NAME_ARRAY[*]}_frames_count.pid"
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${MOVIE_NAME_ARRAY[*]}.mkv" -map 0:v:0 -f null - 2> "${LOG}/${MOVIE_NAME_ARRAY[*]}_frames_count_decoding.log" | grep "frame=" | sed "s/frame=//g" | tail -n1 > "${LOG}/${MOVIE_NAME_ARRAY[*]}_frames_count.log" 2>&1 & echo "$!" > "${TMP}/${MOVIE_NAME_ARRAY[*]}_frames_count.pid"
   inf "    analysing video metadata"
   if ! ffprobe -v quiet -print_format json -show_format -show_streams "${MOVIE_NAME_ARRAY[*]}.mkv" > "${TMP}/${MOVIE_NAME_ARRAY[*]}_ffprobe.json" 2>"${LOG}/${MOVIE_NAME_ARRAY[*]}_ffprobe.log"
   then
@@ -899,7 +899,7 @@ interpolation_video_file()
   # made from frames starts at 0, so merging_streams_mkv delays it by this much to keep them in sync
   # (non-zero for a video starting late, or for a chunk whose leading frames could not be decoded)
   local VIDEO_START_SEC
-  VIDEO_START_SEC="$(ffprobe -v error -select_streams v:0 -show_entries frame=best_effort_timestamp_time -read_intervals "%+5" -of csv=p=0 "${MOVIE_NAME_ARRAY[*]}.mkv" 2>/dev/null | head -n1 | cut -d, -f1)"
+  VIDEO_START_SEC="$(ffprobe -v error -select_streams v:0 -show_entries frame=best_effort_timestamp_time -of csv=p=0 "${MOVIE_NAME_ARRAY[*]}.mkv" 2>/dev/null | head -n1 | cut -d, -f1)"
   if [[ ! ${VIDEO_START_SEC} =~ ^-?[0-9]+(\.[0-9]+)?$ ]]
   then
     error "  could not read the time of the first frame of ${YELLOW}${MOVIE_NAME_ARRAY[*]}.mkv${RED} (got: '${VIDEO_START_SEC}')"
@@ -1692,13 +1692,31 @@ choosing_split_points()
     ERROR_CODE="1"
     failed
   fi
+  # a container may flag ordinary frames as keyframes (Edge of Tomorrow: 239 of 1948, HEVC
+  # TRAIL_R); a chunk starting there cannot be decoded until the next real one, so only the
+  # keyframes the decoder itself decodes with -skip_frame nokey count (~23 s for a 2 h 1080p movie)
+  local KEYFRAMES_FILE="${TMP}/${VIDEO_FILE%.mkv}_decoded_keyframes.csv"
+  local KEYFRAMES_LOG="${LOG}/${VIDEO_FILE%.mkv}_decoded_keyframes.log"
+  if ! ffprobe -v error -skip_frame nokey -select_streams v:0 -show_entries frame=pts_time -of csv=p=0 "${VIDEO_FILE}" > "${KEYFRAMES_FILE}" 2> "${KEYFRAMES_LOG}"
+  then
+    error "  decoding the keyframes of ${YELLOW}${VIDEO_FILE}${RED} failed (see log: ${KEYFRAMES_LOG})"
+    ERROR_CODE="1"
+    failed
+  fi
+  if ! grep -q '^[0-9]' "${KEYFRAMES_FILE}"
+  then
+    error "  no decodable keyframe found in ${YELLOW}${VIDEO_FILE}${RED} (see log: ${KEYFRAMES_LOG})"
+    ERROR_CODE="1"
+    failed
+  fi
   # packets come in decode order; a keyframe is open-GOP when a packet after it, before the next
   # keyframe, is shown earlier than the keyframe itself
   LC_ALL=C awk -F, -v split_sec="${SPLIT_TIME_SEC}" -v window="${SPLIT_KEYFRAME_WINDOW_SEC:-10}" '
     function add_keyframe() { if (kf_pts != "") { n++; KPTS[n] = kf_pts; KOPEN[n] = kf_open } }
+    FNR == NR { if ($1 ~ /^[0-9]/) { DECODED[sprintf("%.3f", $1)] = 1 }; next }
     $1 == "N/A" { next }
     {
-      if ($2 ~ /K/) { add_keyframe(); kf_pts = $1 + 0; kf_open = 0 }
+      if ($2 ~ /K/ && (sprintf("%.3f", $1) in DECODED)) { add_keyframe(); kf_pts = $1 + 0; kf_open = 0 }
       else if (kf_pts != "" && $1 + 0 < kf_pts) { kf_open = 1 }
     }
     END {
@@ -1718,7 +1736,7 @@ choosing_split_points()
         if (pick) { printf "%.3f closed\n", KPTS[pick]; prev = KPTS[pick] }
         else { printf "%.3f open\n", KPTS[plain]; prev = KPTS[plain] }
       }
-    }' "${PACKETS_FILE}" > "${SPLIT_POINTS_LOG}"
+    }' "${KEYFRAMES_FILE}" "${PACKETS_FILE}" > "${SPLIT_POINTS_LOG}"
   SPLIT_TIMESTAMPS="$(awk '{ printf "%s%ss", (NR > 1 ? "," : ""), $1 }' "${SPLIT_POINTS_LOG}")"
   local SPLIT_POINT
   local SPLIT_STATE

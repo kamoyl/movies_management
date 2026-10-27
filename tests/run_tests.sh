@@ -238,8 +238,19 @@ echo "split points at closed-GOP keyframes (ffprobe replaced by a fake packet li
 mkdir -p "${WORK_DIR}/splitbin"
 cat > "${WORK_DIR}/splitbin/ffprobe" <<'EOF'
 #!/usr/bin/env bash
-# fake ffprobe: video packets in decode order (pts_time,flags) from packets.csv
-cat packets.csv
+# fake ffprobe: keyframes the decoder decodes (-skip_frame nokey) from keyframes.csv,
+# otherwise video packets in decode order (pts_time,flags) from packets.csv
+if [[ " $* " == *" -skip_frame "* ]]
+then
+  if [ -f keyframes.csv ]
+  then
+    cat keyframes.csv
+  else
+    grep ",K" packets.csv | cut -d, -f1
+  fi
+else
+  cat packets.csv
+fi
 EOF
 chmod +x "${WORK_DIR}/splitbin/ffprobe"
 # keyframes: 56 closed, 60 open (59.9 shown before it), 62 closed; around 122 only open ones
@@ -250,6 +261,8 @@ assert_contains "the closed-GOP keyframe nearest to 60 s is chosen, not the open
 assert_contains "without a closed-GOP keyframe nearby, the split warns" "${OUTPUT}" "of the split at 122.000s"
 OUTPUT="$(PATH="${WORK_DIR}/splitbin:${PATH}" run_with_helpers "${SPLIT_SETUP}"'; printf "%s\n" 0.000,K__ 30.000,___ 95.000,___ > packets.csv; choosing_split_points film.mkv; echo "POINTS=[${SPLIT_TIMESTAMPS}]"' 2>&1)"
 assert_contains "no keyframe after 60 s: nothing to split at" "${OUTPUT}" "POINTS=[]"
+OUTPUT="$(PATH="${WORK_DIR}/splitbin:${PATH}" run_with_helpers "${SPLIT_SETUP}"'; printf "%s\n" 0.000 56.000 60.000 118.000 122.000 126.000 140.000 > keyframes.csv; choosing_split_points film.mkv; echo "POINTS=${SPLIT_TIMESTAMPS}"; rm keyframes.csv' 2>&1)"
+assert_contains "a keyframe flag on a frame the decoder cannot start from is ignored" "${OUTPUT}" "POINTS=56.000s,118.000s"
 GUARD_SETUP='WHOLE_MOVIE_NAME_ARRAY=(Film); SPLIT_TIMESTAMPS="62.000s"; SPLIT_PART_START=001; rm -f Film_split_points.txt video_part_minute_*.done'
 run_with_helpers "${GUARD_SETUP}"'; RESUME=yes; echo "60.000s" > Film_split_points.txt; checking_split_points_file' > /dev/null 2>&1
 assert_status "-r with chunks split at other points stops with 2" 2 $?

@@ -165,6 +165,7 @@ Without it, mkvmerge starts each part after the longest track of the previous on
 
 - Splits are made at closed-GOP keyframes, so every chunk decodes on its own and no frame is lost. An open-GOP keyframe (HEVC CRA, for example) has frames before it in display order that need the previous chunk; with a plain 60 s split those frames were lost and NCNN crashed (see item 10 in [Performance optimization](#performance-optimization)).
 - For each split the script takes the closed-GOP keyframe nearest to 60 s after the previous split, within ±`SPLIT_KEYFRAME_WINDOW_SEC` (default 10), so chunks are 50–70 s long. If there is none, it uses the first keyframe after 60 s and warns that up to a few frames at the start of that chunk may be lost. The points are listed in `LOG/<movie>_split_points.log` (`pts closed|open`).
+- Only keyframes the decoder can really start from count. A container may flag ordinary frames as keyframes (Edge of Tomorrow: 239 of 1948 flags, HEVC `TRAIL_R` frames), so the script decodes only the keyframes of the whole video (`ffprobe -skip_frame nokey`, ~22 s for a 2-hour 1080p movie, log `LOG/<movie>_decoded_keyframes.log`) and ignores every other keyframe flag.
 - Each chunk's frame count is the number of decoded frames, not packets, so the count always matches the extracted frames.
 - If a chunk still starts with lost frames, its processed video is placed at the time of its first decoded frame (`mkvmerge --sync`), so picture and sound stay in sync. This also fixes a source whose video does not start at 0 (for example 83 ms), which before led the sound by that much.
 - The chosen points are saved in `<movie>_split_points.txt` in the current directory. With `-r`, or `-s` other than `001`, the run stops with exit 2 if the existing chunks were split at other points, or by an older version (chunks marked `.done` but no points file). Then start the movie again without `-r`/`-s`. Without `-k` the file is removed after the `-E` join.
@@ -398,6 +399,8 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - In the whole movie, plain 60 s splits hit 25 open keyframes of 107; the closed-GOP choice hits 6 of 113 (4 in the end credits, where every keyframe is open), with chunks of 50.9–69.5 s.
     - Checked: 6 chunks cut at the chosen points have packets = decoded frames, 8460 in total, the same as the source.
     - Cost: the packet scan of the 7.8 GB source takes ~3 s; counting decoded frames takes ~2 s per 1080p chunk and ~8 s per 4K HDR chunk.
+    - The first full run then stopped at chunk 026 (exit 1): 239 of the 1948 keyframe flags in the source are on ordinary HEVC frames (`TRAIL_R`), and chunks 013 and 026 began at such a frame. Chunk 026 had 1433 packets but 1268 decodable frames (~7 s lost; 013 also lost frames but finished). Fix: only keyframes decoded by `-skip_frame nokey` count (22 s for the whole movie), and the time of a chunk's first decoded frame is read without the old 5 s limit.
+    - Checked on the whole movie: 114 chunks, 107 decode completely; the 7 after the 7 warned open splits lose 1–4 frames each (20 of 163264), which the decoded frame count and the sync offset handle.
 
 ### Codec benchmark
 
