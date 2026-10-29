@@ -314,19 +314,36 @@ cat > "${WORK_DIR}/hbbin/ffprobe" <<'EOF'
 #!/usr/bin/env bash
 printf '{"streams":[{"index":0,"codec_type":"video"},{"index":1,"codec_type":"audio","tags":{"language":"eng"}},{"index":2,"codec_type":"subtitle","tags":{"language":"pol"}}]}\n'
 EOF
-chmod +x "${WORK_DIR}/hbbin/HandBrakeCLI" "${WORK_DIR}/hbbin/ffprobe"
-PART_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; rm -f "$LOG"/* *.done fail_hb; WHOLE_MOVIE_NAME_ARRAY=(My Movie); NCNN_METHOD=rife; KEEP_INTERMEDIATES=no; VERBOSE=yes; TARGET_FRAME_COUNT=2; INTER_FRAMES_COUNT=3000; INPUT_FPS=25; echo merged > p_merged.mkv; handbrake_encode_settings; HANDBRAKE_CROP=8:4:0:0'
+cat > "${WORK_DIR}/hbbin/mkvmerge" <<'EOF'
+#!/usr/bin/env bash
+# fake mkvmerge: records its arguments and writes the -o file (fails with 2 when fail_mux exists)
+printf '%s\n' "$@" > mux_args.txt
+if [ -e fail_mux ]
+then
+  exit 2
+fi
+if [ "$1" = "-o" ]
+then
+  echo "fake muxed" > "$2"
+fi
+EOF
+chmod +x "${WORK_DIR}/hbbin/HandBrakeCLI" "${WORK_DIR}/hbbin/ffprobe" "${WORK_DIR}/hbbin/mkvmerge"
+PART_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; rm -f "$LOG"/* *.done fail_hb fail_mux; WHOLE_MOVIE_NAME_ARRAY=(My Movie); NCNN_METHOD=rife; KEEP_INTERMEDIATES=no; VERBOSE=yes; TARGET_FRAME_COUNT=2; INTER_FRAMES_COUNT=3000; INPUT_FPS=25; echo merged > p_merged.mkv; handbrake_encode_settings; HANDBRAKE_CROP=8:4:0:0'
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkdir -p "$LOG"; echo "8, 4, 0, 0" > crop.txt; detecting_crop whole.mkv; echo "CROP=${HANDBRAKE_CROP}"' 2>&1)"
 assert_contains "the crop is read from one scan of the whole video" "${OUTPUT}" "CROP=8:4:0:0"
 PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkdir -p "$LOG"; echo "" > crop.txt; detecting_crop whole.mkv' > /dev/null 2>&1
 assert_status "an unreadable crop stops the run with 1" 1 $?
-OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; S=$(date +%s); starting_part_encoding p_merged.mkv p_encoded.mkv ""; echo "RETURNED_AFTER=$(( $(date +%s) - S ))"; finishing_part_encoding; echo "DONE=$(cat p_encoded.mkv.done) RUNTIME=${ENCODING_RUNTIME} NICE=$(cat hb_nice.txt)"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; tr "\n" " " < hb_args.txt' 2>&1)"
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; S=$(date +%s); starting_part_encoding p_merged.mkv p_encoded.mkv ""; echo "RETURNED_AFTER=$(( $(date +%s) - S ))"; finishing_part_encoding; echo "DONE=$(cat p_encoded.mkv.done) RUNTIME=${ENCODING_RUNTIME} NICE=$(cat hb_nice.txt) CONTENT=$(cat p_encoded.mkv)"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_encoded_video_only.mkv ]; then echo VIDEO_ONLY_KEPT; fi; tr "\n" " " < hb_args.txt; echo; echo "MUX: $(tr "\n" " " < mux_args.txt)"' 2>&1)"
 assert_contains "starting returns at once (the encode keeps running)" "${OUTPUT}" "RETURNED_AFTER=0"
 assert_contains "finishing marks the encoded part with the movie name" "${OUTPUT}" "DONE=My Movie RUNTIME=0s"
 assert_contains "the encode runs with lower priority (nice 10)" "${OUTPUT}" "NICE=10"
 assert_contains "every part gets the crop of the whole video" "${OUTPUT}" "--crop 8:4:0:0"
 assert_contains "the movies_encoding encoder settings are used" "${OUTPUT}" "--encoder svt_av1_10bit --quality 22"
-assert_contains "audio and subtitles are chosen from the part" "${OUTPUT}" "-E copy -a 1 --subtitle-lang-list eng,pol,dut --all-subtitles"
+assert_contains "HandBrake encodes the video only (no frames dropped for A/V sync)" "${OUTPUT}" "-o p_encoded_video_only.mkv"
+assert_contains "HandBrake gets no audio or subtitles" "${OUTPUT}" "--no-markers -a none -s none"
+assert_contains "mkvmerge copies the chosen audio and subtitles from the part" "${OUTPUT}" "MUX: -o p_encoded.mkv p_encoded_video_only.mkv -D --no-chapters --no-attachments --no-global-tags --audio-tracks 1 --subtitle-tracks 2 p_merged.mkv"
+assert_contains "the muxed file is the encoded part" "${OUTPUT}" "CONTENT=fake muxed"
+if [[ ${OUTPUT} == *VIDEO_ONLY_KEPT* ]]; then fail "the video-only encode is removed after muxing"; else pass "the video-only encode is removed after muxing"; fi
 if [[ ${OUTPUT} == *MERGED_KEPT* ]]; then fail "the merged part is removed after its encode"; else pass "the merged part is removed after its encode"; fi
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; KEEP_INTERMEDIATES=yes; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi' 2>&1)"
 assert_contains "-k keeps the merged part" "${OUTPUT}" "MERGED_KEPT"
@@ -336,6 +353,10 @@ assert_contains "a failed encode is reported with HandBrake's exit code" "${OUTP
 assert_contains "a failed encode keeps the merged part, VMAF is error" "${OUTPUT}" "MEAN=error"
 assert_contains "a failed encode keeps its merged part" "${OUTPUT}" "MERGED_KEPT"
 if [[ ${OUTPUT} == *MARKED* ]]; then fail "a failed encode is not marked as finished"; else pass "a failed encode is not marked as finished"; fi
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; touch fail_mux; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_encoded.mkv.done ]; then echo MARKED; fi' 2>&1)"
+assert_contains "a failed mux is reported with mkvmerge's exit code" "${OUTPUT}" "failed with exit code 2"
+assert_contains "a failed mux keeps its merged part" "${OUTPUT}" "MERGED_KEPT"
+if [[ ${OUTPUT} == *MARKED* ]]; then fail "a failed mux is not marked as finished"; else pass "a failed mux is not marked as finished"; fi
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${WORK_DIR}/vmafbin:${PATH}" run_with_helpers "${PART_SETUP}"'; QUALITY_METRIC_CHECK_PID=""; starting_part_encoding p_merged.mkv p_encoded.mkv o.mkv; finishing_part_encoding; finishing_quality_metric; echo "MEAN=${VMAF_MEAN}"; cat graph.txt' 2>&1)"
 assert_contains "-Q: VMAF of the encoded part follows its encode" "${OUTPUT}" "MEAN=95.5"
 assert_contains "-Q: the reference is cropped like the encode" "${OUTPUT}" "[1:v]crop=iw-0-0:ih-8-4:0:8,setpts="
@@ -425,6 +446,16 @@ assert_contains "pauses before anything is extracted" "${OUTPUT}" "START=T yes"
 
 echo "portability"
 if grep -n -- "ps --pid" "${REPO_ROOT}/.config_video" "${REPO_ROOT}/interpolation_nncn" "${REPO_ROOT}/movies_encoding" > /dev/null; then fail "no ps --pid (macOS ps has no --pid; use ps -p)"; else pass "no ps --pid (macOS ps has no --pid; use ps -p)"; fi
+
+echo "timeline.csv (steps with wall clock times, percent of their chunk)"
+OUTPUT="$(run_with_helpers 'TMP="$PWD/tl"; mkdir -p "$TMP"; echo "video_id~step~start~end~start_epoch~end_epoch~duration [s]~chunk [%]" > "$TMP/timeline.csv"; VIDEO_FRAGMENT_ID=007; START_TIME=1761742800.2500; END_TIME=1761742830.7500; timeline_entry interpolating; START_TIME=1761742800.0000; END_TIME=1761742861.0000; timeline_entry chunk; START_TIME=1761742861.0000; END_TIME=1761742891.5000; timeline_entry encoding; timeline_entry joining all; timeline_percentages; cat "$TMP/timeline.csv"' 2>&1)"
+if grep -Eq '^007~interpolating~[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:00\.2~[0-9-]{10} [0-9:]{8}\.7~' <<< "${OUTPUT}"; then pass "a step row has human start/end times to 0.1 s"; else fail "a step row has human start/end times to 0.1 s"; fi
+assert_contains "the duration is rounded to 0.1 s" "${OUTPUT}" "~1761742800.2500~1761742830.7500~30.5~"
+assert_contains "the percent of the chunk is filled in at the end" "${OUTPUT}" "~30.5~50.0"
+assert_contains "a background step is measured against its own chunk" "${OUTPUT}" "007~encoding~"
+assert_contains "the chunk row is 100 percent" "${OUTPUT}" "~61.0~100.0"
+assert_contains "a run-wide row has no percent" "${OUTPUT}" "all~joining~"
+if grep -q '^all~joining~.*~$' <<< "${OUTPUT}"; then pass "a run-wide row keeps the percent empty"; else fail "a run-wide row keeps the percent empty"; fi
 
 echo "joining parts"
 if grep -A3 '^appending_mkvs()' "${REPO_ROOT}/.config_video" | grep -q -- "mkvmerge --append-mode track"; then pass "parts are joined with --append-mode track (no gaps from long subtitles)"; else fail "parts are joined with --append-mode track (no gaps from long subtitles)"; fi

@@ -544,7 +544,8 @@ then
   done
 fi
 
-  echo "video_id~extracting_streams_runtime~extracting_frames_runtime~interpolating_runtime~merging_streams_runtime~merging_frames_runtime~encoding_runtime~quality_check_runtime~max_space [GB]~max_space [%]~VMAF [mean]~runtime" > "${TMP}/statistics.txt"
+  echo "video_id~extracting_streams_runtime~extracting_frames_runtime~interpolating_runtime~merging_frames_runtime~merging_streams_runtime~encoding_runtime~quality_check_runtime~max_space [GB]~max_space [%]~VMAF [mean]~runtime" > "${TMP}/statistics.txt"
+  echo "video_id~step~start~end~start_epoch~end_epoch~duration [s]~chunk [%]" > "${TMP}/timeline.csv"
   for VIDEO_FRAGMENT_ID in $(seq -w ${SPLIT_PART_START} ${LAST_VIDEO_FRAGMENT_ID})
   do
     start_time_collecting
@@ -645,6 +646,7 @@ fi
     START_TIME=${START_TIME_FRAGMENT_ID}
     end_time_collecting
     PART_VIDEO_RUNTIME=${RUNTIME}
+    timeline_entry chunk
     inf "    following video management took: ${DARKCYAN}${PART_VIDEO_RUNTIME}"
     inf "      extracting"
     if [ -s "${TMP}/EXTRACTING_STREAMS_RUNTIME" ]
@@ -685,7 +687,7 @@ fi
     fi
     # the statistics row is written by finishing_previous_chunk, once VMAF of this chunk is known
     PENDING_CHUNK_ID="${VIDEO_FRAGMENT_ID}"
-    PENDING_STATISTICS_BEFORE_VMAF="${VIDEO_FRAGMENT_ID}~${EXTRACTING_STREAMS_RUNTIME}~${EXTRACTING_FRAMES_RUNTIME}~${INTERPOLATING_FRAMES_RUNTIME}~${MERGING_STREAMS_RUNTIME}~${MERGING_FRAMES_RUNTIME}"
+    PENDING_STATISTICS_BEFORE_VMAF="${VIDEO_FRAGMENT_ID}~${EXTRACTING_STREAMS_RUNTIME}~${EXTRACTING_FRAMES_RUNTIME}~${INTERPOLATING_FRAMES_RUNTIME}~${MERGING_FRAMES_RUNTIME}~${MERGING_STREAMS_RUNTIME}"
     PENDING_STATISTICS_SPACE="${MAX_SPACE_TAKEN_OVERALL}~${MAX_SPACE_TAKEN_PERCENT}"
     PENDING_PART_RUNTIME="${PART_VIDEO_RUNTIME}"
     PENDING_STATISTICS_ROW="yes"
@@ -736,7 +738,10 @@ fi
 
 if [[ ${FINAL_ENCODING} == yes ]]
 then
+  start_time_collecting
   joining_encoded_parts
+  end_time_collecting
+  timeline_entry joining all
 fi
 
 # for VIDEO_FRAGMENT_ID in $(seq -w ${SPLIT_PART_START} ${LAST_VIDEO_FRAGMENT_ID})
@@ -747,7 +752,10 @@ fi
 
 START_TIME=${START_TIME_WHOLE}
 end_time_collecting
+timeline_entry whole_run all
+timeline_percentages
 inf "    video mngt took : ${DARKCYAN}${RUNTIME}"
+inf "    timeline of all steps: ${YELLOW}${TMP}/timeline.csv"
 
 printf "\033[%d;0H\033[2K %s\n" "${TERMINAL_HEIGHT}" "${TEAL}DONE"
 trap SIGINT

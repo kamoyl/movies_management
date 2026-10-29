@@ -159,7 +159,20 @@ mkvmerge --append-mode track -o joined.mkv video_part_minute_001_rife_50_merged.
   + video_part_minute_002_rife_50_merged.mkv + video_part_minute_003_rife_50_merged.mkv
 ```
 
-Without it, mkvmerge starts each part after the longest track of the previous one. A subtitle line that crosses the 60 s split keeps its full length (e.g. until 64 s), so audio and video get a gap at that join, and an encoder later shows a frozen picture there. After each chunk, a `~`-separated row is appended to `TMP/statistics.txt` with stage runtimes, peak space use, the VMAF mean (with `-Q`), and the total chunk runtime. With `-Q` or `-E` a chunk's row is written once its VMAF and encode are done, so after the next chunk; `encoding_runtime` is the HandBrake encode of the part (`-E`), `quality_check_runtime` is VMAF's own runtime, and `runtime` no longer includes it, because VMAF runs alongside the next chunk. Tone mapping has no column of its own: it is part of the frame extraction, so its time is included in `extracting_frames_runtime`. (Files from older versions have an extra second column, `tone_mapping_runtime`, and no `encoding_runtime` column.)
+Without it, mkvmerge starts each part after the longest track of the previous one. A subtitle line that crosses the 60 s split keeps its full length (e.g. until 64 s), so audio and video get a gap at that join, and an encoder later shows a frozen picture there. After each chunk, a `~`-separated row is appended to `TMP/statistics.txt` with stage runtimes, peak space use, the VMAF mean (with `-Q`), and the total chunk runtime. With `-Q` or `-E` a chunk's row is written once its VMAF and encode are done, so after the next chunk; `encoding_runtime` is the HandBrake encode of the part (`-E`), `quality_check_runtime` is VMAF's own runtime, and `runtime` no longer includes it, because VMAF runs alongside the next chunk. Tone mapping has no column of its own: it is part of the frame extraction, so its time is included in `extracting_frames_runtime`. The columns follow the order the steps run in: `extracting_streams`, `extracting_frames`, `interpolating`, `merging_frames`, `merging_streams`. (Files from older versions have `merging_streams_runtime` before `merging_frames_runtime`; even older ones have an extra second column, `tone_mapping_runtime`, and no `encoding_runtime` column.)
+
+Each step of each chunk also gets a row in `TMP/timeline.csv` (`~`-separated), so the overlap of the steps can be charted:
+
+| Column | Content |
+|---|---|
+| `video_id` | chunk number; `all` for `joining` (`-E`) and `whole_run` |
+| `step` | `preparation`, `extracting_streams`, `extracting_frames`, `interpolating`, `merging_frames`, `merging_streams`, `encoding` (`-E`, HandBrake and mkvmerge), `quality_check` (`-Q`), `chunk` (the chunk's own wall time), `joining`, `whole_run` |
+| `start`, `end` | wall clock time to 0.1 s, e.g. `2026-10-29 14:05:07.3` |
+| `start_epoch`, `end_epoch` | the same as seconds since 1970, for calculations |
+| `duration [s]` | to 0.1 s |
+| `chunk [%]` | the duration as a percent of the chunk's `chunk` row, filled in at the end of the run (empty for an interrupted run) |
+
+`encoding` and `quality_check` run in the background alongside the next chunk, so they can end after their chunk and exceed 100 %. Rows are in the order the steps ended. The sum of the step durations (without the `chunk` and `whole_run` rows) divided by `whole_run` is the average number of steps running at the same time.
 
 ### Split points
 
@@ -181,6 +194,7 @@ DESTINATION_DIR="$HOME/ready" ./interpolation_nncn -i "Episode.mkv" -E -g
 - The merged part is only a short-lived intermediate (HandBrake cannot read PNG frames or a pipe). It is removed right after its encode, so even lossless `x264_lossless` needs space for about two parts only.
 - A finished part gets a `<part>_encoded.mkv.done` marker. With `-r -E`, encoded parts are skipped, and a merged part without its encode is encoded again. The join needs every part 001…last to be encoded; otherwise it stops with exit 1.
 - HandBrake logs: `LOG/<part>_encoded.mkv_handbrake.log`, crop scan `LOG/handbrake_crop_scan.json` (result) and `.log`, join `LOG/<movie>_joining_encoded_parts.log`.
+- HandBrake encodes only the video of a part (`-a none -s none`). `mkvmerge` then copies the chosen audio and subtitle tracks (the same language choice as `movies_encoding`) from the merged part; its output follows HandBrake's in the same log. Copying a TrueHD track through HandBrake made it drop one video frame near the start of every part, without a message, see [Done](#done) item 12.
 - Why per part and not one encode of the joined movie: see the measurement in [Performance optimization](#performance-optimization).
 
 The processed frames of each chunk are encoded into an intermediate video. HandBrake (`movies_encoding`) makes the final encode later. Choose its codec with the `INTERMEDIATE_CODEC` environment variable. The script checks the name and the FFmpeg encoder at start-up: an unknown name exits with `2`, and a missing encoder exits with `127`.
@@ -227,7 +241,6 @@ These notes were moved from the header comments of `interpolation_nncn` (the "Do
 - [HDR tone mapping in IPTV: BT.2390 vs BT.2446 vs Hable, explained](https://nightmaretv.net/learn/hdr-tone-mapping)
 - [FFmpeg HDR to SDR tone mapping that doesn't look washed out](https://dev.to/masonwritescode/ffmpeg-hdr-to-sdr-tone-mapping-that-doesnt-look-washed-out-2026-24ie)
 - [Understanding container formats: MP4, MKV, TS](https://www.shoutcastnet.com/school/understanding-container-formats-mp4-mkv-ts.php)
-- [SDR to HDR tone mapping in FFmpeg](https://salivity.github.io/ffmpeg/article/sdr-to-hdr-tone-mapping-in-f-fmpeg)
 - [SVT-AV1 parameters](https://github.com/BlueSwordM/SVT-AV1/blob/master/Docs/Parameters.md)
 - [Video encoder comparison](https://colinmckellar.com/2024/01/11/video-encoder-comparison/)
 - [How to calculate a VMAF score using FFmpeg](https://salivity.github.io/ffmpeg/article/how-to-calculate-vmaf-score-using-f-fmpeg)
@@ -305,15 +318,9 @@ ffmpeg -i input.mkv -vf "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709
 ffmpeg -i "peripheral_video_part_minute_045_for_test-conversion.mkv" -vf "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:format=yuv420p" -c:v libx265 -crf 0 -c:a copy "peripheral_video_part_minute_045_for_test-conversion_x265_lossless_libplacebo.mkv"
 ```
 
-#### SDR to HDR (inverse tone mapping)
+#### SDR to HDR (dropped)
 
-```bash
-# Simple brightness expansion into BT.2020/PQ
-ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -i "${VIDEO_FILE_NAME}.mkv" -vf "zscale=primaries=bt709:transfer=linear,format=gbrpf32le,geq=r='r*2.0':g='g*2.0':b='b*2.0',zscale=primaries=bt2020:transfer=smpte2084:matrix=bt2020nc,format=yuv420p10le" -c:v libx265 -crf 0 -x265-params "hdr10=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):max-cll=1000,400" -pix_fmt yuv420p10le "${VIDEO_FILE_NAME}_hdr.mkv"
-
-# With a 3D LUT (open question: how to obtain sdr_to_hdr_upmap.cube in the first place?)
-ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -i "${VIDEO_FILE_NAME}.mkv" -vf "lut3d=file=sdr_to_hdr_upmap.cube,zscale=primaries=bt2020:transfer=smpte2084:matrix=bt2020nc,format=yuv420p10le" -c:v libx265 -crf 0 -x265-params "hdr10=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):max-cll=1000,400" -pix_fmt yuv420p10le "${VIDEO_FILE_NAME}_hdr.mkv"
-```
+Inverse tone mapping was considered and dropped: it cannot restore highlight and color detail that the SDR master never had, so the result only looks brighter. Keeping an HDR source as HDR (`-T`) is the better path.
 
 #### VMAF (encoding quality)
 
@@ -401,6 +408,19 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - Cost: the packet scan of the 7.8 GB source takes ~3 s; counting decoded frames takes ~2 s per 1080p chunk and ~8 s per 4K HDR chunk.
     - The first full run then stopped at chunk 026 (exit 1): 239 of the 1948 keyframe flags in the source are on ordinary HEVC frames (`TRAIL_R`), and chunks 013 and 026 began at such a frame. Chunk 026 had 1433 packets but 1268 decodable frames (~7 s lost; 013 also lost frames but finished). Fix: only keyframes decoded by `-skip_frame nokey` count (22 s for the whole movie), and the time of a chunk's first decoded frame is read without the old 5 s limit.
     - Checked on the whole movie: 114 chunks, 107 decode completely; the 7 after the 7 warned open splits lose 1–4 frames each (20 of 163264), which the decoded frame count and the sync offset handle.
+11. **Background encode and VMAF really in the background.** Each chunk waited for its own steps with a bare `wait`, which also waits for every other background job, so for the previous chunk's encode (`-E`) and VMAF (`-Q`) too. They ran alongside the next chunk only on paper.
+    - Seen in the statistics: on the 1080p Edge of Tomorrow run, the analysis of chunk 002 took 36.8 s, about chunk 001's encode time. On Smokin' Aces (4K HDR, `-Q -E`) chunk 001, with nothing in the background, took 297 s; the later chunks averaged 568 s with the encode (145 s) and VMAF (62 s) of the previous chunk inside.
+    - Fix: `waiting_for_chunk_steps` waits for all background jobs except the encode and VMAF job (`PART_ENCODING_PID`, `QUALITY_METRIC_CHECK_PID`), which `finishing_previous_chunk` collects as before.
+    - Also: the "preparation … done" message showed the previous chunk's runtime.
+    - `timeline.csv` (see [`interpolation_nncn`](#interpolation_nncn)) makes such overlap visible.
+    - Checked on a 5:20 cut of the 4K HDR Edge of Tomorrow (6 chunks, `-Q -E`, `INTERMEDIATE_CODEC=x264_crf10`): the whole run took 2485 s. In the timeline each part's encode and VMAF now finish during the next chunk's interpolation. Chunks 002–005 took 384–456 s, against 468–512 s before the fix.
+    - Overlap is not free: with an encode next to it, NCNN takes 315–375 s instead of 240–276 s and the encode 246–260 s instead of 111–127 s, as both share the CPU. The gain is about 10–15 % of wall time.
+12. **TrueHD and per-part encodes (`-E`).** On a 4K HDR source with a TrueHD (Atmos) track, VMAF of the encoded parts fell to 40–63 (chunk 001: 95).
+    - HandBrake's A/V sync, with the TrueHD track copied (`-E copy`), dropped one video frame near the start of each part (e.g. frame 9 of 480), without a message. AC3, DTS-HD and subtitles did not; converting the TrueHD to AC3 or `--align-av` kept all frames, but neither keeps the lossless track.
+    - VMAF pairs frames by number, so after the drop it compared interpolated frames with the originals: PSNR 27 dB, 47 dB with the frame shift undone. Joined with `--append-mode track`, every part would also be one frame (21 ms) short against its audio.
+    - Fix: HandBrake encodes the video only; `mkvmerge` copies the audio and subtitle tracks from the merged part. Checked: all frames kept, all 3 audio and 3 subtitle tracks present; VMAF of the same 6 parts is now 91.8–95.7.
+    - With TrueHD copied, HandBrake also hung once at the end of a part ("audio time went backwards", 99.9 % for 2 h, process idle). The video-only encode avoids that path too.
+    - Sources without TrueHD (the 1080p Edge of Tomorrow, Smokin' Aces with DTS/E-AC3/AC3) were not affected. `movies_encoding` still copies audio through HandBrake; there one frame of a whole movie does not matter.
 
 ### Codec benchmark
 
@@ -437,6 +457,20 @@ Findings:
 Decision: lossless x264 `ultrafast` is the default because it is the fastest and loses nothing before the final HandBrake encode. The other codecs stay selectable for when disk space is short; at 4K, `x264_crf10` is the best trade-off of the lossy ones.
 
 ### Planned (in agreed order)
+
+Current state, for comparison with the [Baseline](#baseline-before-optimization): averages of the `statistics.txt` rows of Smokin' Aces chunks 002–041 (4K HDR, 23.976 → 47.952 fps, `-Q -E`, before Done item 11):
+
+| Step | Time per chunk | Baseline |
+|---|---|---|
+| Extracting frames (including tone mapping) | ~101 s | ~350 s (tone mapping 250 + extraction 100) |
+| NCNN interpolation | ~304 s | ~290 s |
+| Merging frames | ~35 s | ~117 s |
+| Merging streams | ~29 s | — |
+| Final encode (`-E`, background) | ~145 s | — |
+| VMAF (background) | ~62 s | ~700 s |
+| **Chunk total** | **~568 s** | **~1400 s** |
+
+Chunk 001, with nothing in the background yet, took 297 s; the gap to 568 s is mostly the serialized encode and VMAF (Done item 11).
 
 1. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It could also let NCNN run without `-v`, if the NCNN pause (`throttling_ncnn`, which reads the last `done` line) also used the output frames instead of the log. The result is lower peak space use, which makes the next items possible.
 2. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.

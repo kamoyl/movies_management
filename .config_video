@@ -293,6 +293,54 @@ checking_space_background()
     ) &
   }
 
+# timeline.csv (in TMP, next to statistics.txt): one row per step of every chunk, with the wall
+# clock start and end, so the overlap of the steps (and of a chunk's background encode and VMAF
+# with the next chunk) can be charted. Columns:
+#   video_id~step~start~end~start_epoch~end_epoch~duration [s]~chunk [%]
+# chunk [%] is the step's duration as a percent of its chunk's own wall time (the "chunk" row);
+# it is filled in by timeline_percentages at the end of the run, when every chunk is finished
+# epoch_to_human EPOCH - prints e.g. 2026-10-29 14:05:07.3 (GNU date -d, otherwise BSD date -r)
+epoch_to_human()
+{
+  local EPOCH_SECONDS="${1%.*}"
+  local EPOCH_FRACTION="${1#*.}"
+  local HUMAN_TIME
+  if [[ ${EPOCH_FRACTION} == "${1}" ]]
+  then
+    EPOCH_FRACTION="0"
+  fi
+  if ! HUMAN_TIME="$(date -d "@${EPOCH_SECONDS}" '+%F %T' 2>/dev/null)"
+  then
+    HUMAN_TIME="$(date -r "${EPOCH_SECONDS}" '+%F %T')"
+  fi
+  echo "${HUMAN_TIME}.${EPOCH_FRACTION:0:1}"
+  }
+
+# timeline_entry STEP [VIDEO_ID] - called right after end_time_collecting, which left START_TIME and
+# END_TIME; VIDEO_ID defaults to the current chunk (VIDEO_FRAGMENT_ID)
+timeline_entry()
+{
+  local STEP_DURATION
+  STEP_DURATION="$(echo "scale=1; (${END_TIME} - ${START_TIME}) / 1" | bc)"
+  echo "${2:-${VIDEO_FRAGMENT_ID:-000}}~${1}~$(epoch_to_human "${START_TIME}")~$(epoch_to_human "${END_TIME}")~${START_TIME}~${END_TIME}~$(printf '%.1f' "${STEP_DURATION}")~" >> "${TMP}/timeline.csv"
+  }
+
+timeline_percentages()
+{
+  local TIMELINE_FILE="${TMP}/timeline.csv"
+  if [ ! -s "${TIMELINE_FILE}" ]
+  then
+    return
+  fi
+  # two passes over the same file: the first collects the chunks' wall times
+  awk -F'~' -v OFS='~' '
+    NR == FNR { if ($2 == "chunk") { CHUNK[$1] = $7 }; next }
+    FNR == 1 { print; next }
+    { if (($1 in CHUNK) && CHUNK[$1] > 0) { $8 = sprintf("%.1f", $7 * 100 / CHUNK[$1]) }; print }
+  ' "${TIMELINE_FILE}" "${TIMELINE_FILE}" > "${TIMELINE_FILE}.tmp"
+  mv -f -- "${TIMELINE_FILE}.tmp" "${TIMELINE_FILE}"
+  }
+
 mp4_to_mkv()
 {
   start_time_collecting
@@ -385,6 +433,7 @@ extracting_mkv_streams()
     end_time_collecting
     EXTRACTING_STREAMS_RUNTIME=${RUNTIME}
     echo ${RUNTIME} > "${TMP}/EXTRACTING_STREAMS_RUNTIME"
+    timeline_entry extracting_streams
     ) &
   }
 
@@ -474,6 +523,7 @@ extracting_mkv_frames()
     done
     end_time_collecting
     echo ${RUNTIME} > "${TMP}/EXTRACTING_FRAMES_RUNTIME"
+    timeline_entry extracting_frames
     # frames may be removed meanwhile by the interpolation monitor, which is not an error
     find "${VIDEO_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/" -ignore_readdir_race -iname '*.png' -type f -empty -delete
     ) &
@@ -641,6 +691,7 @@ interpolating_extracted_frames()
     rm -f -- "${FRAMES_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/"*.png
     end_time_collecting
     echo ${RUNTIME} > "${TMP}/INTERPOLATING_FRAMES_RUNTIME"
+    timeline_entry interpolating
     ) &
   if [[ ${VERBOSE} == yes ]]
   then
@@ -772,6 +823,7 @@ merging_frames_mkv()
     done
     end_time_collecting
     echo ${RUNTIME} > "${TMP}/MERGING_FRAMES_RUNTIME"
+    timeline_entry merging_frames
     rm -f -- "${FRAMES_IN_DIR}/${OUT_DIR}/${VIDEO_FILE_NAME}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}/"*.png
     ) &
   if [[ ${VERBOSE} == yes ]]
@@ -819,6 +871,21 @@ merging_streams_mkv()
   mkvtoolnix_status "$?" "${MERGE_STEP}" "${LOG}/${VIDEO_FILE_NAME}_mkvmerge_merging.log"
   end_time_collecting
   echo ${RUNTIME} > "${TMP}/MERGING_STREAMS_RUNTIME"
+  timeline_entry merging_streams
+  }
+
+# waits for this chunk's background steps; a bare "wait" would also wait for the previous chunk's
+# final encode (-E) and VMAF (-Q), which are meant to run alongside this chunk
+waiting_for_chunk_steps()
+{
+  local JOB_PID
+  for JOB_PID in $(jobs -p)
+  do
+    if [[ ${JOB_PID} != "${PART_ENCODING_PID}" ]] && [[ ${JOB_PID} != "${QUALITY_METRIC_CHECK_PID}" ]]
+    then
+      wait "${JOB_PID}"
+    fi
+  done
   }
 
 interpolation_video_file()
@@ -883,7 +950,7 @@ interpolation_video_file()
       rm -f -- "${TMP}/${MOVIE_NAME_ARRAY[*]}_subtitles.mkv"
     fi
   fi
-  wait
+  waiting_for_chunk_steps
   INPUT_FRAMES_COUNT=$(cat "${LOG}/${MOVIE_NAME_ARRAY[*]}_frames_count.log")
   if [[ ! ${INPUT_FRAMES_COUNT} =~ ^[0-9]+$ ]] || [ "${INPUT_FRAMES_COUNT}" -eq 0 ]
   then
@@ -1003,6 +1070,7 @@ interpolation_video_file()
   debug "        OUTPUT_FPS=${SLATEBLUE1}${OUTPUT_FPS}${DODGERBLUE1} (OUTPUT_FPS_ROUND=${LIGHTSEAGREEN}${OUTPUT_FPS_ROUND})"
   debug "         TARGET_FRAME_COUNT=${LAWNGREEN}${TARGET_FRAME_COUNT}"
   debug "          MAX_TSPACE=${DEEPSKYBLUE2}${MAX_TSPACE} [GB]"
+  end_time_collecting
   inf "    preparation of ${YELLOW}${MOVIE_NAME_ARRAY[*]}${CYAN} done successfully ${MAGENTA}${RUNTIME}"
   inf "  directories:"
   inf "    extracting streams (audio/subtitles) -> ${GREENYELLOW}${TMP}"
@@ -1011,10 +1079,11 @@ interpolation_video_file()
 
   inf "    merging frames                       from ${GREENYELLOW}${TMP}${CYAN} -> ${LIGHTGREEN}${TMP_OUT}"
   inf "    merging streams                      -> ${GREENYELLOW}./ "
-  wait
+  waiting_for_chunk_steps
   end_time_collecting
   VIDEO_ANALYSIS_RUNTIME=${RUNTIME}
   echo ${VIDEO_ANALYSIS_RUNTIME} > "${TMP}/VIDEO_ANALYSIS_RUNTIME"
+  timeline_entry preparation
   inf "    analysis, calculations and all other preparations of ${YELLOW}${MOVIE_NAME_ARRAY[*]}${CYAN} done successfully ${MAGENTA}${RUNTIME}"
   # preparation, analysis, all calculations and information - END
 
@@ -1027,7 +1096,7 @@ interpolation_video_file()
   then
     warn "      VERBOSE, so waiting till the end of extracting_mkv_frames function"
     wait_for_step "${FFMPEG_EX_BACKGROUND_PROCESS_PID}" "frames extraction (ffmpeg)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_inter_inframes.log"
-    wait
+    waiting_for_chunk_steps
   fi
   interpolating_extracted_frames  "${MOVIE_NAME_ARRAY[*]}"            "${TMP_OUT}"    "${TMP}"
   if [[ ${VERBOSE} == yes ]]
@@ -1054,7 +1123,7 @@ interpolation_video_file()
   resuming_ncnn "${NCNN_BACKGROUND_PROCESS_PID}"
   wait_for_step "${FFMPEG_EX_BACKGROUND_PROCESS_PID}" "frames extraction (ffmpeg)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_inter_inframes.log"
   wait_for_step "${NCNN_BACKGROUND_PROCESS_PID}" "interpolation (${NCNN_METHOD}-ncnn-vulkan)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
-  wait
+  waiting_for_chunk_steps
   # NCNN may exit 0 while single frames failed, so its log is checked as the result
   local INTERPOLATING_ERRORS
   INTERPOLATING_ERRORS="$(grep -c fail "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log")"
@@ -1074,10 +1143,10 @@ interpolation_video_file()
     checking_space_background       "${MERGING_INTERFRAMES_PROCESS_PID}"   "${TMP_OUT}"      "${TMP}"
   fi
   wait_for_step "${MERGING_INTERFRAMES_PROCESS_PID}" "merging processed frames into video (ffmpeg)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_ffmpeg_merging.log"
-  wait
+  waiting_for_chunk_steps
   require_output "${TMP_OUT}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" "merging processed frames into video" "${LOG}/${MOVIE_NAME_ARRAY[*]}_ffmpeg_merging.log"
   merging_streams_mkv             "${MOVIE_NAME_ARRAY[*]}"               "${TMP}"          "${TMP_OUT}"
-  wait
+  waiting_for_chunk_steps
   require_output "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" "merging streams into processed video" "${LOG}/${MOVIE_NAME_ARRAY[*]}_mkvmerge_merging.log"
 }
 
@@ -1452,6 +1521,14 @@ handbrake_streams_options()
       warn "  no eng/pol/dut audio track found, encoding all audio tracks (${AUDIO_TRACKS})"
     fi
   fi
+  # the same tracks as stream indexes, which are also the mkvmerge track IDs of a Matroska file
+  # (starting_part_encoding copies them with mkvmerge)
+  if [ -n "${AUDIO_TRACKS}" ]
+  then
+    AUDIO_STREAM_INDEXES=$(jq -r --arg TRACKS ",${AUDIO_TRACKS}," '[.streams[] | select(.codec_type == "audio")] | to_entries[] | select(.key + 1 | tostring as $KEY | $TRACKS | contains("," + $KEY + ",")).value.index' "${FFPROBE_JSON}" | tr '\n' ',' | sed "s/,$//g")
+  else
+    AUDIO_STREAM_INDEXES=""
+  fi
   inf "    encoding AUDIO_TRACKS=${MAGENTA}${AUDIO_TRACKS}"
   SUBTITLE_TRACKS=$(jq -r '.streams[] | select(.codec_type == "subtitle") | select(.tags.language == "eng" or .tags.language == "pol" or .tags.language == "dut").index' "${FFPROBE_JSON}" | tr '\n' ',' | sed "s/,$//g")
   inf "    encoding SUBTITLE_TRACKS=${MAGENTA}${SUBTITLE_TRACKS}"
@@ -1586,6 +1663,7 @@ starting_quality_metric()
     VMAF_FFMPEG_STATUS=$?
     end_time_collecting
     echo "${RUNTIME}" > "${TMP}/${VMAF_FILES}_quality_metric.runtime"
+    timeline_entry quality_check
     echo "${VMAF_FFMPEG_STATUS}" > "${TMP}/${VMAF_FILES}_quality_metric.status"
   ) &
   QUALITY_METRIC_CHECK_PID=$!
@@ -1826,18 +1904,49 @@ starting_part_encoding()
     VMAF_REFERENCE_CROP="crop=iw-${CROP_LEFT}-${CROP_RIGHT}:ih-${CROP_TOP}-${CROP_BOTTOM}:${CROP_LEFT}:${CROP_TOP}"
   fi
   rm -f -- "${PART_ENCODED_FILE}" "${PART_ENCODED_FILE}.done" "${TMP}/${PART_ENCODED_FILE}_encoding.status" "${TMP}/${PART_ENCODED_FILE}_encoding.runtime"
+  # HandBrake encodes only the video; mkvmerge then copies the chosen audio and subtitle tracks
+  # from the merged part (the audio is copied by HandBrake anyway). With a copied TrueHD track
+  # HandBrake's A/V sync silently dropped one video frame near the start of every part, which
+  # shifted the VMAF frame pairing and, appended part after part, the sync of the joined movie
+  local PART_VIDEO_FILE="${PART_ENCODED_FILE%.mkv}_video_only.mkv"
+  rm -f -- "${PART_VIDEO_FILE}"
+  local PART_MUX_TRACKS=(-D --no-chapters --no-attachments --no-global-tags)
+  if [ -n "${AUDIO_STREAM_INDEXES}" ]
+  then
+    PART_MUX_TRACKS+=(--audio-tracks "${AUDIO_STREAM_INDEXES}")
+  else
+    PART_MUX_TRACKS+=(--no-audio)
+  fi
+  if [ -n "${SUBTITLE_TRACKS}" ]
+  then
+    PART_MUX_TRACKS+=(--subtitle-tracks "${SUBTITLE_TRACKS}")
+  else
+    PART_MUX_TRACKS+=(--no-subtitles)
+  fi
   # HandBrake runs with nice, so the next chunk's frame extraction and NCNN get the CPU first;
   # stop_background_jobs stops the subshell (SIGTERM), which then stops HandBrake or the VMAF
   (
     trap 'kill "${PART_HANDBRAKE_PID}" "${QUALITY_METRIC_CHECK_PID}" 2>/dev/null; exit 143' TERM
     QUALITY_METRIC_CHECK_PID=""
     start_time_collecting
-    nice -n 10 HandBrakeCLI -i "${PART_MERGED_FILE}" -o "${PART_ENCODED_FILE}" --encoder "${VIDEO_ENCODER[@]}" --crop "${PART_CROP}" --no-markers "${HANDBRAKE_STREAMS[@]}" > "${PART_ENCODING_LOG}" 2>&1 &
+    nice -n 10 HandBrakeCLI -i "${PART_MERGED_FILE}" -o "${PART_VIDEO_FILE}" --encoder "${VIDEO_ENCODER[@]}" --crop "${PART_CROP}" --no-markers -a none -s none > "${PART_ENCODING_LOG}" 2>&1 &
     PART_HANDBRAKE_PID=$!
     wait "${PART_HANDBRAKE_PID}"
     PART_HANDBRAKE_STATUS=$?
+    if [ "${PART_HANDBRAKE_STATUS}" -eq 0 ]
+    then
+      # mkvmerge exits 1 for warnings only, 2 for errors (its output follows HandBrake's in the log)
+      mkvmerge -o "${PART_ENCODED_FILE}" "${PART_VIDEO_FILE}" "${PART_MUX_TRACKS[@]}" "${PART_MERGED_FILE}" >> "${PART_ENCODING_LOG}" 2>&1
+      PART_MUX_STATUS=$?
+      if [ "${PART_MUX_STATUS}" -gt 1 ]
+      then
+        PART_HANDBRAKE_STATUS="${PART_MUX_STATUS}"
+      fi
+    fi
+    rm -f -- "${PART_VIDEO_FILE}"
     end_time_collecting
     echo "${RUNTIME}" > "${TMP}/${PART_ENCODED_FILE}_encoding.runtime"
+    timeline_entry encoding
     echo "${PART_HANDBRAKE_STATUS}" > "${TMP}/${PART_ENCODED_FILE}_encoding.status"
     if [ "${PART_HANDBRAKE_STATUS}" -eq 0 ] && [ -n "${PART_REFERENCE_FILE}" ]
     then
