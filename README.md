@@ -478,6 +478,16 @@ Chunk 001, with nothing in the background yet, took 297 s; the gap to 568 s is m
    - replace fixed sleeps (`sleep 5` in extraction, `sleep 10` in the chunk loop, other 1–3 s sleeps) with event-based waits;
    - lower the PNG `-compression_level` (faster writes, larger files);
    - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item).
+4. **Research: interpolation above 8 bits (keep HDR without tone mapping).** Today an HDR source must be tone mapped to 8-bit SDR before NCNN. The limit is in rife-ncnn-vulkan's input/output, not in the network:
+   - `main.cpp` loads images with `stbi_load_from_memory(…, 3)` (8 bits per channel), so a 10/16-bit PNG is cut to 8 bits on load; `stbi_write_png` writes 8 bits;
+   - the GPU shaders convert `uint8` ↔ float: `rife_preproc.comp` multiplies by `1/255`, `rife_postproc.comp` by `255` and clamps to `0..255`;
+   - the network itself works on floats `0.0…1.0`, stored as fp16 on the GPU (~11 bits of precision, enough for 10-bit video).
+
+   Options to check:
+   - a fork of rife-ncnn-vulkan: `stbi_load_16`, `uint16`/`65535` in both shaders, and 16-bit PNG output via libpng (`stb_image_write` cannot write 16 bits);
+   - vs-mlrt (VapourSynth): runs the same RIFE models on 32-bit float RGB frames, with a Vulkan (ncnn) backend usable on the RX580s; frames stay in memory, so the PNG pipeline would change.
+
+   Open risk: RIFE was trained on 8-bit SDR images; HDR in PQ encoding has a different brightness distribution, so the quality has to be measured (VMAF, visual check) before it is used.
 
 Dropped after measuring: **frames on tmpfs.** An 83 s 1080p clip (one chunk, `x264_crf10`), run twice with `-o`/`-O` on NVMe and twice on `/dev/shm`, took 115.6–115.7 s in every run (stages: extraction 21.1 s, NCNN 85.7–87.7 s, frame merge 17.7–18.2 s). PNG writing and reading are CPU work and NVMe keeps up, so RAM adds nothing; a 4K chunk (30–37 GB) would not fit anyway.
 
