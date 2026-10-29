@@ -14,12 +14,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 - Added forgotten script ([fc629f0](https://github_kamoyl/kamoyl/movies_management/commit/fc629f03ce12cb7128a694322fae35012c7af3b7) by Kamoyl).
 
+### Fixed
+
+- Fix serialized background jobs and TrueHD frame drop; add timeline.csv ([07e7946](https://github_kamoyl/kamoyl/movies_management/commit/07e79461d3ab978b3a02b4a894e750105b419a8e) by Kamoyl).
+
 ### Removed
 
 - Remove the tone_mapping_runtime statistics column ([fe3bc96](https://github_kamoyl/kamoyl/movies_management/commit/fe3bc96fc68ad85f91ab95cc6033d826fcb4338e) by Kamoyl).
 
 ### Misc
 
+- README: add research item for interpolation above 8 bits ([3706956](https://github_kamoyl/kamoyl/movies_management/commit/370695631936248d08f5133f73ac50030653a0f0) by Kamoyl).
+- Updated CHANGELOG only ([dfa1114](https://github_kamoyl/kamoyl/movies_management/commit/dfa111433dbdc17ddb726a7d416e4f70bd770ffc) by Kamoyl).
 - interpolation_nncn: split only at keyframes the decoder can start from ([eff9fa3](https://github_kamoyl/kamoyl/movies_management/commit/eff9fa3d776bd58e94b1b82af9e3ce5b609eff5d) by Kamoyl).
 - README: drop "frames on tmpfs" from the planned optimizations, with measurement ([4630449](https://github_kamoyl/kamoyl/movies_management/commit/463044948f7cb6a2f3966fa1c15c447be79eb210) by Kamoyl).
 - .gitignore: ignore the local var and download symlinks ([745c3bd](https://github_kamoyl/kamoyl/movies_management/commit/745c3bd09171dbb1dff1e4b6c0a5279f6e022517) by Kamoyl).
