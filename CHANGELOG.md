@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- Joined movie in sync: recover open-GOP frames, exact frame rate ([b7f0359](https://github_kamoyl/kamoyl/movies_management/commit/b7f03598967c43e152176ab1ed115ee8cfcb9153) by Kamoyl).
+- updated CHANGELOG ([0a402fa](https://github_kamoyl/kamoyl/movies_management/commit/0a402fadbad5472043b2fe7362b9eb5821a70561) by Kamoyl).
 - README: add research item for interpolation above 8 bits ([3706956](https://github_kamoyl/kamoyl/movies_management/commit/370695631936248d08f5133f73ac50030653a0f0) by Kamoyl).
 - Updated CHANGELOG only ([dfa1114](https://github_kamoyl/kamoyl/movies_management/commit/dfa111433dbdc17ddb726a7d416e4f70bd770ffc) by Kamoyl).
 - interpolation_nncn: split only at keyframes the decoder can start from ([eff9fa3](https://github_kamoyl/kamoyl/movies_management/commit/eff9fa3d776bd58e94b1b82af9e3ce5b609eff5d) by Kamoyl).
@@ -31,7 +33,6 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - .gitignore: ignore the local var and download symlinks ([745c3bd](https://github_kamoyl/kamoyl/movies_management/commit/745c3bd09171dbb1dff1e4b6c0a5279f6e022517) by Kamoyl).
 - interpolation_nncn: split at closed-GOP keyframes, count decoded frames, keep video in sync ([7a987c3](https://github_kamoyl/kamoyl/movies_management/commit/7a987c3cbbd63652761cfab3cf6827c731e09ed9) by Kamoyl).
 - Final encode of each part (-E), VMAF in the background, frame-analysis fix ([1261d29](https://github_kamoyl/kamoyl/movies_management/commit/1261d29ed18d7637456b6640fac61fa8ab3218b2) by Kamoyl).
-- Updated changelog ([363f52d](https://github_kamoyl/kamoyl/movies_management/commit/363f52d89ee227ac89144ce66d681b47c2099ac7) by Kamoyl).
 - Join parts with --append-mode track; fix bc divide by zero; drop debug echoes ([9f45dc6](https://github_kamoyl/kamoyl/movies_management/commit/9f45dc6d6645e87275b0910e438fdccc6b482b77) by Kamoyl).
 - Updated gitignore ([a03765b](https://github_kamoyl/kamoyl/movies_management/commit/a03765bf8ea9c47a0960e65340ba3108934c4973) by Kamoyl).
 - Tone mapping inside frame extraction; first complete run on macOS ([0332370](https://github_kamoyl/kamoyl/movies_management/commit/033237061d6144b4de5f4907fd676e152f6fac0b) by Kamoyl).
