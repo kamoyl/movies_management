@@ -7,6 +7,82 @@ This repository contains two Bash utilities for working with Matroska video:
 
 Both scripts load shared functions from `.config` (which loads `.config_colours` and `.config_video`) and use `.var_management` to create working, temporary, and log directories. Run the scripts from a working directory where you have space for the input, intermediate files, and outputs.
 
+## Pitfalls the scripts handle
+
+The idea is simple: split, interpolate, merge, encode, join. But
+real movies break many quiet assumptions, and most of them show up
+only on full-length films, never on short test clips. Each item
+below cost a failed or out-of-sync run; the details are in
+[Done](#done) and the sections linked.
+
+**Splitting and frame counts**
+
+- *Open-GOP keyframes.* A split at an open keyframe (CRA) leaves
+  the frames shown just before it in the next chunk, which cannot
+  decode them: NCNN crashed on empty frames, or video lost frames
+  against audio. Splits prefer closed-GOP keyframes, and the frames
+  lost at open splits are decoded from the whole movie
+  ([Split points](#split-points); Done 10, 13).
+- *False keyframe flags.* Some sources flag ordinary HEVC frames
+  as keyframes; only keyframes that really decode alone are used
+  (Done 10).
+- *Sparse closed GOPs.* Some sources have closed GOPs minutes
+  apart, so many splits must be open (Done 13).
+- *Packets are not frames.* Frame counts come from decoding, not
+  from packets (Done 10).
+- *Timestamp gaps.* FFmpeg's image2 default duplicated frames at
+  gaps; extraction writes one PNG per decoded frame (Done 6).
+
+**Timing and sync**
+
+- *Rounded frame rate.* ffprobe's text says `23.98 fps`; the
+  exact rate is `24000/1001`. The rounded value drifted ~1.2 s
+  over 2 hours (Done 13).
+- *Joining parts.* `--append-mode track` closes gaps, so any
+  part whose video is shorter than its audio shifts every later
+  part (Done 13).
+- *Video start offset.* A chunk's video may not start at 0;
+  HandBrake's output always does, so the mux re-applies the offset
+  (Done 13).
+
+**HandBrake**
+
+- *TrueHD.* With TrueHD copied, HandBrake silently dropped a video
+  frame per part and once hung; it now encodes video only, and
+  `mkvmerge` adds audio and subtitles (Done 12).
+- *Auto-crop per part.* Different parts got different crops; one
+  crop is computed for the whole source (Done 9).
+- *A/V sync on a joined file.* Encoding one joined file lost
+  frames at joins; parts are encoded separately (Done 9).
+
+**Tools and encoders**
+
+- *NCNN works on 8-bit images.* rife-ncnn-vulkan reads and writes
+  8-bit images only, so HDR is tone mapped to SDR before
+  interpolation (Planned item 4 is the research on more than
+  8 bits).
+- *NCNN racing the extraction.* NCNN could read frames not yet
+  written, and a monitor could delete them; NCNN keeps a margin
+  and early stops are detected (Done 5, 7).
+- *"Lossless" settings that are not.* SVT-AV1 `rc=1` is VBR and
+  overrides `-crf`; x265 `-crf 0` is not lossless (Done 4, 6).
+- *VMAF pairs frames by number.* Only original frames are
+  compared, and frames without a reference are skipped
+  (Done 1, 12, 13).
+
+**Shell and system**
+
+- *Bare `wait`* waits for every background job, so background
+  encodes and VMAF silently ran in series (Done 11).
+- *Locale.* With a decimal comma (e.g. `nl_NL`), `printf` rejects
+  `60.64`; `.config` sets `LC_NUMERIC=C`.
+- *macOS.* `ps` has no `--pid`, so monitor loops ended at once
+  (Done 7).
+- *File names.* Dots, spaces and `$( )` in names; names are
+  never split with `awk -F.` or evaluated ([Improvements](#improvements)).
+- *Missing tracks.* No audio or subtitles in the wanted languages
+  falls back with a warning instead of failing.
+
 ## Improvements
 
 The scripts were improved step by step; each group below describes
@@ -177,10 +253,11 @@ Each step of each chunk also gets a row in `TMP/timeline.csv` (`~`-separated), s
 ### Split points
 
 - Splits are made at closed-GOP keyframes, so every chunk decodes on its own and no frame is lost. An open-GOP keyframe (HEVC CRA, for example) has frames before it in display order that need the previous chunk; with a plain 60 s split those frames were lost and NCNN crashed (see item 10 in [Performance optimization](#performance-optimization)).
-- For each split the script takes the closed-GOP keyframe nearest to 60 s after the previous split, within ±`SPLIT_KEYFRAME_WINDOW_SEC` (default 10), so chunks are 50–70 s long. If there is none, it uses the first keyframe after 60 s and warns that up to a few frames at the start of that chunk may be lost. The points are listed in `LOG/<movie>_split_points.log` (`pts closed|open`).
+- For each split the script takes the closed-GOP keyframe nearest to 60 s after the previous split, within ±`SPLIT_KEYFRAME_WINDOW_SEC` (default 10), so chunks are 50–70 s long. If there is none, it uses the first keyframe after 60 s and warns. The points are listed in `LOG/<movie>_split_points.log` (`pts closed|open`).
+- At such an open split the frames shown just before the keyframe are stored after it, so they land in the next chunk, which cannot decode them. They are **recovered**: while the chunk before the split is prepared, the script finds them in the next chunk (packets shown before its first decoded frame), decodes them from the whole movie (`ffmpeg -copyts -ss`, from a keyframe before them, tone-mapped like the extracted frames), and adds them after the chunk's own frames. Then each part's video ends exactly where its audio ends, and the parts join without drift. It takes ~3 s per open split; log `LOG/<chunk>_recovering_frames.log`. If the recovery fails, the run warns and continues without those frames. See [Done](#done) item 13.
 - Only keyframes the decoder can really start from count. A container may flag ordinary frames as keyframes (Edge of Tomorrow: 239 of 1948 flags, HEVC `TRAIL_R` frames), so the script decodes only the keyframes of the whole video (`ffprobe -skip_frame nokey`, ~22 s for a 2-hour 1080p movie, log `LOG/<movie>_decoded_keyframes.log`) and ignores every other keyframe flag.
 - Each chunk's frame count is the number of decoded frames, not packets, so the count always matches the extracted frames.
-- If a chunk still starts with lost frames, its processed video is placed at the time of its first decoded frame (`mkvmerge --sync`), so picture and sound stay in sync. This also fixes a source whose video does not start at 0 (for example 83 ms), which before led the sound by that much.
+- A chunk that starts after an open split has no video for its first frames (they were recovered into the previous chunk), so its processed video is placed at the time of its first decoded frame (`mkvmerge --sync`), and picture and sound stay in sync. This also fixes a source whose video does not start at 0 (for example 83 ms), which before led the sound by that much.
 - The chosen points are saved in `<movie>_split_points.txt` in the current directory. With `-r`, or `-s` other than `001`, the run stops with exit 2 if the existing chunks were split at other points, or by an older version (chunks marked `.done` but no points file). Then start the movie again without `-r`/`-s`. Without `-k` the file is removed after the `-E` join.
 
 ### Final encode of each part (`-E`)
@@ -194,7 +271,8 @@ DESTINATION_DIR="$HOME/ready" ./interpolation_nncn -i "Episode.mkv" -E -g
 - The merged part is only a short-lived intermediate (HandBrake cannot read PNG frames or a pipe). It is removed right after its encode, so even lossless `x264_lossless` needs space for about two parts only.
 - A finished part gets a `<part>_encoded.mkv.done` marker. With `-r -E`, encoded parts are skipped, and a merged part without its encode is encoded again. The join needs every part 001…last to be encoded; otherwise it stops with exit 1.
 - HandBrake logs: `LOG/<part>_encoded.mkv_handbrake.log`, crop scan `LOG/handbrake_crop_scan.json` (result) and `.log`, join `LOG/<movie>_joining_encoded_parts.log`.
-- HandBrake encodes only the video of a part (`-a none -s none`). `mkvmerge` then copies the chosen audio and subtitle tracks (the same language choice as `movies_encoding`) from the merged part; its output follows HandBrake's in the same log. Copying a TrueHD track through HandBrake made it drop one video frame near the start of every part, without a message, see [Done](#done) item 12.
+- HandBrake encodes only the video of a part (`-a none -s none`). `mkvmerge` then copies the chosen audio and subtitle tracks (the same language choice as `movies_encoding`) from the merged part; its output follows HandBrake's in the same log. Copying a TrueHD track through HandBrake made it drop one video frame near the start of every part, without a message, see [Done](#done) item 12. HandBrake's video starts at 0, so the mux places it at the start of the merged part's video (`--sync`), as `merging_streams_mkv` does.
+- Copying the audio through HandBrake again would not help with sync: the drift found in a joined movie came from frames lost at open-GOP splits and from a rounded frame rate, the same with either audio path, see [Done](#done) item 13.
 - Why per part and not one encode of the joined movie: see the measurement in [Performance optimization](#performance-optimization).
 
 The processed frames of each chunk are encoded into an intermediate video. HandBrake (`movies_encoding`) makes the final encode later. Choose its codec with the `INTERMEDIATE_CODEC` environment variable. The script checks the name and the FFmpeg encoder at start-up: an unknown name exits with `2`, and a missing encoder exits with `127`.
@@ -421,6 +499,14 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - Fix: HandBrake encodes the video only; `mkvmerge` copies the audio and subtitle tracks from the merged part. Checked: all frames kept, all 3 audio and 3 subtitle tracks present; VMAF of the same 6 parts is now 91.8–95.7.
     - With TrueHD copied, HandBrake also hung once at the end of a part ("audio time went backwards", 99.9 % for 2 h, process idle). The video-only encode avoids that path too.
     - Sources without TrueHD (the 1080p Edge of Tomorrow, Smokin' Aces with DTS/E-AC3/AC3) were not affected. `movies_encoding` still copies audio through HandBrake; there one frame of a whole movie does not matter.
+13. **Joined movie in sync: frames recovered at open-GOP splits, exact frame rate.** The 4K HDR Edge of Tomorrow, run with `-Q -E` and its 71 encoded parts joined with `--append-mode track`, drifted more and more out of sync. Each part played fine on its own.
+    - Cause 1, open splits: this source has a keyframe every ~10 s, but only 150 of its 681 keyframes start a closed GOP, with gaps of up to 420 s. So 68 of 113 splits had to be at open keyframes. At each, the 1–5 frames shown just before the split were stored after it, in the next chunk, which cannot decode them. For example, chunk 033 decoded 1437 of 1440 frames. The audio of the chunk went up to the split, but its video ended earlier, and the track-mode join (no gaps) moved all later video earlier by that much: 4.17 s by part 71. The `--sync` of the next chunk keeps a single part in sync, but cannot help the join.
+    - HandBrake was not the cause. On a cut around one open split, the old (audio through HandBrake) and the current (video only + mkvmerge) parts joined with the same 42 ms shift.
+    - Fix: `recovering_lost_frames` decodes the lost frames from the whole movie and adds them to the end of the chunk before the split, see [Split points](#split-points). The recovered frame was bit-identical to the same frame decoded from the whole movie, ~3 s per open split. VMAF ignores them (`libvmaf` `shortest=1`), as the reference chunk does not have them.
+    - Cause 2, frame rate: it was read from ffprobe's text, `23.98 fps`, so the frames were merged at 47.96 instead of 47.952 fps. Each part was ~10 ms per minute too short, ~1.2 s over 2 hours. Now the exact `r_frame_rate` (`24000/1001`, so `48000/1001`) is used.
+    - Also: the `-E` mux now places HandBrake's video (which starts at 0) at the start of the merged part's video (`--sync`).
+    - Checked: a 200 s 1080p HDR cut with open GOPs (x265, keyframe every 10 s), 4 chunks, one split open, `-Q -E`. 3 frames were recovered. The joined movie has 9592 = 2 × 4796 frames, its video is as long as the source's (200.033 s), and every frame is within 1 ms of its source time (before the frame-rate fix: −32 ms at the end). Frames after the open split match their source frames (PSNR 43–45 dB, the neighbours 18–24 dB). VMAF of the parts: 93.5–99.7.
+    - Parts encoded before this fix are short by those frames, so the movie has to be processed again.
 
 ### Codec benchmark
 

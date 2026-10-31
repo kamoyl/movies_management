@@ -166,6 +166,8 @@ OUTPUT="$(PATH="${WORK_DIR}/argsbin:${PATH}" run_with_helpers "${EXTRACT_SETUP}"
 assert_contains "HDR: frames are extracted through the tone-mapping filter" "${OUTPUT}" "-i c.mkv -vf libplacebo=tm -fps_mode passthrough o/in/c/%08d.png"
 OUTPUT="$(PATH="${WORK_DIR}/argsbin:${PATH}" run_with_helpers "${EXTRACT_SETUP}"'; TONE_MAPPING_FILTER=""; extracting_mkv_frames c o t; wait; tr "\n" " " < ffmpeg_args.txt' 2>&1)"
 assert_contains "SDR: frames are extracted without a filter" "${OUTPUT}" "-i c.mkv -fps_mode passthrough o/in/c/%08d.png"
+OUTPUT="$(PATH="${WORK_DIR}/argsbin:${PATH}" run_with_helpers "${EXTRACT_SETUP}"'; OUT_DIR=out; NCNN_METHOD=rife; OUTPUT_FPS_ROUND=48; OUTPUT_FRAME_RATE=48000/1001; INTERMEDIATE_CODEC_OPTIONS=(-c:v ffv1); merging_frames_mkv c t o; wait; tr "\n" " " < ffmpeg_args.txt' 2>&1)"
+assert_contains "frames are merged at the exact rational rate (not a rounded 47.96)" "${OUTPUT}" "-framerate 48000/1001 -i t/out/c_rife_48/%08d.png"
 
 echo "encoding_quality_metric (ffmpeg replaced by a fake that records the filter graph)"
 mkdir -p "${WORK_DIR}/vmafbin"
@@ -191,6 +193,7 @@ assert_contains "compares only original-position frames" "${OUTPUT}" "[0:v]selec
 assert_contains "renumbers the reference the same way" "${OUTPUT}" "[1:v]setpts=N/(23.976*TB)[reference]"
 assert_contains "distorted first, reference second" "${OUTPUT}" "[distorted][reference]libvmaf"
 assert_contains "uses all CPU cores" "${OUTPUT}" "libvmaf=n_threads="
+assert_contains "frames recovered at an open split (not in the reference) are left out" "${OUTPUT}" "log_fmt=json:shortest=1"
 if [ -s /usr/share/model/vmaf_v0.6.1.json ]; then EXPECTED_MODEL="model=path=/usr/share/model/vmaf_v0.6.1.json:"; else EXPECTED_MODEL="model=version=vmaf_v0.6.1:"; fi
 assert_contains "VMAF model: package file, otherwise built into libvmaf" "${OUTPUT}" "${EXPECTED_MODEL}"
 OUTPUT="$(PATH="${WORK_DIR}/vmafbin:${PATH}" run_with_helpers 'TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; TARGET_FRAME_COUNT=2; INTER_FRAMES_COUNT=2880; INPUT_FPS=23.976; TONE_MAPPING_FILTER="libplacebo=tm"; encoding_quality_metric merged.mkv original.mkv; cat graph.txt' 2>&1)"
@@ -272,6 +275,57 @@ OUTPUT="$(run_with_helpers "${GUARD_SETUP}"'; RESUME=yes; echo "62.000s" > Film_
 assert_contains "-r with the same split points continues" "${OUTPUT}" "SAME=ok"
 assert_contains "a new run saves its split points" "${OUTPUT}" "SAVED=70.000s"
 
+echo "frames lost at an open-GOP split are recovered (ffprobe and ffmpeg replaced by fakes)"
+mkdir -p "${WORK_DIR}/recoverbin"
+cat > "${WORK_DIR}/recoverbin/ffprobe" <<'EOF'
+#!/usr/bin/env bash
+# fake ffprobe of the next chunk: packets (decode order) from next_packets.csv, first frame from next_first.txt
+if [[ " $* " == *"packet=pts_time,flags"* ]]
+then
+  cat next_packets.csv
+else
+  cat next_first.txt
+fi
+EOF
+cat > "${WORK_DIR}/recoverbin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+# fake ffmpeg: records its arguments, writes -frames:v PNGs from -start_number (exits 1 with fail_ffmpeg)
+printf '%s\n' "$@" > recover_args.txt
+while [ $# -gt 1 ]
+do
+  case "$1" in
+    -frames:v) COUNT="$2" ;;
+    -start_number) FIRST="$2" ;;
+  esac
+  OUT="$2"
+  shift
+done
+for N in $(seq "${FIRST}" $((FIRST + COUNT - 1)))
+do
+  echo png > "$(printf "${OUT}" "${N}")"
+done
+if [ -e fail_ffmpeg ]
+then
+  exit 1
+fi
+EOF
+chmod +x "${WORK_DIR}/recoverbin/ffprobe" "${WORK_DIR}/recoverbin/ffmpeg"
+# K of the next chunk at 0.042 in the chunk (= 120.120 s in the movie); 0.000 and -0.042 lost, 0.042 first decoded
+RECOVER_SETUP='LOG="$PWD/log"; mkdir -p "$LOG" fr; rm -f fr/* recover_args.txt fail_ffmpeg; WHOLE_MOVIE_NAME_ARRAY=(Film); SPLIT_TIMESTAMPS="60.060s,120.120s"; TONE_MAPPING_FILTER="libplacebo=tm"; echo next > video_part_minute_003.mkv
+printf "%s\n" 0.042000,K__ 0.000000,___ -0.042000,___ 0.209000,___ 0.125000,___ > next_packets.csv; echo 0.042000 > next_first.txt'
+OUTPUT="$(PATH="${WORK_DIR}/recoverbin:${PATH}" run_with_helpers "${RECOVER_SETUP}"'; recovering_lost_frames video_part_minute_002 fr 1437; echo "RECOVERED=${RECOVERED_FRAMES_COUNT} FILES=$(ls fr | tr "\n" " ")"; tr "\n" " " < recover_args.txt' 2>&1)"
+assert_contains "lost frames of the next chunk are recovered after the decoded ones" "${OUTPUT}" "RECOVERED=2 FILES=00001438.png 00001439.png"
+assert_contains "they are selected by their movie timestamps, tone-mapped" "${OUTPUT}" "select='lt(abs(t-120.036000),0.005)+lt(abs(t-120.078000),0.005)',libplacebo=tm"
+assert_contains "the movie is decoded from before them, with its own timestamps" "${OUTPUT}" "-copyts -ss 119.036 -i Film.mkv"
+OUTPUT="$(PATH="${WORK_DIR}/recoverbin:${PATH}" run_with_helpers "${RECOVER_SETUP}"'; touch fail_ffmpeg; recovering_lost_frames video_part_minute_002 fr 1437; echo "RECOVERED=${RECOVERED_FRAMES_COUNT} FILES=[$(ls fr)]"' 2>&1)"; STATUS=$?
+assert_status   "a failed recovery does not stop the run" 0 "${STATUS}"
+assert_contains "a failed recovery warns and removes its frames" "${OUTPUT}" "RECOVERED=0 FILES=[]"
+assert_contains "a failed recovery says the part is short" "${OUTPUT}" "this part is 2 frame(s) short"
+OUTPUT="$(PATH="${WORK_DIR}/recoverbin:${PATH}" run_with_helpers "${RECOVER_SETUP}"'; printf "%s\n" 0.000000,K__ 0.167000,___ > next_packets.csv; echo 0.000000 > next_first.txt; recovering_lost_frames video_part_minute_002 fr 1440; echo "CLOSED=${RECOVERED_FRAMES_COUNT}"; recovering_lost_frames video_part_minute_003 fr 1440; echo "LAST=${RECOVERED_FRAMES_COUNT}"; if [ -e recover_args.txt ]; then echo DECODED; fi' 2>&1)"
+assert_contains "a closed-GOP split loses nothing" "${OUTPUT}" "CLOSED=0"
+assert_contains "the last chunk has no next chunk to recover from" "${OUTPUT}" "LAST=0"
+if [[ ${OUTPUT} == *DECODED* ]]; then fail "nothing is decoded when nothing is lost"; else pass "nothing is decoded when nothing is lost"; fi
+
 echo "merging_streams_mkv keeps the video in sync (mkvmerge replaced by a fake)"
 mkdir -p "${WORK_DIR}/mkvbin"
 cat > "${WORK_DIR}/mkvbin/mkvmerge" <<'EOF'
@@ -312,6 +366,12 @@ done
 EOF
 cat > "${WORK_DIR}/hbbin/ffprobe" <<'EOF'
 #!/usr/bin/env bash
+# the time of the first frame of the merged part from start.txt (default 0), otherwise its streams
+if [[ " $* " == *"best_effort_timestamp_time"* ]]
+then
+  cat start.txt 2>/dev/null || echo "0.000000"
+  exit 0
+fi
 printf '{"streams":[{"index":0,"codec_type":"video"},{"index":1,"codec_type":"audio","tags":{"language":"eng"}},{"index":2,"codec_type":"subtitle","tags":{"language":"pol"}}]}\n'
 EOF
 cat > "${WORK_DIR}/hbbin/mkvmerge" <<'EOF'
@@ -328,7 +388,7 @@ then
 fi
 EOF
 chmod +x "${WORK_DIR}/hbbin/HandBrakeCLI" "${WORK_DIR}/hbbin/ffprobe" "${WORK_DIR}/hbbin/mkvmerge"
-PART_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; rm -f "$LOG"/* *.done fail_hb fail_mux; WHOLE_MOVIE_NAME_ARRAY=(My Movie); NCNN_METHOD=rife; KEEP_INTERMEDIATES=no; VERBOSE=yes; TARGET_FRAME_COUNT=2; INTER_FRAMES_COUNT=3000; INPUT_FPS=25; echo merged > p_merged.mkv; handbrake_encode_settings; HANDBRAKE_CROP=8:4:0:0'
+PART_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; rm -f "$LOG"/* *.done fail_hb fail_mux start.txt; WHOLE_MOVIE_NAME_ARRAY=(My Movie); NCNN_METHOD=rife; KEEP_INTERMEDIATES=no; VERBOSE=yes; TARGET_FRAME_COUNT=2; INTER_FRAMES_COUNT=3000; INPUT_FPS=25; echo merged > p_merged.mkv; handbrake_encode_settings; HANDBRAKE_CROP=8:4:0:0'
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkdir -p "$LOG"; echo "8, 4, 0, 0" > crop.txt; detecting_crop whole.mkv; echo "CROP=${HANDBRAKE_CROP}"' 2>&1)"
 assert_contains "the crop is read from one scan of the whole video" "${OUTPUT}" "CROP=8:4:0:0"
 PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkdir -p "$LOG"; echo "" > crop.txt; detecting_crop whole.mkv' > /dev/null 2>&1
@@ -343,6 +403,8 @@ assert_contains "HandBrake encodes the video only (no frames dropped for A/V syn
 assert_contains "HandBrake gets no audio or subtitles" "${OUTPUT}" "--no-markers -a none -s none"
 assert_contains "mkvmerge copies the chosen audio and subtitles from the part" "${OUTPUT}" "MUX: -o p_encoded.mkv p_encoded_video_only.mkv -D --no-chapters --no-attachments --no-global-tags --audio-tracks 1 --subtitle-tracks 2 p_merged.mkv"
 assert_contains "the muxed file is the encoded part" "${OUTPUT}" "CONTENT=fake muxed"
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo 0.042000 > start.txt; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; echo "MUX: $(tr "\n" " " < mux_args.txt)"' 2>&1)"
+assert_contains "the encoded video starts where the merged part's video starts" "${OUTPUT}" "MUX: -o p_encoded.mkv --sync 0:42 p_encoded_video_only.mkv -D"
 if [[ ${OUTPUT} == *VIDEO_ONLY_KEPT* ]]; then fail "the video-only encode is removed after muxing"; else pass "the video-only encode is removed after muxing"; fi
 if [[ ${OUTPUT} == *MERGED_KEPT* ]]; then fail "the merged part is removed after its encode"; else pass "the merged part is removed after its encode"; fi
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; KEEP_INTERMEDIATES=yes; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi' 2>&1)"
