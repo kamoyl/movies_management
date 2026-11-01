@@ -408,16 +408,53 @@ joining_encoded_parts()
       failed
     fi
   done
-  local JOIN_ARGUMENTS=("${ENCODED_PARTS[0]}")
+  local JOIN_LOG="${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_joining_encoded_parts.log"
+  # Only the video is taken from the parts; the audio and subtitles come from the source movie.
+  # A part's audio starts at the source's first audio frame after the split (e.g. 20 ms after
+  # its video), and --append-mode track adds that start again at every join, so the parts'
+  # audio fell behind (0.9 s after 45 joins). The joined video has the source's timeline, so
+  # the source's audio, one continuous stream, is in sync with it. The tracks are chosen like
+  # those of the chunks (extracting_mkv_streams).
+  local SOURCE_FILE="${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
+  local SOURCE_TRACKS_JSON="${TMP}/${WHOLE_MOVIE_NAME_ARRAY[*]}_joining_tracks.json"
+  if ! mkvmerge -J "${SOURCE_FILE}" > "${SOURCE_TRACKS_JSON}" 2> "${JOIN_LOG}"
+  then
+    error "  reading tracks of ${YELLOW}${SOURCE_FILE}${RED} (mkvmerge -J) failed (see log: ${JOIN_LOG})"
+    ERROR_CODE="1"
+    failed
+  fi
+  local SOURCE_AUDIO_IDS
+  local SOURCE_SUBTITLE_IDS
+  SOURCE_AUDIO_IDS="$(tracks_by_language "${SOURCE_TRACKS_JSON}" audio)"
+  if [ -z "${SOURCE_AUDIO_IDS}" ]
+  then
+    SOURCE_AUDIO_IDS="$(all_tracks "${SOURCE_TRACKS_JSON}" audio)"
+  fi
+  SOURCE_SUBTITLE_IDS="$(tracks_by_language "${SOURCE_TRACKS_JSON}" subtitles)"
+  local SOURCE_TRACKS=(--no-video --no-chapters --no-attachments --no-global-tags --no-track-tags)
+  if [ -n "${SOURCE_AUDIO_IDS}" ]
+  then
+    SOURCE_TRACKS+=(--audio-tracks "${SOURCE_AUDIO_IDS}")
+  else
+    SOURCE_TRACKS+=(--no-audio)
+  fi
+  if [ -n "${SOURCE_SUBTITLE_IDS}" ]
+  then
+    SOURCE_TRACKS+=(--subtitle-tracks "${SOURCE_SUBTITLE_IDS}")
+  else
+    SOURCE_TRACKS+=(--no-subtitles)
+  fi
+  local JOIN_ARGUMENTS=(--no-audio --no-subtitles "${ENCODED_PARTS[0]}")
   local ENCODED_PART
   for ENCODED_PART in "${ENCODED_PARTS[@]:1}"
   do
-    JOIN_ARGUMENTS+=(+ "${ENCODED_PART}")
+    JOIN_ARGUMENTS+=(+ --no-audio --no-subtitles "${ENCODED_PART}")
   done
-  inf "  joining ${YELLOW}${#ENCODED_PARTS[@]}${CYAN} encoded parts into ${YELLOW}${FINAL_VIDEO_FILE}"
-  # track mode: a subtitle which outlasts its part would otherwise leave gaps (see appending_mkvs)
-  mkvmerge --append-mode track -o "${FINAL_VIDEO_FILE}" "${JOIN_ARGUMENTS[@]}" > "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_joining_encoded_parts.log" 2>&1
-  mkvtoolnix_status "$?" "joining the encoded parts" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_joining_encoded_parts.log"
+  inf "  joining ${YELLOW}${#ENCODED_PARTS[@]}${CYAN} encoded parts into ${YELLOW}${FINAL_VIDEO_FILE}${CYAN}, with audio and subtitles of ${YELLOW}${SOURCE_FILE}"
+  # track mode: each part's video continues where the previous part's video ends
+  mkvmerge --append-mode track -o "${FINAL_VIDEO_FILE}" "${JOIN_ARGUMENTS[@]}" "${SOURCE_TRACKS[@]}" "${SOURCE_FILE}" >> "${JOIN_LOG}" 2>&1
+  mkvtoolnix_status "$?" "joining the encoded parts" "${JOIN_LOG}"
+  rm -f -- "${SOURCE_TRACKS_JSON}"
   inf "  result: ${YELLOW}${FINAL_VIDEO_FILE}"
   # the joined video replaces the encoded parts (kept with -k); markers of merged parts which
   # were already removed are not needed anymore

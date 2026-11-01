@@ -431,6 +431,22 @@ assert_contains "interpolation_nncn -h documents -E (final encode)" "${OUTPUT}" 
 LINE_JOIN="$(grep -n '^  joining_encoded_parts$' "${REPO_ROOT}/interpolation_nncn" | cut -d: -f1)"
 if [ -n "${LINE_FINISH}" ] && [ -n "${LINE_JOIN}" ] && [ "${LINE_FINISH}" -lt "${LINE_JOIN}" ]; then pass "the last encode is waited for before the parts are joined"; else fail "the last encode is waited for before the parts are joined"; fi
 
+echo "joining_encoded_parts (mkvmerge replaced by a fake that records its arguments)"
+mkdir -p "${WORK_DIR}/joinbin"
+cat > "${WORK_DIR}/joinbin/mkvmerge" <<'EOF'
+#!/usr/bin/env bash
+# fake mkvmerge: -J prints the track list in tracks.json, a join records its arguments
+if [[ $1 == -J ]]; then cat tracks.json; exit 0; fi
+printf '%s\n' "$@" > join_args.txt
+EOF
+chmod +x "${WORK_DIR}/joinbin/mkvmerge"
+JOIN_SETUP='eval "$(sed -n "/^joining_encoded_parts()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; WHOLE_MOVIE_NAME_ARRAY=(S); NCNN_METHOD=rife; LAST_VIDEO_FRAGMENT_ID=002; LOG=.; TMP=.; FINAL_VIDEO_FILE=final.mkv; KEEP_INTERMEDIATES=yes; for N in 001 002; do echo part > video_part_minute_${N}_rife_50_encoded.mkv; echo S > video_part_minute_${N}_rife_50_encoded.mkv.done; done'
+OUTPUT="$(PATH="${WORK_DIR}/joinbin:${PATH}" run_with_helpers "${JOIN_SETUP}"'; echo "{\"tracks\":[{\"id\":0,\"type\":\"video\"},{\"id\":1,\"type\":\"audio\",\"properties\":{\"language\":\"eng\"}},{\"id\":2,\"type\":\"audio\",\"properties\":{\"language\":\"ger\"}},{\"id\":3,\"type\":\"subtitles\",\"properties\":{\"language\":\"pol\"}},{\"id\":4,\"type\":\"subtitles\",\"properties\":{\"language\":\"fre\"}}]}" > tracks.json; joining_encoded_parts; echo "JOIN: $(tr "\n" " " < join_args.txt)"' 2>&1)"
+assert_contains "the join takes only the video of the parts" "${OUTPUT}" "-o final.mkv --no-audio --no-subtitles video_part_minute_001_rife_50_encoded.mkv + --no-audio --no-subtitles video_part_minute_002_rife_50_encoded.mkv --no-video"
+assert_contains "the join takes the chunks' audio and subtitles from the source" "${OUTPUT}" "--audio-tracks 1 --subtitle-tracks 3 S.mkv"
+OUTPUT="$(PATH="${WORK_DIR}/joinbin:${PATH}" run_with_helpers "${JOIN_SETUP}"'; echo "{\"tracks\":[{\"id\":0,\"type\":\"video\"},{\"id\":1,\"type\":\"audio\",\"properties\":{\"language\":\"ger\"}},{\"id\":2,\"type\":\"audio\",\"properties\":{\"language\":\"fre\"}}]}" > tracks.json; joining_encoded_parts; echo "JOIN: $(tr "\n" " " < join_args.txt)"' 2>&1)"
+assert_contains "without pl/nl/en audio the join takes all source audio, no subtitles" "${OUTPUT}" "--audio-tracks 1,2 --no-subtitles S.mkv"
+
 echo "intermediate_codec_options (ffmpeg replaced by a fake encoder list)"
 mkdir -p "${WORK_DIR}/codecbin"
 cat > "${WORK_DIR}/codecbin/ffmpeg" <<'EOF'
