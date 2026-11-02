@@ -60,7 +60,8 @@ below cost a failed or out-of-sync run; the details are in
   `-g` on 4K, and the run went on, leaving 13 GB merged parts
   until the disk was full; it now stops (Done 16).
 - *Profile changed on resume.* Continuing with `-g` mixed two
-  profiles in one movie; markers record it and `-r` warns (Done 16).
+  profiles in one movie; markers record it and a resumed run warns
+  (Done 16).
 
 **Tools and encoders**
 
@@ -123,7 +124,8 @@ Exit codes: `0` success, `1` processing error, `2` invalid usage or input, `127`
 
 **Resumable and predictable runs.**
 
-- `interpolation_nncn -r` resumes an interrupted run. After a chunk finishes, a marker `video_part_minute_NNN_<method>_<fps>_merged.mkv.done` is written next to the merged chunk; it contains the whole movie name. With `-r`, a chunk is skipped only when its marker exists, the marker names the same movie, and the merged `.mkv` is non-empty. Otherwise the chunk is processed again. `-r` can be combined with `-s`. Chunks finished before `-r` existed have no marker and are therefore processed again.
+- `interpolation_nncn` resumes an interrupted run by default (before Done item 17 only with `-r`, which is still accepted). After a chunk finishes, a marker `video_part_minute_NNN_<method>_<fps>_merged.mkv.done` is written next to the merged chunk; it contains the whole movie name. A chunk is skipped only when its marker exists, the marker names the same movie, and the merged `.mkv` is non-empty. Otherwise the chunk is processed again. Resuming works with `-s`. Chunks finished before markers existed have no marker and are therefore processed again.
+- `-F` starts from scratch: before splitting, it removes the results of an earlier run of the same movie and method in the current directory (each removal is listed): the merged and encoded parts whose marker names this movie, with their markers, and the split points file. With `-s`, only the chunks from that number on are removed, and the split points stay (the earlier chunks are joined with the new ones). Other files (chunks, unfinished parts) have generic names and are overwritten as the chunks are processed again. `-F` with `-r` exits 2.
 - On exit, error, or Ctrl+C, `interpolation_nncn` stops the background processes it started directly (for example progress monitors), so they do not keep running after the script ends.
 - The VMAF progress loop sleeps 2 seconds between checks instead of busy-waiting on one CPU core.
 - `movies_encoding` no longer calls `movie_data_collecting` twice, saving duplicate OMDb/TheMovieDB requests.
@@ -223,11 +225,12 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 | `-o` | `DIR` | Workspace root for temporary files and logs. Defaults to `$HOME/var`. |
 | `-O` | `DIR` | Separate root for extracted/processed frames and related temporary data. Defaults to the `-o` workspace root. |
 | `-s` | `NNN` | First three-digit chunk number to process, such as `003`. Defaults to `001`; this lets a run skip earlier chunks. |
-| `-r` | — | Resume: skip chunks already finished by an earlier run of the same movie and method in this directory (see "Resumable and predictable runs"). Can be combined with `-s`. |
+| `-F` | — | Fresh start. By default a run resumes: it skips chunks already finished by an earlier run of the same movie and method in this directory (see "Resumable and predictable runs"). `-F` removes those results and processes the movie again; with `-s`, only from that chunk on. |
+| `-r` | — | Resume. The default; still accepted so that existing commands work. Cannot be combined with `-F` (exit 2). |
 | `-T` | — | No tone mapping: an HDR video is processed as HDR, without conversion to SDR. A warning is shown, because the colours of the processed frames may differ. Without `-T`, HDR is tone-mapped to SDR automatically. |
 | `-k` | — | Keep the intermediate files of finished chunks: the frames-only video in `TMP_OUT` and the chunk's frame directories. Without `-k` they are removed once the chunk is done (its `.done` marker is written). The frames-only video is a full copy of the video track of `_merged.mkv`, so keeping it doubles the space needed per chunk. |
 | `-Q` | — | Run the VMAF quality check for each processed chunk (processed chunk = distorted, first input; original chunk = reference, second input). For interpolation (`rife`, `dain`, `cain`) only the frames at original positions are compared, because in-between frames have no reference; the score shows what frame merging and encoding lost, not the quality of the interpolation itself. Uses all CPU cores. Requires an FFmpeg build with `libvmaf`; the model is `/usr/share/model/vmaf_v0.6.1.json` when that file exists (Linux packages), otherwise the `vmaf_v0.6.1` model built into libvmaf (for example Homebrew). An HDR reference is tone-mapped with the same filter as the extracted frames. VMAF runs in the background with lower priority (`nice -n 10`) alongside the next chunk; the source chunk is kept until its VMAF is done, and the last chunk's VMAF is waited for at the end. Off by default. |
-| `-E` | — | Final encode of each part: after a chunk is merged, HandBrake encodes it in the background (`nice -n 10`) alongside the next chunk, with the same settings as `movies_encoding` (SVT-AV1 10-bit, quality 22, preset 5, audio copied). The crop is detected once, from the whole input, and passed to every part (HandBrake's automatic crop differs from part to part). After a successful encode the `_merged.mkv` part is removed (kept with `-k`). At the end the video of the encoded parts is joined with `mkvmerge --append-mode track`, with the audio and subtitle tracks taken from the source movie (the same tracks as the chunks), into `DESTINATION_DIR/<input name>.mkv` (default `/media/ready`) and removed (kept with `-k`). The run stops at start-up if the destination is missing or not writable (exit 1) or the final file already exists (exit 2). With `-Q`, VMAF compares the encoded part (not the merged one) with the source chunk, cropped the same way. A failed encode keeps its merged part and stops the run (exit 1) once the chunk processed alongside it is finished; run again with `-r -E`. See [Final encode of each part](#final-encode-of-each-part--e). |
+| `-E` | — | Final encode of each part: after a chunk is merged, HandBrake encodes it in the background (`nice -n 10`) alongside the next chunk, with the same settings as `movies_encoding` (SVT-AV1 10-bit, quality 22, preset 5, audio copied). The crop is detected once, from the whole input, and passed to every part (HandBrake's automatic crop differs from part to part). After a successful encode the `_merged.mkv` part is removed (kept with `-k`). At the end the video of the encoded parts is joined with `mkvmerge --append-mode track`, with the audio and subtitle tracks taken from the source movie (the same tracks as the chunks), into `DESTINATION_DIR/<input name>.mkv` (default `/media/ready`) and removed (kept with `-k`). The run stops at start-up if the destination is missing or not writable (exit 1) or the final file already exists (exit 2). With `-Q`, VMAF compares the encoded part (not the merged one) with the source chunk, cropped the same way. A failed encode keeps its merged part and stops the run (exit 1) once the chunk processed alongside it is finished; run again with `-E`. See [Final encode of each part](#final-encode-of-each-part--e). |
 | `-a` | — | With `-E`: animation profile (as `movies_encoding -a`). Without `-E`: exit 2. |
 | `-g` | — | With `-E`: grain profile (as `movies_encoding -g`). Without `-E`: exit 2. |
 | `-H` | — | With `-E`: high-motion profile (as `movies_encoding -H`). Without `-E`: exit 2. |
@@ -268,7 +271,7 @@ Each step of each chunk also gets a row in `TMP/timeline.csv` (`~`-separated), s
 - Only keyframes the decoder can really start from count. A container may flag ordinary frames as keyframes (Edge of Tomorrow: 239 of 1948 flags, HEVC `TRAIL_R` frames), so the script decodes only the keyframes of the whole video (`ffprobe -skip_frame nokey`, ~22 s for a 2-hour 1080p movie, log `LOG/<movie>_decoded_keyframes.log`) and ignores every other keyframe flag.
 - Each chunk's frame count is the number of decoded frames, not packets, so the count always matches the extracted frames.
 - A chunk that starts after an open split has no video for its first frames (they were recovered into the previous chunk), so its processed video is placed at the time of its first decoded frame (`mkvmerge --sync`), and picture and sound stay in sync. This also fixes a source whose video does not start at 0 (for example 83 ms), which before led the sound by that much.
-- The chosen points are saved in `<movie>_split_points.txt` in the current directory. With `-r`, or `-s` other than `001`, the run stops with exit 2 if the existing chunks were split at other points, or by an older version (chunks marked `.done` but no points file). Then start the movie again without `-r`/`-s`. Without `-k` the file is removed after the `-E` join.
+- The chosen points are saved in `<movie>_split_points.txt` in the current directory. With `-r`, or `-s` other than `001`, the run stops with exit 2 if the existing chunks were split at other points, or by an older version (chunks marked `.done` but no points file). Then start the movie again with `-F`. Without `-k` the file is removed after the `-E` join.
 
 ### Final encode of each part (`-E`)
 
@@ -279,9 +282,9 @@ DESTINATION_DIR="$HOME/ready" ./interpolation_nncn -i "Episode.mkv" -E -g
 
 - Each part is encoded while the next chunk is processed (~100 s per 4K 50 fps minute on the Linux rig, against ~6 min per chunk), so the final encode adds almost no time.
 - The merged part is only a short-lived intermediate (HandBrake cannot read PNG frames or a pipe). It is removed right after its encode, so even lossless `x264_lossless` needs space for about two parts only.
-- A finished part gets a `<part>_encoded.mkv.done` marker: the movie name, and on line 2 the profile (`film`, `grain`, `animation`, `highmotion`). With `-r -E`, encoded parts are skipped, and a merged part without its encode is encoded again. The join needs every part 001…last to be encoded; otherwise it stops with exit 1.
-- A failed encode stops the run (exit 1), but only after the chunk processed alongside it is finished and marked, so no interpolation is lost; that chunk gets no row in `statistics.txt`. Going on would leave one merged part after another (13 GB each at 4K) when the encodes keep failing. Exit code 137 means HandBrake was killed (SIGKILL), most likely by the out-of-memory killer; the run says so (check `journalctl -k | grep -i oom`). Free memory (or encode without `-g` on 4K) and run again with `-r -E`.
-- With `-r`, a skipped part encoded with another profile than this run's (e.g. the run continued with `-g`) gets a warning, and the join lists such parts; markers of older versions have no profile (`unknown`). To encode such a part with the current profile, remove its `_encoded.mkv.done` marker: chunks are split again on every run, so `-r -E` processes it again.
+- A finished part gets a `<part>_encoded.mkv.done` marker: the movie name, and on line 2 the profile (`film`, `grain`, `animation`, `highmotion`). With `-E`, encoded parts are skipped, and a merged part without its encode is encoded again. The join needs every part 001…last to be encoded; otherwise it stops with exit 1.
+- A failed encode stops the run (exit 1), but only after the chunk processed alongside it is finished and marked, so no interpolation is lost; that chunk gets no row in `statistics.txt`. Going on would leave one merged part after another (13 GB each at 4K) when the encodes keep failing. Exit code 137 means HandBrake was killed (SIGKILL), most likely by the out-of-memory killer; the run says so (check `journalctl -k | grep -i oom`). Free memory (or encode without `-g` on 4K) and run again with `-E`.
+- When resuming, a skipped part encoded with another profile than this run's (e.g. the run continued with `-g`) gets a warning, and the join lists such parts; markers of older versions have no profile (`unknown`). To encode such a part with the current profile, remove its `_encoded.mkv.done` marker: chunks are split again on every run, so the next run with `-E` processes it again.
 - HandBrake logs: `LOG/<part>_encoded.mkv_handbrake.log`, crop scan `LOG/handbrake_crop_scan.json` (result) and `.log`, join `LOG/<movie>_joining_encoded_parts.log`.
 - HandBrake encodes only the video of a part (`-a none -s none`). `mkvmerge` then copies the chosen audio and subtitle tracks (the same language choice as `movies_encoding`) from the merged part; its output follows HandBrake's in the same log. Copying a TrueHD track through HandBrake made it drop one video frame near the start of every part, without a message, see [Done](#done) item 12. HandBrake's video starts at 0, so the mux places it at the start of the merged part's video (`--sync`), as `merging_streams_mkv` does.
 - Copying the audio through HandBrake again would not help with sync: the drift found in a joined movie came from frames lost at open-GOP splits, from a rounded frame rate, and from audio start offsets added at every join, the same with either audio path, see [Done](#done) items 13 and 14.
@@ -317,6 +320,9 @@ Examples:
 
 # Start processing from chunk 003 and store frame data on another volume
 ./interpolation_nncn -i "Episode.mkv" -N rife -s 003 -O "/mnt/fast-storage"
+
+# Start the movie again from scratch (an earlier run's results are removed)
+./interpolation_nncn -i "Episode.mkv" -E -F
 
 # Also calculate VMAF for each processed chunk
 ./interpolation_nncn -i "Episode.mkv" -Q
@@ -542,6 +548,13 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - Also, `-r` did not know which profile a part had been encoded with, so continuing with `-g` gave parts 001–023 `film` and 024+ `grain`. The `_encoded.mkv.done` marker now has the profile on line 2 (only line 1, the movie name, is compared); `-r` warns for a skipped part of another profile, and the join lists them. Older markers count as `unknown`.
     - Planned next: running the background jobs through `systemd-run` with memory limits, so HandBrake gets a limit of its own and the main script is protected from the OOM killer.
 
+17. **Resume by default; `-F` for a fresh start.** The user's idea: runs were almost always continued with `-r`, and a run without it processes finished chunks again (hours at 4K). A fresh start should be the explicit choice.
+    - Resuming is safe as a default: a chunk is skipped only when its `.done` marker names the same movie and its part is non-empty, and a run stops with exit 2 when the chunks were split at other points.
+    - `-F` (the user chose to remove, not to ignore, earlier results) removes this movie's finished parts and their markers for the chosen method, and the split points, before splitting, with a list. Only ignoring them, as without `-r` before, would let a later default run reuse parts of an interrupted fresh run, with possibly other settings. Chunk names are the same for every movie, so only parts whose marker names this movie are removed.
+    - `-F -s 029` removes the results from chunk 029 on and keeps the split points, so it redoes one part of a movie (e.g. to measure a change, see [How to measure](#how-to-measure)); the first proposal rejected `-F` with `-s`, but then `-s 029` alone would just skip a finished chunk 029.
+    - `-r` is still accepted, as the default, so existing commands keep working; `-F -r` exits 2. Messages say "run again with `-E`" instead of `-r -E`.
+    - Also fixed: the check for chunks of an older version (no split points file) compared the whole marker with the movie name, so it missed the two-line encoded markers of Done item 16; it now compares line 1.
+
 ### Codec benchmark
 
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
@@ -613,7 +626,7 @@ Dropped after measuring: **frames on tmpfs.** An 83 s 1080p clip (one chunk, `x2
 
 ### How to measure
 
-Process the same chunk before and after a change (for example `-s 029` on `video_part_minute_029.mkv`) and compare the stage runtimes in `TMP/statistics.txt`. Use the same machine and settings for both runs.
+Process the same chunk before and after a change (for example `-F -s 029` on `video_part_minute_029.mkv`; without `-F` a finished chunk is skipped) and compare the stage runtimes in `TMP/statistics.txt`. Use the same machine and settings for both runs.
 
 ## Runtime directories and logs
 

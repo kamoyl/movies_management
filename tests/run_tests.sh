@@ -78,9 +78,14 @@ do
   assert_status   "${SCRIPT_NAME} rejects -i without a value with 2" 2 $?
 done
 OUTPUT="$(TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -h 2>&1)"
-assert_contains "interpolation_nncn -h documents -r (resume)" "${OUTPUT}" "-r  resume"
+assert_contains "interpolation_nncn -h documents -F (fresh start, resume by default)" "${OUTPUT}" "-F  fresh start: by default a run resumes"
+assert_contains "interpolation_nncn -h keeps -r (the default)" "${OUTPUT}" "-r  resume (the default"
 assert_contains "interpolation_nncn -h separates unsupported methods" "${OUTPUT}" "not supported yet"
 assert_contains "interpolation_nncn -h documents -T (no tone mapping)" "${OUTPUT}" "-T  no tone mapping"
+mkdir -p "${WORK_DIR}/cli" && echo x > "${WORK_DIR}/cli/x.mkv"
+OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -F -r 2>&1)"; STATUS=$?
+assert_status   "interpolation_nncn -F with -r stops with 2" 2 "${STATUS}"
+assert_contains "interpolation_nncn -F with -r says why" "${OUTPUT}" "exclude each other"
 
 echo "failed: never exits 0"
 run_with_helpers 'ERROR_CODE=2; failed' > /dev/null
@@ -274,6 +279,19 @@ assert_status "-s with chunks of an older version (no points file) stops with 2"
 OUTPUT="$(run_with_helpers "${GUARD_SETUP}"'; RESUME=yes; echo "62.000s" > Film_split_points.txt; checking_split_points_file; echo "SAME=ok"; RESUME=no; echo Film > video_part_minute_001_rife_48_merged.mkv.done; SPLIT_TIMESTAMPS="70.000s"; checking_split_points_file; echo "SAVED=$(cat Film_split_points.txt)"' 2>&1)"
 assert_contains "-r with the same split points continues" "${OUTPUT}" "SAME=ok"
 assert_contains "a new run saves its split points" "${OUTPUT}" "SAVED=70.000s"
+OUTPUT="$(run_with_helpers "${GUARD_SETUP}"'; RESUME=yes; echo "60.000s" > Film_split_points.txt; checking_split_points_file' 2>&1)"
+assert_contains "other split points: the run says to start with -F" "${OUTPUT}" "start the movie again with -F"
+run_with_helpers "${GUARD_SETUP}"'; RESUME=yes; printf "Film\nfilm\n" > video_part_minute_001_rife_48_encoded.mkv.done; checking_split_points_file' > /dev/null 2>&1
+assert_status "an older version's encoded marker (two lines) is recognized" 2 $?
+
+echo "removing_earlier_results (-F)"
+FRESH_SETUP='eval "$(sed -n "/^removing_earlier_results()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; WHOLE_MOVIE_NAME_ARRAY=(My Film); NCNN_METHOD=rife; rm -rf fresh; mkdir fresh; cd fresh || exit 99; for N in 001 002 003; do echo part > video_part_minute_${N}_rife_48_merged.mkv; echo "My Film" > video_part_minute_${N}_rife_48_merged.mkv.done; echo part > video_part_minute_${N}_rife_48_encoded.mkv; printf "My Film\nfilm\n" > video_part_minute_${N}_rife_48_encoded.mkv.done; done; echo Other > video_part_minute_003_rife_48_merged.mkv.done; echo "My Film" > video_part_minute_002_dain_48_merged.mkv.done; echo pts > "My Film_split_points.txt"; echo part > "My Film_rife_48_merged.mkv"; echo "My Film" > "My Film_rife_48_merged.mkv.done"'
+OUTPUT="$(run_with_helpers "${FRESH_SETUP}"'; SPLIT_PART_START=001; removing_earlier_results; echo "LEFT: $(ls | tr "\n" " ")"' 2>&1)"
+assert_contains "-F removes this movie's parts and markers" "${OUTPUT}" "6 earlier result(s) of My Film removed"
+assert_contains "-F keeps markers of other movies and methods, and their parts" "${OUTPUT}" "LEFT: video_part_minute_002_dain_48_merged.mkv.done video_part_minute_003_rife_48_merged.mkv video_part_minute_003_rife_48_merged.mkv.done "
+if [[ ${OUTPUT} == *"split_points.txt "* ]]; then fail "-F from chunk 001 removes the split points"; else pass "-F from chunk 001 removes the split points"; fi
+OUTPUT="$(run_with_helpers "${FRESH_SETUP}"'; SPLIT_PART_START=002; removing_earlier_results; echo "LEFT: $(ls | tr "\n" " ")"' 2>&1)"
+assert_contains "-F -s 002 keeps the chunks before 002 and the split points" "${OUTPUT}" "LEFT: My Film_rife_48_merged.mkv My Film_rife_48_merged.mkv.done My Film_split_points.txt video_part_minute_001_rife_48_encoded.mkv video_part_minute_001_rife_48_encoded.mkv.done video_part_minute_001_rife_48_merged.mkv video_part_minute_001_rife_48_merged.mkv.done video_part_minute_002_dain"
 
 echo "frames lost at an open-GOP split are recovered (ffprobe and ffmpeg replaced by fakes)"
 mkdir -p "${WORK_DIR}/recoverbin"

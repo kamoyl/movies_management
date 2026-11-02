@@ -1968,8 +1968,9 @@ choosing_split_points()
   fi
   }
 
-# -r/-s may continue only with chunks split at the same points (an older version split at plain
-# 60 s keyframes). The points are kept in "<movie>_split_points.txt" next to the chunks.
+# A resumed run (the default) or -s may continue only with chunks split at the same points (an
+# older version split at plain 60 s keyframes). The points are kept in "<movie>_split_points.txt"
+# next to the chunks; -F removes the file (from chunk 001) before this check.
 checking_split_points_file()
 {
   local SPLIT_POINTS_FILE="${WHOLE_MOVIE_NAME_ARRAY[*]}_split_points.txt"
@@ -1982,7 +1983,7 @@ checking_split_points_file()
     then
       if [[ "$(cat "${SPLIT_POINTS_FILE}")" != "${NEW_SPLIT_POINTS}" ]]
       then
-        error "  the finished chunks were split at other points (see ${SPLIT_POINTS_FILE}), so -r/-s cannot continue them; start again without -r/-s"
+        error "  the finished chunks were split at other points (see ${SPLIT_POINTS_FILE}), so they cannot be continued; start the movie again with -F (from scratch)"
         ERROR_CODE="2"
         failed
       fi
@@ -1990,9 +1991,10 @@ checking_split_points_file()
     then
       for MARKER in video_part_minute_*.done
       do
-        if [ -e "${MARKER}" ] && [[ "$(cat "${MARKER}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
+        # line 1 is the movie name (encoded markers have the profile on line 2)
+        if [ -e "${MARKER}" ] && [[ "$(head -n1 "${MARKER}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
         then
-          error "  the finished chunks (${MARKER%.done}) were made by an older version with other split points, so -r/-s cannot continue them; start again without -r/-s"
+          error "  the finished chunks (${MARKER%.done}) were made by an older version with other split points, so they cannot be continued; start the movie again with -F (from scratch)"
           ERROR_CODE="2"
           failed
         fi
@@ -2156,10 +2158,10 @@ finishing_part_encoding()
   fi
   if [ "${PART_ENCODING_STATUS}" -ne 0 ] || [ ! -s "${PART_ENCODED_FILE}" ]
   then
-    # its merged part stays, so a later run with -r -E encodes it again; the caller stops the
+    # its merged part stays, so a later run with -E encodes it again; the caller stops the
     # run (PART_ENCODING_FAILED), otherwise every next chunk would leave one more merged part
     # (13 GB at 4K) until the disk is full
-    error "  final encoding of ${YELLOW}${PART_MERGED_FILE}${RED} failed with exit code ${PART_ENCODING_STATUS} (see log: ${PART_ENCODING_LOG}); it is kept, run again with -r -E to encode it"
+    error "  final encoding of ${YELLOW}${PART_MERGED_FILE}${RED} failed with exit code ${PART_ENCODING_STATUS} (see log: ${PART_ENCODING_LOG}); it is kept, run again with -E to encode it"
     if [ "${PART_ENCODING_STATUS}" -eq 137 ]
     then
       # 128 + 9: SIGKILL, which nothing in these scripts sends

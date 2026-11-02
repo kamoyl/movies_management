@@ -64,7 +64,7 @@ usage()
   fi
 echo "
 ${CYAN}Usage:${BRIGHT}${WHITE}
-$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -T ] [ -k ] [ -Q ] [ -E [ -a | -g | -H ] ] [ -S ] [ -v ] [ -h ]
+$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ] [ -Q ] [ -E [ -a | -g | -H ] ] [ -S ] [ -v ] [ -h ]
 
     ${NORMAL}${CYAN}Description: processes a video with a neural network (NCNN/Vulkan) tool, in chunks of about 60 seconds:
             1. converts MP4 to MKV when needed, then splits it into chunks at keyframes starting
@@ -101,8 +101,10 @@ $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -T ] [ -k ]
     ${LIME}-O${DODGERBLUE1}  separate root for extracted and processed frame data (performance of IOPs is crucial)
           (default: same as ${CYAN}-o${DODGERBLUE1})
     ${LIME}-s${DODGERBLUE1}  first three-digit chunk number to process, for example [-s 003] (default: ${CYAN}001${DODGERBLUE1})
-    ${LIME}-r${DODGERBLUE1}  resume: skip chunks already finished by an earlier run of the same movie and method
-          in this directory; combinable with -s
+    ${LIME}-F${DODGERBLUE1}  fresh start: by default a run resumes, it skips chunks already finished by an earlier
+          run of the same movie and method in this directory; -F removes those results (with -s:
+          from that chunk on) and processes the movie again
+    ${LIME}-r${DODGERBLUE1}  resume (the default; still accepted, cannot be combined with -F)
     ${LIME}-T${DODGERBLUE1}  no tone mapping: an HDR video is processed as HDR, without conversion to SDR
           (colours of the processed frames may differ; a warning is shown)
     ${LIME}-k${DODGERBLUE1}  keep intermediate files of finished chunks (the frames-only video in -O and the
@@ -112,7 +114,7 @@ $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -T ] [ -k ]
     ${LIME}-E${DODGERBLUE1}  final encode: encodes each processed chunk with HandBrake (the movies_encoding settings), in the
           background, removes its merged part (kept with -k), and at the end joins the encoded parts
           into DESTINATION_DIR/<input name>.mkv; the crop is detected once, on the whole input
-          a failed encode stops the run after the current chunk (continue with -r -E)
+          a failed encode stops the run after the current chunk (run again with -E to continue)
     ${LIME}-a${DODGERBLUE1}  with -E: animation encoding profile
     ${LIME}-g${DODGERBLUE1}  with -E: grain encoding profile
     ${LIME}-H${DODGERBLUE1}  with -E: high-motion encoding profile
@@ -127,14 +129,17 @@ INTERPOLATION=no
 SILENT=no
 VERBOSE=no
 QUALITY_CHECK=no
-RESUME=no
+# finished chunks are skipped by default; -F starts the movie again from scratch
+RESUME=yes
+RESUME_OPTION=no
+FRESH_START=no
 TONE_MAPPING=yes
 KEEP_INTERMEDIATES=no
 FINAL_ENCODING=no
 ANIMATION=no
 GRAIN=no
 HIGHMOTION=no
-while getopts ":o:O:i:N:s:rTkvShQEagH" ARG
+while getopts ":o:O:i:N:s:rFTkvShQEagH" ARG
 do
   case "${ARG}" in
         i)
@@ -172,7 +177,13 @@ do
             HIGHMOTION=yes
             ;;
         r)
+            # the default now; still accepted, so existing commands keep working
             RESUME=yes
+            RESUME_OPTION=yes
+            ;;
+        F)
+            FRESH_START=yes
+            RESUME=no
             ;;
         T)
             TONE_MAPPING=no
@@ -254,6 +265,13 @@ then
 elif [[ ${SPLIT_PART_START} != [0-9][0-9][0-9] ]]
 then
   error "  -s expects a three-digit chunk number, for example 003 (got: ${YELLOW}${SPLIT_PART_START}${RED})"
+  ERROR_CODE="2"
+  failed
+fi
+
+if [[ ${FRESH_START} == yes ]] && [[ ${RESUME_OPTION} == yes ]]
+then
+  error "  -F (start from scratch) and -r (resume) exclude each other"
   ERROR_CODE="2"
   failed
 fi
@@ -391,16 +409,54 @@ finishing_previous_chunk()
 
 # Stops the run after a failed final encode (-E), once the chunk processed meanwhile is marked
 # as done. Going on would leave one merged part after another (13 GB each at 4K) when the
-# encodes keep failing, e.g. killed for lack of memory, until the disk is full; -r -E then
+# encodes keep failing, e.g. killed for lack of memory, until the disk is full; the next run with -E then
 # encodes the kept merged parts and continues.
 stopping_after_failed_encode()
 {
   if [[ ${PART_ENCODING_FAILED} == yes ]]
   then
-    error "  stopping, because a final encode failed; when the cause is solved, run again with ${YELLOW}-r -E${RED} (finished chunks are kept)"
+    error "  stopping, because a final encode failed; when the cause is solved, run again with ${YELLOW}-E${RED} (finished chunks are kept)"
     ERROR_CODE="1"
     failed
   fi
+  }
+
+# -F: removes the results of an earlier run of this movie and method in the current directory,
+# from chunk -s on: the finished parts with their .done markers and, from chunk 001, the split
+# points file. Chunk names are the same for every movie, so only parts whose marker names this
+# movie are removed (other files are overwritten while the chunks are processed again).
+removing_earlier_results()
+{
+  local MARKER
+  local CHUNK_ID
+  local REMOVED_COUNT=0
+  local SPLIT_POINTS_FILE="${WHOLE_MOVIE_NAME_ARRAY[*]}_split_points.txt"
+  for MARKER in video_part_minute_[0-9][0-9][0-9]_"${NCNN_METHOD}"_*.done "${WHOLE_MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}"_*_merged.mkv.done
+  do
+    if [ ! -e "${MARKER}" ] || [[ "$(head -n1 "${MARKER}")" != "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
+    then
+      continue
+    fi
+    # the results of an unsplit video (one chunk) got the input name
+    CHUNK_ID="001"
+    if [[ ${MARKER} == video_part_minute_* ]]
+    then
+      CHUNK_ID="${MARKER:18:3}"
+    fi
+    if [ $((10#${CHUNK_ID})) -lt $((10#${SPLIT_PART_START})) ]
+    then
+      continue
+    fi
+    inf "  -F: removing ${YELLOW}${MARKER%.done}${CYAN} and its marker"
+    rm -f -- "${MARKER%.done}" "${MARKER}"
+    REMOVED_COUNT=$((REMOVED_COUNT + 1))
+  done
+  if [[ ${SPLIT_PART_START} == 001 ]] && [ -e "${SPLIT_POINTS_FILE}" ]
+  then
+    inf "  -F: removing ${YELLOW}${SPLIT_POINTS_FILE}"
+    rm -f -- "${SPLIT_POINTS_FILE}"
+  fi
+  inf "  -F: ${YELLOW}${REMOVED_COUNT}${CYAN} earlier result(s) of ${YELLOW}${WHOLE_MOVIE_NAME_ARRAY[*]}${CYAN} removed, the movie is processed from chunk ${YELLOW}${SPLIT_PART_START}${CYAN} again"
   }
 
 # Profile (OPTIMIZATION) of an encoded part: line 2 of its .done marker; markers of older runs
@@ -434,7 +490,7 @@ joining_encoded_parts()
         OTHER_PROFILE_PARTS+=("${CHUNK_ID} (${PART_PROFILE})")
       fi
     else
-      error "  chunk ${YELLOW}${CHUNK_ID}${RED} has no finished final encode, so the parts are not joined; run again with -r -E"
+      error "  chunk ${YELLOW}${CHUNK_ID}${RED} has no finished final encode, so the parts are not joined; run again with -E"
       ERROR_CODE="1"
       failed
     fi
@@ -573,7 +629,11 @@ then
     warn "  no keyframe to split ${YELLOW}${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv${YELLOW} at, so it is processed as one chunk"
   fi
 fi
-# -r continues only chunks split at the same points; the points are saved for the next -r
+if [[ ${FRESH_START} == yes ]]
+then
+  removing_earlier_results
+fi
+# a resumed run continues only chunks split at the same points; the points are saved for the next run
 checking_split_points_file
 
 if [ -z "${SPLIT_TIMESTAMPS}" ]
@@ -652,7 +712,7 @@ fi
           if [[ ${ENCODED_PROFILE} != "${OPTIMIZATION}" ]]
           then
             # chunks are split again on every run, so without the marker the chunk is processed again
-            warn "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${WINE} was encoded with profile ${YELLOW}${ENCODED_PROFILE}${WINE}, this run uses ${YELLOW}${OPTIMIZATION}${WINE}; to encode it with ${OPTIMIZATION}, remove ${FINISHED_ENCODED_MARKERS[0]} and run again with -r -E"
+            warn "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${WINE} was encoded with profile ${YELLOW}${ENCODED_PROFILE}${WINE}, this run uses ${YELLOW}${OPTIMIZATION}${WINE}; to encode it with ${OPTIMIZATION}, remove ${FINISHED_ENCODED_MARKERS[0]} and run again with -E"
           fi
           rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
           continue
@@ -721,7 +781,7 @@ fi
       # frame directories: input frames are in TMP_OUT, processed frames in TMP
       rm -rf -- "${TMP_OUT:?}/${IN_DIR:?}" "${TMP_OUT:?}/${OUT_DIR:?}" "${TMP:?}/${IN_DIR:?}" "${TMP:?}/${OUT_DIR:?}"
     fi
-    # only now, so this chunk is kept as done (its row in statistics.txt is lost; -r -E only encodes it)
+    # only now, so this chunk is kept as done (its row in statistics.txt is lost; the next -E run only encodes it)
     stopping_after_failed_encode
     
     START_TIME=${START_TIME_FRAGMENT_ID}
