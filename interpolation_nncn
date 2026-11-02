@@ -82,6 +82,8 @@ $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ]
           Without -E it produces per-chunk merged files and does not join them; with -E it joins
           the encoded parts into DESTINATION_DIR/<input name>.mkv (default: /media/ready).
           Ctrl+C or an error also stops the background tools (NCNN, ffmpeg) started by this run.
+          Ctrl+C then removes the unfinished parts and intermediate files (not with -k);
+          finished chunks are kept, and the next run resumes them.
 
     ${LIME}-i${DODGERBLUE1}  input video (required; MP4 input is converted to MKV)
     ${LIME}-N${DODGERBLUE1}  NCNN/Vulkan method (default: ${CYAN}rife${DODGERBLUE1}); supported by this script:
@@ -349,6 +351,7 @@ exit_function()
     fi
   done
   tput cnorm 
+  cleaning_after_interrupt
   error "  interrupted (Ctrl+C)"
   # 130 = 128 + SIGINT(2), the conventional exit code of an interrupted program
   exit 130
@@ -370,6 +373,69 @@ stop_background_jobs()
     # a process paused by throttling_ncnn (SIGSTOP) handles SIGTERM only after SIGCONT
     kill -CONT "${CHILD_PID}" 2>/dev/null
   done
+  }
+
+# Ctrl+C: stops the processes of this run, then removes what the interrupted work left behind:
+# the frame directories, frames-only videos and stream extracts in TMP/TMP_OUT, the source chunks
+# (every run splits the movie again) and the parts without a .done marker in the current
+# directory. Finished parts and their markers stay, so the next run resumes. With -k nothing is
+# removed. A second Ctrl+C stops the cleanup at once (exit_function restores the default first).
+cleaning_after_interrupt()
+{
+  inf "  closing processes and cleaning; finished chunks are kept, the next run resumes them"
+  stop_background_jobs
+  # at most 10 s for NCNN, ffmpeg and HandBrake to end, so they do not write into removed files
+  local WAITED_SEC=0
+  while pgrep -P $$ > /dev/null 2>&1 && [ "${WAITED_SEC}" -lt 10 ]
+  do
+    sleep 1
+    WAITED_SEC=$((WAITED_SEC + 1))
+  done
+  if [[ ${KEEP_INTERMEDIATES} == yes ]]
+  then
+    inf "  -k: intermediate files are kept"
+    return
+  fi
+  local REMOVED_COUNT=0
+  local WORK_DIR_ROOT
+  local WORK_ITEM
+  for WORK_DIR_ROOT in "${TMP}" "${TMP_OUT}"
+  do
+    # an interrupt during start-up may come before the work directories are set
+    if [ -z "${WORK_DIR_ROOT}" ] || [ ! -d "${WORK_DIR_ROOT}" ]
+    then
+      continue
+    fi
+    for WORK_ITEM in "${WORK_DIR_ROOT}"/in_[0-9][0-9][0-9] "${WORK_DIR_ROOT}"/out_[0-9][0-9][0-9]
+    do
+      if [ -d "${WORK_ITEM}" ]
+      then
+        safe_remove_dir "${WORK_ITEM}"
+        REMOVED_COUNT=$((REMOVED_COUNT + 1))
+      fi
+    done
+    # frames-only videos (TMP_OUT) and audio/subtitle extracts (TMP); both directories belong to
+    # this run only, so every video there is an intermediate
+    for WORK_ITEM in "${WORK_DIR_ROOT}"/*.mkv "${WORK_DIR_ROOT}"/*.mka
+    do
+      if [ -f "${WORK_ITEM}" ]
+      then
+        rm -f -- "${WORK_ITEM}"
+        REMOVED_COUNT=$((REMOVED_COUNT + 1))
+      fi
+    done
+  done
+  # the current directory: source chunks, and parts which were not finished (no .done marker);
+  # a movie too short to be split is processed under its own name
+  for WORK_ITEM in video_part_minute_[0-9][0-9][0-9]*.mkv "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_"*.mkv
+  do
+    if [ -f "${WORK_ITEM}" ] && [ ! -e "${WORK_ITEM}.done" ]
+    then
+      rm -f -- "${WORK_ITEM}"
+      REMOVED_COUNT=$((REMOVED_COUNT + 1))
+    fi
+  done
+  inf "  removed ${YELLOW}${REMOVED_COUNT}${CYAN} unfinished or intermediate item(s)"
   }
 
 trap "exit_function" INT
@@ -764,14 +830,12 @@ fi
     # checks every step itself (including NCNN failures) and stops the run on error
     interpolation_video_file "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}"
 
-    # the previous chunk's VMAF ran alongside this chunk; its row is written first, so the rows
-    # stay in chunk order and only one VMAF runs at a time
-    finishing_previous_chunk
-
     printf "\033[%d;0H\033[2K ${WHITE}finishing: %s\n" "$((TERMINAL_HEIGHT - 12))" "                       DONE: ${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}" 2>/dev/null
     # reaching this line means interpolation_video_file already required the _merged.mkv, so the
     # chunk is finished; VMAF only measures it (an interrupted VMAF loses only its score)
-    # chunk names are the same for every movie, so the marker remembers which movie it belongs to
+    # chunk names are the same for every movie, so the marker remembers which movie it belongs to;
+    # it is written before the wait for the previous chunk's encode below, so a Ctrl+C during
+    # that wait keeps this chunk
     printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" > "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv.done"
     # the chunk is done, so its intermediate files are not needed anymore (kept with -k); the
     # frames-only video in TMP_OUT is a full copy of the video track of _merged.mkv
@@ -780,7 +844,13 @@ fi
       rm -f -- "${TMP_OUT}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv"
       # frame directories: input frames are in TMP_OUT, processed frames in TMP
       rm -rf -- "${TMP_OUT:?}/${IN_DIR:?}" "${TMP_OUT:?}/${OUT_DIR:?}" "${TMP:?}/${IN_DIR:?}" "${TMP:?}/${OUT_DIR:?}"
+      # the chunk's audio and subtitle extracts are in _merged.mkv now
+      rm -f -- "${TMP}/${MOVIE_NAME_ARRAY[*]}.mka" "${TMP}/${MOVIE_NAME_ARRAY[*]}_subtitles.mkv"
     fi
+
+    # the previous chunk's VMAF ran alongside this chunk; its row is written first, so the rows
+    # stay in chunk order and only one VMAF runs at a time
+    finishing_previous_chunk
     # only now, so this chunk is kept as done (its row in statistics.txt is lost; the next -E run only encodes it)
     stopping_after_failed_encode
     

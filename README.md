@@ -127,6 +127,7 @@ Exit codes: `0` success, `1` processing error, `2` invalid usage or input, `127`
 - `interpolation_nncn` resumes an interrupted run by default (before Done item 17 only with `-r`, which is still accepted). After a chunk finishes, a marker `video_part_minute_NNN_<method>_<fps>_merged.mkv.done` is written next to the merged chunk; it contains the whole movie name. A chunk is skipped only when its marker exists, the marker names the same movie, and the merged `.mkv` is non-empty. Otherwise the chunk is processed again. Resuming works with `-s`. Chunks finished before markers existed have no marker and are therefore processed again.
 - `-F` starts from scratch: before splitting, it removes the results of an earlier run of the same movie and method in the current directory (each removal is listed): the merged and encoded parts whose marker names this movie, with their markers, and the split points file. With `-s`, only the chunks from that number on are removed, and the split points stay (the earlier chunks are joined with the new ones). Other files (chunks, unfinished parts) have generic names and are overwritten as the chunks are processed again. `-F` with `-r` exits 2.
 - On exit, error, or Ctrl+C, `interpolation_nncn` stops the background processes it started directly (for example progress monitors), so they do not keep running after the script ends.
+- Ctrl+C also cleans up (see Done item 18): it waits up to 10 seconds for those processes to end, then removes what the interrupted work left behind, with a count: the frame directories, frames-only videos and audio/subtitle extracts in the run's TMP/TMP_OUT directories, the source chunks in the current directory (every run splits the movie again), and the parts without a `.done` marker (an unfinished merge or encode). Finished parts, their markers, `statistics.txt`, `timeline.csv` and the logs stay, so the next run resumes. With `-k`, nothing is removed. A second Ctrl+C stops the cleanup at once. It exits with 130.
 - The VMAF progress loop sleeps 2 seconds between checks instead of busy-waiting on one CPU core.
 - `movies_encoding` no longer calls `movie_data_collecting` twice, saving duplicate OMDb/TheMovieDB requests.
 
@@ -554,6 +555,13 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - `-F -s 029` removes the results from chunk 029 on and keeps the split points, so it redoes one part of a movie (e.g. to measure a change, see [How to measure](#how-to-measure)); the first proposal rejected `-F` with `-s`, but then `-s 029` alone would just skip a finished chunk 029.
     - `-r` is still accepted, as the default, so existing commands keep working; `-F -r` exits 2. Messages say "run again with `-E`" instead of `-r -E`.
     - Also fixed: the check for chunks of an older version (no split points file) compared the whole marker with the movie name, so it missed the two-line encoded markers of Done item 16; it now compares line 1.
+
+18. **Ctrl+C cleans up.** The user's idea: an interrupted run left gigabytes behind (frames of the current chunk, half-written parts, all source chunks), to be removed by hand.
+    - Ctrl+C stops this run's processes, waits up to 10 seconds for them, and removes only what cannot be resumed: frame directories, frames-only videos and stream extracts in TMP/TMP_OUT, the source chunks, and parts without a `.done` marker. Only `in_NNN`/`out_NNN` directories, videos and extracts are removed from TMP/TMP_OUT; `statistics.txt` and `timeline.csv` live there too.
+    - With `-k` (the user's choice), nothing is removed, as `-k` is for inspecting intermediates.
+    - The `_merged.mkv.done` marker is now written before waiting for the previous chunk's encode and VMAF, so a Ctrl+C during that wait keeps the chunk which is already finished (before, it was processed again).
+    - The chunk's audio and subtitle extracts in TMP are now removed when the chunk is done (they are in `_merged.mkv`), like its frames; before, they stayed until the end of the run.
+    - Joining the parts encoded so far after Ctrl+C (a partial movie) is left for later.
 
 ### Codec benchmark
 

@@ -293,6 +293,22 @@ if [[ ${OUTPUT} == *"split_points.txt "* ]]; then fail "-F from chunk 001 remove
 OUTPUT="$(run_with_helpers "${FRESH_SETUP}"'; SPLIT_PART_START=002; removing_earlier_results; echo "LEFT: $(ls | tr "\n" " ")"' 2>&1)"
 assert_contains "-F -s 002 keeps the chunks before 002 and the split points" "${OUTPUT}" "LEFT: My Film_rife_48_merged.mkv My Film_rife_48_merged.mkv.done My Film_split_points.txt video_part_minute_001_rife_48_encoded.mkv video_part_minute_001_rife_48_encoded.mkv.done video_part_minute_001_rife_48_merged.mkv video_part_minute_001_rife_48_merged.mkv.done video_part_minute_002_dain"
 
+echo "Ctrl+C cleanup (exit_function, cleaning_after_interrupt)"
+INTERRUPT_SETUP='for FUNC in exit_function stop_background_jobs cleaning_after_interrupt; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; tput() { :; }; NCNN_METHOD=rife; KEEP_INTERMEDIATES=no; MOVIE_NAME_ARRAY=(video_part_minute_003); rm -rf intr; mkdir intr; cd intr || exit 99; LOG="$PWD/log"; TMP="$PWD/tmp"; TMP_OUT="$PWD/tmp_out"; mkdir -p "$LOG" "$TMP/in_003/f" "$TMP/out_003" "$TMP_OUT/in_003" "$TMP_OUT/out_003"; echo s > "$TMP/statistics.txt"; echo t > "$TMP/timeline.csv"; echo a > "$TMP/video_part_minute_003.mka"; echo s > "$TMP/video_part_minute_003_subtitles.mkv"; echo v > "$TMP_OUT/video_part_minute_003_rife_48.mkv"; for N in 001 002 003 004; do echo src > video_part_minute_${N}.mkv; done; echo p > video_part_minute_001_rife_48_merged.mkv; echo F > video_part_minute_001_rife_48_merged.mkv.done; echo p > video_part_minute_001_rife_48_encoded.mkv; echo F > video_part_minute_001_rife_48_encoded.mkv.done; echo p > video_part_minute_002_rife_48_merged.mkv; echo F > video_part_minute_002_rife_48_merged.mkv.done; echo p > video_part_minute_002_rife_48_encoded.mkv; echo p > video_part_minute_002_rife_48_encoded_video_only.mkv; echo p > video_part_minute_003_rife_48_merged.mkv; echo src > Film.mkv; sleep 30 > /dev/null 2>&1 & SLEEP_PID=$!'
+# exit_function exits, so the results are printed by an EXIT trap (in a subshell, $$ is not its PID)
+OUTPUT="$(run_with_helpers "${INTERRUPT_SETUP}"'; trap '"'"'echo "STATUS=$?"; if kill -0 "${SLEEP_PID}" 2>/dev/null; then echo "CHILD RUNNING"; fi; echo "LEFT: $(ls | tr "\n" " ")"; echo "TMP: $(ls tmp tmp_out | tr "\n" " ")"'"'"' EXIT; exit_function' 2>&1)"
+assert_contains "Ctrl+C exits with 130" "${OUTPUT}" "STATUS=130"
+assert_contains "Ctrl+C says what it does" "${OUTPUT}" "closing processes and cleaning"
+if [[ ${OUTPUT} == *"CHILD RUNNING"* ]]; then fail "Ctrl+C stops the processes of the run"; else pass "Ctrl+C stops the processes of the run"; fi
+assert_contains "Ctrl+C keeps finished parts and markers, removes source chunks and unfinished parts" "${OUTPUT}" "LEFT: Film.mkv log tmp tmp_out video_part_minute_001_rife_48_encoded.mkv video_part_minute_001_rife_48_encoded.mkv.done video_part_minute_001_rife_48_merged.mkv video_part_minute_001_rife_48_merged.mkv.done video_part_minute_002_rife_48_merged.mkv video_part_minute_002_rife_48_merged.mkv.done "
+assert_contains "Ctrl+C removes frames and extracts, keeps statistics and timeline" "${OUTPUT}" "TMP: tmp: statistics.txt timeline.csv  tmp_out: "
+assert_contains "Ctrl+C counts what it removed" "${OUTPUT}" "removed ${YELLOW:-}14"
+OUTPUT="$(run_with_helpers "${INTERRUPT_SETUP}"'; KEEP_INTERMEDIATES=yes; trap '"'"'echo "LEFT: $(ls | wc -l) $(ls tmp tmp_out | wc -l)"'"'"' EXIT; exit_function' 2>&1)"
+assert_contains "Ctrl+C with -k removes nothing" "${OUTPUT}" "LEFT: 17 12"
+assert_contains "Ctrl+C with -k says so" "${OUTPUT}" "-k: intermediate files are kept"
+OUTPUT="$(run_with_helpers "${INTERRUPT_SETUP}"'; MOVIE_NAME_ARRAY=("Short Film"); echo p > "Short Film_rife_48_merged.mkv"; echo p > "Short Film_rife_48_encoded.mkv"; echo F > "Short Film_rife_48_encoded.mkv.done"; trap '"'"'echo "LEFT: $(ls | grep Short | tr "\n" " ")"'"'"' EXIT; exit_function' 2>&1)"
+assert_contains "Ctrl+C on an unsplit movie removes only its unfinished part" "${OUTPUT}" "LEFT: Short Film_rife_48_encoded.mkv Short Film_rife_48_encoded.mkv.done "
+
 echo "frames lost at an open-GOP split are recovered (ffprobe and ffmpeg replaced by fakes)"
 mkdir -p "${WORK_DIR}/recoverbin"
 cat > "${WORK_DIR}/recoverbin/ffprobe" <<'EOF'
