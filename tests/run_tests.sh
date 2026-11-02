@@ -431,6 +431,12 @@ assert_contains "interpolation_nncn -h documents -E (final encode)" "${OUTPUT}" 
 LINE_JOIN="$(grep -n '^  joining_encoded_parts$' "${REPO_ROOT}/interpolation_nncn" | cut -d: -f1)"
 if [ -n "${LINE_FINISH}" ] && [ -n "${LINE_JOIN}" ] && [ "${LINE_FINISH}" -lt "${LINE_JOIN}" ]; then pass "the last encode is waited for before the parts are joined"; else fail "the last encode is waited for before the parts are joined"; fi
 
+echo "checking_space_background (space estimates of a small chunk)"
+OUTPUT="$(run_with_helpers 'TMP=.; IN_DIR=in; OUT_DIR=out; MOVIE_NAME_ARRAY=(m); NCNN_METHOD=rife; OUTPUT_FPS_ROUND=50; VERBOSE=no; TERMINAL_HEIGHT=40; mkdir -p in/m; INPUT_FRAMES_MAX_TSPACE=0.00; INTER_FRAMES_MAX_TSPACE=0.40; sleep 4 & checking_space_background $! . .; wait; echo "OVERALL=$(cat MAX_SPACE_TAKEN_OVERALL)"' 2>&1)"
+if [[ ${OUTPUT} == *"invalid number"* ]] || [[ ${OUTPUT} == *"Divide by zero"* ]]; then fail "a zero space estimate does not break the space monitor"; else pass "a zero space estimate does not break the space monitor"; fi
+assert_contains "the space monitor writes its peak" "${OUTPUT}" "OVERALL=0"
+if grep -A3 'PENDING_STATISTICS_SPACE="' "${REPO_ROOT}/interpolation_nncn" | grep -q 'rm -f -- "${TMP}/MAX_SPACE_TAKEN_INPUT_DIR"'; then pass "the peak space is reset after each chunk"; else fail "the peak space is reset after each chunk"; fi
+
 echo "joining_encoded_parts (mkvmerge replaced by a fake that records its arguments)"
 mkdir -p "${WORK_DIR}/joinbin"
 cat > "${WORK_DIR}/joinbin/mkvmerge" <<'EOF'

@@ -266,21 +266,29 @@ checking_space_background()
     while ps -p ${CHECK_PID} > /dev/null 2>&1
     do
       SPACE_TAKEN_INPUT_DIR=$(du -sm "${VIDEO_IN_DIR}/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}" 2>/dev/null | awk '{print $1}')
-      SPACE_TAKEN_INPUT_DIR="$(printf "%.0f\n" "$(echo "${SPACE_TAKEN_INPUT_DIR}/1000" | bc -l)")"
+      SPACE_TAKEN_INPUT_DIR="$(printf "%.0f\n" "$(echo "${SPACE_TAKEN_INPUT_DIR:-0}/1000" | bc -l)")"
       if [ ${SPACE_TAKEN_INPUT_DIR} -gt ${MAX_SPACE_TAKEN_INPUT_DIR} ]
       then
         MAX_SPACE_TAKEN_INPUT_DIR=${SPACE_TAKEN_INPUT_DIR}
       fi
       SPACE_TAKEN_OUTPUT_DIR=$(du -sm "${VIDEO_OUT_DIR}/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}" 2>/dev/null | awk '{print $1}')
-      SPACE_TAKEN_OUTPUT_DIR="$(printf "%.0f\n" "$(echo "${SPACE_TAKEN_OUTPUT_DIR}/1000" | bc -l)")"
+      SPACE_TAKEN_OUTPUT_DIR="$(printf "%.0f\n" "$(echo "${SPACE_TAKEN_OUTPUT_DIR:-0}/1000" | bc -l)")"
       if [ ${SPACE_TAKEN_OUTPUT_DIR} -gt ${MAX_SPACE_TAKEN_OUTPUT_DIR} ]
       then
         MAX_SPACE_TAKEN_OUTPUT_DIR=${SPACE_TAKEN_OUTPUT_DIR}
       fi
       SPACE_TAKEN_OVERALL=$((SPACE_TAKEN_INPUT_DIR + SPACE_TAKEN_OUTPUT_DIR))
       MAX_SPACE_TAKEN_OVERALL=$((MAX_SPACE_TAKEN_INPUT_DIR + MAX_SPACE_TAKEN_OUTPUT_DIR))
-      PERCENT_TSPACE_INPUT=$(printf "%.0f\n" "$(echo "(${MAX_SPACE_TAKEN_INPUT_DIR}/${INPUT_FRAMES_MAX_TSPACE})*100" | bc -l)")
-      PERCENT_TSPACE_OUTPUT=$(printf "%.0f\n" "$(echo "(${MAX_SPACE_TAKEN_OUTPUT_DIR}/${INTER_FRAMES_MAX_TSPACE})*100" | bc -l)")
+      PERCENT_TSPACE_INPUT="-"
+      if [ "$(echo "${INPUT_FRAMES_MAX_TSPACE:-0} > 0" | bc -l)" -eq 1 ]
+      then
+        PERCENT_TSPACE_INPUT=$(printf "%.0f\n" "$(echo "(${MAX_SPACE_TAKEN_INPUT_DIR}/${INPUT_FRAMES_MAX_TSPACE})*100" | bc -l)")
+      fi
+      PERCENT_TSPACE_OUTPUT="-"
+      if [ "$(echo "${INTER_FRAMES_MAX_TSPACE:-0} > 0" | bc -l)" -eq 1 ]
+      then
+        PERCENT_TSPACE_OUTPUT=$(printf "%.0f\n" "$(echo "(${MAX_SPACE_TAKEN_OUTPUT_DIR}/${INTER_FRAMES_MAX_TSPACE})*100" | bc -l)")
+      fi
       if [[ ${VERBOSE} == no ]]
       then
         printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 18))" "      ${MAGENTA2}[...]/${IN_DIR}/${MOVIE_NAME_ARRAY[*]}=${WINE}${MAX_SPACE_TAKEN_INPUT_DIR} (${PERCENT_TSPACE_INPUT}[%])${CYAN}/${LIGHT_YELLOW}${SPACE_TAKEN_INPUT_DIR}${WHITE} [GB], ${MAGENTA2}[...]/${OUT_DIR}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}=${WINE}${MAX_SPACE_TAKEN_OUTPUT_DIR} (${PERCENT_TSPACE_OUTPUT}[%])${CYAN}/${BROWN}${SPACE_TAKEN_OUTPUT_DIR}${WHITE} [GB]; all=${LIME}${MAX_SPACE_TAKEN_OVERALL}${CYAN}/${DARK_GREEN}${SPACE_TAKEN_OVERALL}" 2>/dev/null
@@ -1158,22 +1166,24 @@ interpolation_video_file()
   VIDEO_WIDTH=$(jq '.streams[] | select(.index == 0).width' "${TMP}/${MOVIE_NAME_ARRAY[*]}_ffprobe.json")
   VIDEO_DURATION=$(printf "%.0f\n" $(jq -r '.format.duration' "${TMP}/${MOVIE_NAME_ARRAY[*]}_ffprobe.json")) # [s]
   MOVIE_SIZE=$(du -sh "${MOVIE_NAME_ARRAY[*]}.mkv" | awk '{print $1}')
-  INPUT_FRAMES_MAX_TSPACE=$(printf "%.0f\n" $(echo "(${AVERAGE_FRAME_SIZE}*${INPUT_FRAMES_COUNT})/1000" | bc -l)) # [MB]
+  INPUT_FRAMES_MAX_TSPACE=$(printf "%.2f\n" $(echo "(${AVERAGE_FRAME_SIZE}*${INPUT_FRAMES_COUNT})/1000" | bc -l)) # [MB]
   MAX_INPUT_FRAMES_VAR_OUT_FREE_SPACE=$(echo "((${VAR_OUT_FREE_SPACE}*1000)/${AVERAGE_FRAME_SIZE})" | bc -l)
   MAX_INPUT_SEC_VAR_OUT_FREE_SPACE=$(printf "%.0f\n" $(echo "${MAX_INPUT_FRAMES_VAR_OUT_FREE_SPACE}/${INPUT_FPS}" | bc -l))
   if [ ${FRAME_BIT_DEPTH} -eq 8 ]
   then
-    INTER_FRAMES_MAX_TSPACE=$(printf "%.0f\n" $(echo "(${TARGET_FRAME_COUNT}*${AVERAGE_FRAME_SIZE}*${INTER_FRAMES_COUNT})/1000" | bc -l))
+    INTER_FRAMES_MAX_TSPACE=$(printf "%.2f\n" $(echo "(${TARGET_FRAME_COUNT}*${AVERAGE_FRAME_SIZE}*${INTER_FRAMES_COUNT})/1000" | bc -l))
   elif [ ${FRAME_BIT_DEPTH} -eq 16 ]
   then
-    INTER_FRAMES_MAX_TSPACE=$(printf "%.0f\n" $(echo "(${TARGET_FRAME_COUNT}*(${AVERAGE_FRAME_SIZE}/2)*${INTER_FRAMES_COUNT})/1000" | bc -l))
+    INTER_FRAMES_MAX_TSPACE=$(printf "%.2f\n" $(echo "(${TARGET_FRAME_COUNT}*(${AVERAGE_FRAME_SIZE}/2)*${INTER_FRAMES_COUNT})/1000" | bc -l))
     # keep it fractional: dark frames (e.g. end credits) are < 1 MB, rounding gave 0 and bc divided by zero
     AVERAGE_FRAME_SIZE=$(echo "${AVERAGE_FRAME_SIZE}/2" | bc -l)
   fi
   MAX_INTER_FRAMES_VAR_FREE_SPACE=$(echo "((${VAR_FREE_SPACE}*1000)/${AVERAGE_FRAME_SIZE})" | bc -l)
   MAX_INTER_SEC_VAR_FREE_SPACE=$(printf "%.0f\n" $(echo "${MAX_INTER_FRAMES_VAR_FREE_SPACE}/${OUTPUT_FPS}" | bc -l))
-  MAX_TSPACE=$((INPUT_FRAMES_MAX_TSPACE+INTER_FRAMES_MAX_TSPACE))
-  if [[ ${MAX_TSPACE} == "" ]] || [ ${MAX_TSPACE} -eq 0 ] || [ -z ${MAX_TSPACE} ]
+  # estimates keep two decimals [GB]: whole GB rounded a short or dark chunk (e.g. end credits)
+  # to 0, and the space monitor then divided by zero
+  MAX_TSPACE=$(printf "%.2f\n" "$(echo "${INPUT_FRAMES_MAX_TSPACE:-0}+${INTER_FRAMES_MAX_TSPACE:-0}" | bc -l)")
+  if [ "$(echo "${MAX_TSPACE} <= 0" | bc -l)" -eq 1 ]
   then
     MAX_TSPACE="1"
   fi
