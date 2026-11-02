@@ -112,6 +112,7 @@ $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -r ] [ -T ] [ -k ]
     ${LIME}-E${DODGERBLUE1}  final encode: encodes each processed chunk with HandBrake (the movies_encoding settings), in the
           background, removes its merged part (kept with -k), and at the end joins the encoded parts
           into DESTINATION_DIR/<input name>.mkv; the crop is detected once, on the whole input
+          a failed encode stops the run after the current chunk (continue with -r -E)
     ${LIME}-a${DODGERBLUE1}  with -E: animation encoding profile
     ${LIME}-g${DODGERBLUE1}  with -E: grain encoding profile
     ${LIME}-H${DODGERBLUE1}  with -E: high-motion encoding profile
@@ -388,6 +389,29 @@ finishing_previous_chunk()
   PENDING_CHUNK_ID=""
   }
 
+# Stops the run after a failed final encode (-E), once the chunk processed meanwhile is marked
+# as done. Going on would leave one merged part after another (13 GB each at 4K) when the
+# encodes keep failing, e.g. killed for lack of memory, until the disk is full; -r -E then
+# encodes the kept merged parts and continues.
+stopping_after_failed_encode()
+{
+  if [[ ${PART_ENCODING_FAILED} == yes ]]
+  then
+    error "  stopping, because a final encode failed; when the cause is solved, run again with ${YELLOW}-r -E${RED} (finished chunks are kept)"
+    ERROR_CODE="1"
+    failed
+  fi
+  }
+
+# Profile (OPTIMIZATION) of an encoded part: line 2 of its .done marker; markers of older runs
+# have only the movie name
+encoded_part_profile()
+{
+  local PROFILE
+  PROFILE="$(sed -n 2p "${1}" 2>/dev/null)"
+  echo "${PROFILE:-unknown}"
+  }
+
 # Joins the encoded parts of all chunks (-E) into DESTINATION_DIR/<input name>.mkv; every chunk
 # must have its finished final encode, also chunks done by an earlier run (-s, -r).
 joining_encoded_parts()
@@ -395,19 +419,30 @@ joining_encoded_parts()
   local ENCODED_PARTS=()
   local ENCODED_MARKERS
   local CHUNK_ID
+  local PART_PROFILE
+  local OTHER_PROFILE_PARTS=()
   for CHUNK_ID in $(seq -w 001 "${LAST_VIDEO_FRAGMENT_ID}")
   do
     # shellcheck disable=SC2206 # the unquoted * is intentional: the glob finds the marker whatever the fps
     ENCODED_MARKERS=(video_part_minute_${CHUNK_ID}_${NCNN_METHOD}_*_encoded.mkv.done)
-    if [ -e "${ENCODED_MARKERS[0]}" ] && [ -s "${ENCODED_MARKERS[0]%.done}" ] && [[ "$(cat "${ENCODED_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
+    if [ -e "${ENCODED_MARKERS[0]}" ] && [ -s "${ENCODED_MARKERS[0]%.done}" ] && [[ "$(head -n1 "${ENCODED_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
     then
       ENCODED_PARTS+=("${ENCODED_MARKERS[0]%.done}")
+      PART_PROFILE="$(encoded_part_profile "${ENCODED_MARKERS[0]}")"
+      if [[ ${PART_PROFILE} != "${OPTIMIZATION}" ]]
+      then
+        OTHER_PROFILE_PARTS+=("${CHUNK_ID} (${PART_PROFILE})")
+      fi
     else
       error "  chunk ${YELLOW}${CHUNK_ID}${RED} has no finished final encode, so the parts are not joined; run again with -r -E"
       ERROR_CODE="1"
       failed
     fi
   done
+  if [ "${#OTHER_PROFILE_PARTS[@]}" -gt 0 ]
+  then
+    warn "  ${#OTHER_PROFILE_PARTS[@]} part(s) were encoded with another profile than ${YELLOW}${OPTIMIZATION}${WINE}, the joined movie mixes them: ${OTHER_PROFILE_PARTS[*]}"
+  fi
   local JOIN_LOG="${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_joining_encoded_parts.log"
   # Only the video is taken from the parts; the audio and subtitles come from the source movie.
   # A part's audio starts at the source's first audio frame after the split (e.g. 20 ms after
@@ -610,9 +645,15 @@ fi
         # with -E a chunk is fully finished when its final encode is; its merged part may be removed
         # shellcheck disable=SC2206
         FINISHED_ENCODED_MARKERS=(video_part_minute_${VIDEO_FRAGMENT_ID}_${NCNN_METHOD}_*_encoded.mkv.done)
-        if [ -e "${FINISHED_ENCODED_MARKERS[0]}" ] && [ -s "${FINISHED_ENCODED_MARKERS[0]%.done}" ] && [[ "$(cat "${FINISHED_ENCODED_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
+        if [ -e "${FINISHED_ENCODED_MARKERS[0]}" ] && [ -s "${FINISHED_ENCODED_MARKERS[0]%.done}" ] && [[ "$(head -n1 "${FINISHED_ENCODED_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
         then
           inf "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${CYAN} already finished and encoded (${FINISHED_ENCODED_MARKERS[0]%.done}), skipping"
+          ENCODED_PROFILE="$(encoded_part_profile "${FINISHED_ENCODED_MARKERS[0]}")"
+          if [[ ${ENCODED_PROFILE} != "${OPTIMIZATION}" ]]
+          then
+            # chunks are split again on every run, so without the marker the chunk is processed again
+            warn "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${WINE} was encoded with profile ${YELLOW}${ENCODED_PROFILE}${WINE}, this run uses ${YELLOW}${OPTIMIZATION}${WINE}; to encode it with ${OPTIMIZATION}, remove ${FINISHED_ENCODED_MARKERS[0]} and run again with -r -E"
+          fi
           rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
           continue
         fi
@@ -625,6 +666,7 @@ fi
           # only the final encode is started, without VMAF (the chunk's frame data is not analysed)
           inf "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${CYAN} already finished (${FINISHED_CHUNK_MARKERS[0]%.done}), only its final encode is started"
           finishing_previous_chunk
+          stopping_after_failed_encode
           RESUMED_MERGED_FILE="${FINISHED_CHUNK_MARKERS[0]%.done}"
           # <fps>_merged.mkv, also for an unsplit video whose results got the input name
           RESUMED_MERGED_SUFFIX="${RESUMED_MERGED_FILE##*_${NCNN_METHOD}_}"
@@ -679,6 +721,8 @@ fi
       # frame directories: input frames are in TMP_OUT, processed frames in TMP
       rm -rf -- "${TMP_OUT:?}/${IN_DIR:?}" "${TMP_OUT:?}/${OUT_DIR:?}" "${TMP:?}/${IN_DIR:?}" "${TMP:?}/${OUT_DIR:?}"
     fi
+    # only now, so this chunk is kept as done (its row in statistics.txt is lost; -r -E only encodes it)
+    stopping_after_failed_encode
     
     START_TIME=${START_TIME_FRAGMENT_ID}
     end_time_collecting
@@ -764,6 +808,7 @@ fi
 #fi
 # the final encode and VMAF of the last chunk have no next chunk to run alongside, so they are waited for here
 finishing_previous_chunk
+stopping_after_failed_encode
 
 # an unsplit video was processed as chunk 001: its results get the input name
 if [[ ${WHOLE_VIDEO_IN_ONE_CHUNK} == yes ]] && [ -e "video_part_minute_001_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv.done" ]

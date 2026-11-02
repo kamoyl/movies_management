@@ -2008,7 +2008,9 @@ checking_split_points_file()
 #                                                     at once; with a REFERENCE (the source chunk)
 #                                                     VMAF of the encoded part follows in the same job
 #   finishing_part_encoding                         - waits for the encode, sets ENCODING_RUNTIME and
-#                                                     marks the encoded part as finished (.done)
+#                                                     marks the encoded part as finished (.done: the
+#                                                     movie name, then the profile, OPTIMIZATION);
+#                                                     a failed encode sets PART_ENCODING_FAILED=yes
 # finishing_quality_metric then waits for the VMAF, as without -E
 starting_part_encoding()
 {
@@ -2118,6 +2120,7 @@ starting_part_encoding()
 
 finishing_part_encoding()
 {
+  PART_ENCODING_FAILED="no"
   if [ -z "${PART_ENCODING_PID}" ]
   then
     return
@@ -2153,9 +2156,16 @@ finishing_part_encoding()
   fi
   if [ "${PART_ENCODING_STATUS}" -ne 0 ] || [ ! -s "${PART_ENCODED_FILE}" ]
   then
-    # a failed part is reported loudly, but does not stop the (long) processing run; its merged
-    # part stays, so a later run with -r -E encodes it again
+    # its merged part stays, so a later run with -r -E encodes it again; the caller stops the
+    # run (PART_ENCODING_FAILED), otherwise every next chunk would leave one more merged part
+    # (13 GB at 4K) until the disk is full
     error "  final encoding of ${YELLOW}${PART_MERGED_FILE}${RED} failed with exit code ${PART_ENCODING_STATUS} (see log: ${PART_ENCODING_LOG}); it is kept, run again with -r -E to encode it"
+    if [ "${PART_ENCODING_STATUS}" -eq 137 ]
+    then
+      # 128 + 9: SIGKILL, which nothing in these scripts sends
+      error "  HandBrake was killed (SIGKILL), most likely by the out-of-memory killer; check: ${YELLOW}journalctl -k | grep -i oom"
+    fi
+    PART_ENCODING_FAILED="yes"
     rm -f -- "${PART_ENCODED_FILE}"
     if [ -n "${QUALITY_METRIC_CHECK_PID}" ]
     then
@@ -2166,7 +2176,8 @@ finishing_part_encoding()
     fi
     return
   fi
-  printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" > "${PART_ENCODED_FILE}.done"
+  # line 2: the profile, so -r can warn when the parts of one movie get different profiles
+  printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" "${OPTIMIZATION}" > "${PART_ENCODED_FILE}.done"
   inf "    final encoding of ${YELLOW}${PART_MERGED_FILE}${CYAN} took ${DARKCYAN}${ENCODING_RUNTIME}"
   # the encoded part replaces the merged one (kept with -k)
   if [[ ${KEEP_INTERMEDIATES} == no ]]

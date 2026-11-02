@@ -341,7 +341,8 @@ mkdir -p "${WORK_DIR}/hbbin"
 cat > "${WORK_DIR}/hbbin/HandBrakeCLI" <<'EOF'
 #!/usr/bin/env bash
 # fake HandBrakeCLI: a scan prints a title with the crop from crop.txt; an encode records its
-# niceness and arguments, takes 2 s and writes the -o file (or fails when fail_hb exists)
+# niceness and arguments, takes 2 s and writes the -o file (or fails when fail_hb exists, and is
+# killed with SIGKILL like by the out-of-memory killer when fail_hb contains "kill")
 if [[ " $* " == *" --scan "* ]]
 then
   printf 'Version: {\n}\nJSON Title Set: {"TitleList": [{"Crop": [%s]}]}\n' "$(cat crop.txt)"
@@ -353,6 +354,10 @@ printf '%s\n' "$@" > hb_args.txt
 sleep 2
 if [ -e fail_hb ]
 then
+  if [[ $(cat fail_hb) == kill ]]
+  then
+    kill -9 $$
+  fi
   exit 4
 fi
 while [ $# -gt 0 ]
@@ -393,9 +398,9 @@ OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkd
 assert_contains "the crop is read from one scan of the whole video" "${OUTPUT}" "CROP=8:4:0:0"
 PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkdir -p "$LOG"; echo "" > crop.txt; detecting_crop whole.mkv' > /dev/null 2>&1
 assert_status "an unreadable crop stops the run with 1" 1 $?
-OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; S=$(date +%s); starting_part_encoding p_merged.mkv p_encoded.mkv ""; echo "RETURNED_AFTER=$(( $(date +%s) - S ))"; finishing_part_encoding; echo "DONE=$(cat p_encoded.mkv.done) RUNTIME=${ENCODING_RUNTIME} NICE=$(cat hb_nice.txt) CONTENT=$(cat p_encoded.mkv)"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_encoded_video_only.mkv ]; then echo VIDEO_ONLY_KEPT; fi; tr "\n" " " < hb_args.txt; echo; echo "MUX: $(tr "\n" " " < mux_args.txt)"' 2>&1)"
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; S=$(date +%s); starting_part_encoding p_merged.mkv p_encoded.mkv ""; echo "RETURNED_AFTER=$(( $(date +%s) - S ))"; finishing_part_encoding; echo "DONE=$(head -n1 p_encoded.mkv.done) PROFILE=$(sed -n 2p p_encoded.mkv.done) RUNTIME=${ENCODING_RUNTIME} NICE=$(cat hb_nice.txt) CONTENT=$(cat p_encoded.mkv)"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_encoded_video_only.mkv ]; then echo VIDEO_ONLY_KEPT; fi; tr "\n" " " < hb_args.txt; echo; echo "MUX: $(tr "\n" " " < mux_args.txt)"' 2>&1)"
 assert_contains "starting returns at once (the encode keeps running)" "${OUTPUT}" "RETURNED_AFTER=0"
-assert_contains "finishing marks the encoded part with the movie name" "${OUTPUT}" "DONE=My Movie RUNTIME=0s"
+assert_contains "finishing marks the encoded part with the movie name and profile" "${OUTPUT}" "DONE=My Movie PROFILE=film RUNTIME=0s"
 assert_contains "the encode runs with lower priority (nice 10)" "${OUTPUT}" "NICE=10"
 assert_contains "every part gets the crop of the whole video" "${OUTPUT}" "--crop 8:4:0:0"
 assert_contains "the movies_encoding encoder settings are used" "${OUTPUT}" "--encoder svt_av1_10bit --quality 22"
@@ -409,14 +414,16 @@ if [[ ${OUTPUT} == *VIDEO_ONLY_KEPT* ]]; then fail "the video-only encode is rem
 if [[ ${OUTPUT} == *MERGED_KEPT* ]]; then fail "the merged part is removed after its encode"; else pass "the merged part is removed after its encode"; fi
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; KEEP_INTERMEDIATES=yes; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi' 2>&1)"
 assert_contains "-k keeps the merged part" "${OUTPUT}" "MERGED_KEPT"
-OUTPUT="$(PATH="${WORK_DIR}/hbbin:${WORK_DIR}/vmafbin:${PATH}" run_with_helpers "${PART_SETUP}"'; touch fail_hb; QUALITY_METRIC_CHECK_PID=""; starting_part_encoding p_merged.mkv p_encoded.mkv o.mkv; finishing_part_encoding; finishing_quality_metric; echo "MEAN=${VMAF_MEAN}"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_encoded.mkv.done ]; then echo MARKED; fi' 2>&1)"; STATUS=$?
-assert_status   "a failed encode does not stop the run" 0 "${STATUS}"
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${WORK_DIR}/vmafbin:${PATH}" run_with_helpers "${PART_SETUP}"'; touch fail_hb; QUALITY_METRIC_CHECK_PID=""; starting_part_encoding p_merged.mkv p_encoded.mkv o.mkv; finishing_part_encoding; echo "FLAG=${PART_ENCODING_FAILED}"; finishing_quality_metric; echo "MEAN=${VMAF_MEAN}"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_encoded.mkv.done ]; then echo MARKED; fi' 2>&1)"; STATUS=$?
+assert_status   "finishing a failed encode returns, the caller stops the run" 0 "${STATUS}"
+assert_contains "a failed encode is flagged for the caller" "${OUTPUT}" "FLAG=yes"
 assert_contains "a failed encode is reported with HandBrake's exit code" "${OUTPUT}" "failed with exit code 4"
 assert_contains "a failed encode keeps the merged part, VMAF is error" "${OUTPUT}" "MEAN=error"
 assert_contains "a failed encode keeps its merged part" "${OUTPUT}" "MERGED_KEPT"
 if [[ ${OUTPUT} == *MARKED* ]]; then fail "a failed encode is not marked as finished"; else pass "a failed encode is not marked as finished"; fi
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; touch fail_mux; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_encoded.mkv.done ]; then echo MARKED; fi' 2>&1)"
 assert_contains "a failed mux is reported with mkvmerge's exit code" "${OUTPUT}" "failed with exit code 2"
+if [[ ${OUTPUT} == *"out-of-memory"* ]]; then fail "only exit code 137 is reported as out of memory"; else pass "only exit code 137 is reported as out of memory"; fi
 assert_contains "a failed mux keeps its merged part" "${OUTPUT}" "MERGED_KEPT"
 if [[ ${OUTPUT} == *MARKED* ]]; then fail "a failed mux is not marked as finished"; else pass "a failed mux is not marked as finished"; fi
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${WORK_DIR}/vmafbin:${PATH}" run_with_helpers "${PART_SETUP}"'; QUALITY_METRIC_CHECK_PID=""; starting_part_encoding p_merged.mkv p_encoded.mkv o.mkv; finishing_part_encoding; finishing_quality_metric; echo "MEAN=${VMAF_MEAN}"; cat graph.txt' 2>&1)"
@@ -430,6 +437,23 @@ assert_contains "interpolation_nncn -h documents -E (final encode)" "${OUTPUT}" 
 # the parts must be joined after the last encode is waited for
 LINE_JOIN="$(grep -n '^  joining_encoded_parts$' "${REPO_ROOT}/interpolation_nncn" | cut -d: -f1)"
 if [ -n "${LINE_FINISH}" ] && [ -n "${LINE_JOIN}" ] && [ "${LINE_FINISH}" -lt "${LINE_JOIN}" ]; then pass "the last encode is waited for before the parts are joined"; else fail "the last encode is waited for before the parts are joined"; fi
+
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo kill > fail_hb; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi' 2>&1)"
+assert_contains "an encode killed with SIGKILL is reported with 137" "${OUTPUT}" "failed with exit code 137"
+assert_contains "an encode killed with SIGKILL points at the out-of-memory killer" "${OUTPUT}" "most likely by the out-of-memory killer"
+assert_contains "a killed encode keeps its merged part" "${OUTPUT}" "MERGED_KEPT"
+STOP_SETUP='eval "$(sed -n "/^stopping_after_failed_encode()/,/^  }/p;/^encoded_part_profile()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"'
+run_with_helpers "${STOP_SETUP}"'; PART_ENCODING_FAILED=no; stopping_after_failed_encode' > /dev/null 2>&1
+assert_status   "the run goes on after a successful encode" 0 $?
+OUTPUT="$(run_with_helpers "${STOP_SETUP}"'; PART_ENCODING_FAILED=yes; stopping_after_failed_encode' 2>&1)"; STATUS=$?
+assert_status   "the run stops with 1 after a failed encode" 1 "${STATUS}"
+assert_contains "the stop tells how to continue" "${OUTPUT}" "run again with"
+OUTPUT="$(run_with_helpers "${STOP_SETUP}"'; printf "M\ngrain\n" > new.done; echo M > old.done; echo "NEW=$(encoded_part_profile new.done) OLD=$(encoded_part_profile old.done)"' 2>&1)"
+assert_contains "the profile is read from the marker, unknown for older markers" "${OUTPUT}" "NEW=grain OLD=unknown"
+# the run stops only after the chunk processed alongside the failed encode is marked as done
+LINE_MARK="$(grep -n '_merged.mkv.done"$' "${REPO_ROOT}/interpolation_nncn" | tail -n1 | cut -d: -f1)"
+LINE_STOP="$(grep -n '^    stopping_after_failed_encode$' "${REPO_ROOT}/interpolation_nncn" | cut -d: -f1)"
+if [ -n "${LINE_MARK}" ] && [ -n "${LINE_STOP}" ] && [ "${LINE_MARK}" -lt "${LINE_STOP}" ]; then pass "a failed encode stops the run after the current chunk is marked"; else fail "a failed encode stops the run after the current chunk is marked"; fi
 
 echo "checking_space_background (space estimates of a small chunk)"
 OUTPUT="$(run_with_helpers 'TMP=.; IN_DIR=in; OUT_DIR=out; MOVIE_NAME_ARRAY=(m); NCNN_METHOD=rife; OUTPUT_FPS_ROUND=50; VERBOSE=no; TERMINAL_HEIGHT=40; mkdir -p in/m; INPUT_FRAMES_MAX_TSPACE=0.00; INTER_FRAMES_MAX_TSPACE=0.40; sleep 4 & checking_space_background $! . .; wait; echo "OVERALL=$(cat MAX_SPACE_TAKEN_OVERALL)"' 2>&1)"
@@ -452,6 +476,10 @@ assert_contains "the join takes only the video of the parts" "${OUTPUT}" "-o fin
 assert_contains "the join takes the chunks' audio and subtitles from the source" "${OUTPUT}" "--audio-tracks 1 --subtitle-tracks 3 S.mkv"
 OUTPUT="$(PATH="${WORK_DIR}/joinbin:${PATH}" run_with_helpers "${JOIN_SETUP}"'; echo "{\"tracks\":[{\"id\":0,\"type\":\"video\"},{\"id\":1,\"type\":\"audio\",\"properties\":{\"language\":\"ger\"}},{\"id\":2,\"type\":\"audio\",\"properties\":{\"language\":\"fre\"}}]}" > tracks.json; joining_encoded_parts; echo "JOIN: $(tr "\n" " " < join_args.txt)"' 2>&1)"
 assert_contains "without pl/nl/en audio the join takes all source audio, no subtitles" "${OUTPUT}" "--audio-tracks 1,2 --no-subtitles S.mkv"
+OUTPUT="$(PATH="${WORK_DIR}/joinbin:${PATH}" run_with_helpers "${JOIN_SETUP}"'; eval "$(sed -n "/^encoded_part_profile()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; OPTIMIZATION=grain; printf "S\ngrain\n" > video_part_minute_002_rife_50_encoded.mkv.done; echo "{\"tracks\":[]}" > tracks.json; joining_encoded_parts; echo "JOIN: $(tr "\n" " " < join_args.txt)"' 2>&1)"
+assert_contains "the join warns about parts of another profile" "${OUTPUT}" "were encoded with another profile than"
+assert_contains "the warning lists the parts and their profiles" "${OUTPUT}" "mixes them: 001 (unknown)"
+assert_contains "parts with a profile line are still joined" "${OUTPUT}" "video_part_minute_002_rife_50_encoded.mkv"
 
 echo "intermediate_codec_options (ffmpeg replaced by a fake encoder list)"
 mkdir -p "${WORK_DIR}/codecbin"
