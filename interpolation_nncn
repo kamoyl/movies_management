@@ -31,12 +31,18 @@ SCRIPTS_HOME=$(dirname "${SCRIPT}")
 export SCRIPTS_HOME
 
 PARAMETERS=$(echo "$@" | sed 's/\-l .//g')
+# -S starts the same command again as a systemd service
+ORIGINAL_ARGUMENTS=("$@")
 OWN_PID=${BASHPID}
 
 if [ "$(caller | awk '{print $1}')" -eq 0 ]
 then
   CALLING=0
-  reset
+  # a service has no terminal to reset
+  if [[ ${INTERPOLATION_NNCN_SERVICE} != yes ]]
+  then
+    reset
+  fi
 else
   CALLING=1
   if [[ ${VERBOSE} == yes ]]
@@ -64,7 +70,7 @@ usage()
   fi
 echo "
 ${CYAN}Usage:${BRIGHT}${WHITE}
-$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ] [ -Q ] [ -E [ -a | -g | -H ] ] [ -S ] [ -v ] [ -h ]
+$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ] [ -Q ] [ -E [ -a | -g | -H ] ] [ -S [ -M size ] ] [ -v ] [ -h ]
 
     ${NORMAL}${CYAN}Description: processes a video with a neural network (NCNN/Vulkan) tool, in chunks of about 60 seconds:
             1. converts MP4 to MKV when needed, then splits it into chunks at keyframes starting
@@ -120,7 +126,12 @@ $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ]
     ${LIME}-a${DODGERBLUE1}  with -E: animation encoding profile
     ${LIME}-g${DODGERBLUE1}  with -E: grain encoding profile
     ${LIME}-H${DODGERBLUE1}  with -E: high-motion encoding profile
-    ${LIME}-S${DODGERBLUE1}  silent: no terminal output; everything is written to the run's silent log
+    ${LIME}-S${DODGERBLUE1}  silent: runs in the background as a systemd service (system slice, as your user;
+          needs root or sudo), so it survives closing the terminal or a logout; prints the unit
+          name, its log (all output) and how to follow or stop it. systemctl stop runs the
+          Ctrl+C cleanup. Without root or sudo it exits; run the script interactively then
+    ${LIME}-M${DODGERBLUE1}  with -S: MemoryHigh of the service (e.g. 20G or 50%): above it the processes are
+          slowed down (memory reclaimed) instead of being killed; no limit by default
     ${LIME}-v${DODGERBLUE1}  verbose diagnostics
     ${LIME}-h${DODGERBLUE1}  this help${RESET}
 "
@@ -141,7 +152,8 @@ FINAL_ENCODING=no
 ANIMATION=no
 GRAIN=no
 HIGHMOTION=no
-while getopts ":o:O:i:N:s:rFTkvShQEagH" ARG
+MEMORY_HIGH=""
+while getopts ":o:O:i:N:s:M:rFTkvShQEagH" ARG
 do
   case "${ARG}" in
         i)
@@ -196,6 +208,9 @@ do
         S)
             SILENT=yes
             ;;
+        M)
+            MEMORY_HIGH=${OPTARG}
+            ;;
         v)
             VERBOSE=yes
             ;;
@@ -216,7 +231,8 @@ shift $((OPTIND-1))
 
 if [ ${CALLING} -eq 0 ]
 then
-  if [[ ${SILENT} == yes ]]
+  # only the service itself writes to the silent log; the launcher (-S from a terminal) reports there
+  if [[ ${SILENT} == yes ]] && [[ ${INTERPOLATION_NNCN_SERVICE} == yes ]]
   then
     SILENT_ROOT="${o:-${HOME}/var}"
     if ! mkdir -p "${SILENT_ROOT}"
@@ -234,7 +250,7 @@ then
 
   source "${SCRIPTS_HOME}/.config"
   source "${SCRIPTS_HOME}/.var_management"
-  if [[ ${SILENT} == yes ]]
+  if [[ ${SILENT} == yes ]] && [[ ${INTERPOLATION_NNCN_SERVICE} == yes ]]
   then
     SILENT_LOG="${LOG}/interpolation_nncn_silent_${CURRENT_TIMESTAMP}.log"
     if ! mv "${SILENT_BOOT_LOG}" "${SILENT_LOG}"
@@ -276,6 +292,22 @@ then
   error "  -F (start from scratch) and -r (resume) exclude each other"
   ERROR_CODE="2"
   failed
+fi
+
+if [ -n "${MEMORY_HIGH}" ]
+then
+  if [[ ${SILENT} != yes ]]
+  then
+    error "  -M sets the memory of the -S service, so it needs -S"
+    ERROR_CODE="2"
+    failed
+  fi
+  if ! [[ ${MEMORY_HIGH} =~ ^[0-9]+[KMGT]?$|^[0-9]+%$ ]]
+  then
+    error "  -M expects a size like 20G, 512M or a percentage like 50% (got: ${YELLOW}${MEMORY_HIGH}${RED})"
+    ERROR_CODE="2"
+    failed
+  fi
 fi
 
 if [ -z ${NCNN_METHOD} ]
@@ -326,6 +358,85 @@ done
 
 # codec of the intermediate video (INTERMEDIATE_CODEC in .config_video), checked before any work
 intermediate_codec_options
+
+# -S: the same command again as a transient systemd service in the system slice, run as the
+# calling user. Only with root or sudo, by the user's choice: then the service has what the
+# interactive run has (the user's groups for the GPU, PATH, HOME) and no fallbacks are needed.
+# A system service survives closing the terminal or a logout, and is not in the user slice that
+# systemd-oomd watches. It does not protect against the kernel OOM killer (no OOMScoreAdjust, by
+# the user's choice); -M (MemoryHigh) throttles the processes before memory runs out.
+# KillSignal=SIGINT: systemctl stop sends SIGINT to every process of the service, as Ctrl+C does
+# to the terminal's process group, so exit_function runs the Ctrl+C cleanup. Not to the script
+# only (KillMode=mixed): bash runs the trap only after its foreground tool (NCNN, ffmpeg) ends,
+# which may take longer than TimeoutStopSec; whatever is left after it is killed. Everything is checked before (above), so the launcher reports
+# input errors at once instead of into the log.
+starting_as_service()
+{
+  local SUDO_COMMAND=()
+  if ! type systemd-run > /dev/null 2>&1
+  then
+    error "  -S runs the script as a systemd service, but systemd-run was not found; run it interactively (without -S)"
+    ERROR_CODE="127"
+    failed
+  fi
+  if [ "$(id -u)" -ne 0 ]
+  then
+    if ! type sudo > /dev/null 2>&1
+    then
+      error "  -S needs root or sudo to start a system service, but sudo was not found; run it interactively (without -S)"
+      ERROR_CODE="127"
+      failed
+    fi
+    inf "  -S: starting a system service needs sudo (it may ask for your password)"
+    if ! sudo -v
+    then
+      error "  -S needs root or sudo to start a system service; run it interactively (without -S)"
+      ERROR_CODE="1"
+      failed
+    fi
+    SUDO_COMMAND=(sudo)
+  fi
+  # a recognizable name: the movie and the run's timestamp (the same as in its log directory);
+  # systemd allows only letters, digits and ":_.-\" in unit names
+  local UNIT_MOVIE_NAME="${FILE_NAME%.*}"
+  UNIT_MOVIE_NAME="$(printf '%s' "${UNIT_MOVIE_NAME}" | tr -c 'A-Za-z0-9_.-' '_' | tr -s '_')"
+  local UNIT_NAME="interpolation-${UNIT_MOVIE_NAME:0:80}-${CURRENT_TIMESTAMP}"
+  local SERVICE_PROPERTIES=(-p KillSignal=SIGINT -p TimeoutStopSec=120)
+  if [ -n "${MEMORY_HIGH}" ]
+  then
+    SERVICE_PROPERTIES+=(-p "MemoryHigh=${MEMORY_HIGH}")
+  fi
+  if ! "${SUDO_COMMAND[@]}" systemd-run --quiet --collect --unit="${UNIT_NAME}" \
+    --description="interpolation_nncn: ${FILE_NAME}" \
+    --uid="$(id -u)" --gid="$(id -g)" --working-directory="${PWD}" \
+    "${SERVICE_PROPERTIES[@]}" \
+    --setenv=PATH="${PATH}" --setenv=HOME="${HOME}" --setenv=USER="${USER}" \
+    --setenv=LANG="${LANG:-C.UTF-8}" --setenv=TERM="${TERM:-xterm-256color}" \
+    --setenv=INTERPOLATION_NNCN_SERVICE=yes --setenv=SERVICE_RUN_TIMESTAMP="${CURRENT_TIMESTAMP}" \
+    "${SCRIPT}" "${ORIGINAL_ARGUMENTS[@]}"
+  then
+    error "  starting the service ${YELLOW}${UNIT_NAME}${RED} failed (see the message of systemd-run above)"
+    ERROR_CODE="1"
+    failed
+  fi
+  local SUDO_PREFIX=""
+  if [ ${#SUDO_COMMAND[@]} -gt 0 ]
+  then
+    SUDO_PREFIX="sudo "
+  fi
+  inf "  started as service: ${YELLOW}${UNIT_NAME}.service"
+  inf "  log (all output):   ${BLUE}${LOG}/interpolation_nncn_silent_${CURRENT_TIMESTAMP}.log"
+  inf "  follow:  ${LIME}tail -f '${LOG}/interpolation_nncn_silent_${CURRENT_TIMESTAMP}.log'"
+  inf "  status:  ${LIME}systemctl status '${UNIT_NAME}'"
+  inf "  stop:    ${LIME}${SUDO_PREFIX}systemctl stop '${UNIT_NAME}'${CYAN} (runs the Ctrl+C cleanup, finished chunks are kept)"
+  inf "  list:    ${LIME}systemctl list-units 'interpolation-*'"
+  exit 0
+  }
+
+if [[ ${SILENT} == yes ]] && [[ ${INTERPOLATION_NNCN_SERVICE} != yes ]]
+then
+  starting_as_service
+fi
 
 TERMINAL_WIDTH=$(tput cols)
 TERMINAL_HEIGHT=$(tput lines)

@@ -86,6 +86,12 @@ mkdir -p "${WORK_DIR}/cli" && echo x > "${WORK_DIR}/cli/x.mkv"
 OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -F -r 2>&1)"; STATUS=$?
 assert_status   "interpolation_nncn -F with -r stops with 2" 2 "${STATUS}"
 assert_contains "interpolation_nncn -F with -r says why" "${OUTPUT}" "exclude each other"
+OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -M 20G 2>&1)"; STATUS=$?
+assert_status   "interpolation_nncn -M without -S stops with 2" 2 "${STATUS}"
+assert_contains "interpolation_nncn -M without -S says why" "${OUTPUT}" "so it needs -S"
+OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -S -M 20GB 2>&1)"; STATUS=$?
+assert_status   "interpolation_nncn -M with a wrong size stops with 2" 2 "${STATUS}"
+assert_contains "interpolation_nncn -M with a wrong size says why" "${OUTPUT}" "-M expects a size like 20G"
 
 echo "failed: never exits 0"
 run_with_helpers 'ERROR_CODE=2; failed' > /dev/null
@@ -292,6 +298,47 @@ assert_contains "-F keeps markers of other movies and methods, and their parts" 
 if [[ ${OUTPUT} == *"split_points.txt "* ]]; then fail "-F from chunk 001 removes the split points"; else pass "-F from chunk 001 removes the split points"; fi
 OUTPUT="$(run_with_helpers "${FRESH_SETUP}"'; SPLIT_PART_START=002; removing_earlier_results; echo "LEFT: $(ls | tr "\n" " ")"' 2>&1)"
 assert_contains "-F -s 002 keeps the chunks before 002 and the split points" "${OUTPUT}" "LEFT: My Film_rife_48_merged.mkv My Film_rife_48_merged.mkv.done My Film_split_points.txt video_part_minute_001_rife_48_encoded.mkv video_part_minute_001_rife_48_encoded.mkv.done video_part_minute_001_rife_48_merged.mkv video_part_minute_001_rife_48_merged.mkv.done video_part_minute_002_dain"
+
+echo "-S starts a systemd service (sudo, systemd-run and id replaced by fakes)"
+mkdir -p "${WORK_DIR}/servicebin"
+cat > "${WORK_DIR}/servicebin/sudo" <<'EOF'
+#!/usr/bin/env bash
+# fake sudo: -v fails with sudo_denied, other commands run as given (and are recorded)
+if [ "$1" = "-v" ]
+then
+  if [ -e sudo_denied ]
+  then
+    exit 1
+  fi
+  exit 0
+fi
+echo sudo >> service_args.txt
+exec "$@"
+EOF
+cat > "${WORK_DIR}/servicebin/systemd-run" <<'EOF'
+#!/usr/bin/env bash
+# fake systemd-run: records its arguments, one per line
+printf '%s\n' "$@" >> service_args.txt
+EOF
+cat > "${WORK_DIR}/servicebin/id" <<'EOF'
+#!/usr/bin/env bash
+echo 1000
+EOF
+chmod +x "${WORK_DIR}/servicebin/"*
+SERVICE_SETUP='eval "$(sed -n "/^starting_as_service()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; rm -rf svc; mkdir svc; cd svc || exit 99; FILE_NAME="Smokin'"'"' Aces (2006).mkv"; CURRENT_TIMESTAMP=2026.11.02-16.50.33; LOG=/var/log-x; SCRIPT=/repo/interpolation_nncn; ORIGINAL_ARGUMENTS=(-i "${FILE_NAME}" -E -g -S); MEMORY_HIGH=""'
+OUTPUT="$(PATH="${WORK_DIR}/servicebin:${PATH}" run_with_helpers "${SERVICE_SETUP}"'; MEMORY_HIGH=20G; trap '"'"'echo "STATUS=$?"; echo "ARGS: $(tr "\n" "|" < service_args.txt)"'"'"' EXIT; starting_as_service' 2>&1)"
+assert_contains "-S exits 0 once the service is started" "${OUTPUT}" "STATUS=0"
+assert_contains "-S starts it through sudo, as the calling user, in the current directory" "${OUTPUT}" "ARGS: sudo|--quiet|--collect|--unit=interpolation-Smokin_Aces_2006_-2026.11.02-16.50.33|--description=interpolation_nncn: Smokin' Aces (2006).mkv|--uid=1000|--gid=1000|--working-directory=${WORK_DIR}/svc|"
+assert_contains "-S: systemctl stop sends SIGINT, as Ctrl+C (the cleanup runs)" "${OUTPUT}" "|-p|KillSignal=SIGINT|-p|TimeoutStopSec=120|-p|MemoryHigh=20G|"
+assert_contains "-S: the service gets the launcher's timestamp and the same arguments" "${OUTPUT}" "|--setenv=INTERPOLATION_NNCN_SERVICE=yes|--setenv=SERVICE_RUN_TIMESTAMP=2026.11.02-16.50.33|/repo/interpolation_nncn|-i|Smokin' Aces (2006).mkv|-E|-g|-S|"
+assert_contains "-S prints the log of the service" "${OUTPUT}" "/var/log-x/interpolation_nncn_silent_2026.11.02-16.50.33.log"
+assert_contains "-S prints how to stop it" "${OUTPUT}" "sudo systemctl stop 'interpolation-Smokin_Aces_2006_-2026.11.02-16.50.33'"
+OUTPUT="$(PATH="${WORK_DIR}/servicebin:${PATH}" run_with_helpers "${SERVICE_SETUP}"'; trap '"'"'echo "ARGS: $(tr "\n" "|" < service_args.txt)"'"'"' EXIT; starting_as_service' 2>&1)"
+if [[ ${OUTPUT} == *MemoryHigh* ]]; then fail "-S without -M sets no MemoryHigh"; else pass "-S without -M sets no MemoryHigh"; fi
+OUTPUT="$(PATH="${WORK_DIR}/servicebin:${PATH}" run_with_helpers "${SERVICE_SETUP}"'; touch sudo_denied; trap '"'"'echo "STATUS=$?"; if [ -e service_args.txt ]; then echo STARTED; fi'"'"' EXIT; starting_as_service' 2>&1)"
+assert_contains "-S without sudo stops with 1" "${OUTPUT}" "STATUS=1"
+assert_contains "-S without sudo suggests an interactive run" "${OUTPUT}" "run it interactively (without -S)"
+if [[ ${OUTPUT} == *STARTED* ]]; then fail "-S without sudo starts nothing"; else pass "-S without sudo starts nothing"; fi
 
 echo "Ctrl+C cleanup (exit_function, cleaning_after_interrupt)"
 INTERRUPT_SETUP='for FUNC in exit_function stop_background_jobs cleaning_after_interrupt; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; tput() { :; }; NCNN_METHOD=rife; KEEP_INTERMEDIATES=no; MOVIE_NAME_ARRAY=(video_part_minute_003); rm -rf intr; mkdir intr; cd intr || exit 99; LOG="$PWD/log"; TMP="$PWD/tmp"; TMP_OUT="$PWD/tmp_out"; mkdir -p "$LOG" "$TMP/in_003/f" "$TMP/out_003" "$TMP_OUT/in_003" "$TMP_OUT/out_003"; echo s > "$TMP/statistics.txt"; echo t > "$TMP/timeline.csv"; echo a > "$TMP/video_part_minute_003.mka"; echo s > "$TMP/video_part_minute_003_subtitles.mkv"; echo v > "$TMP_OUT/video_part_minute_003_rife_48.mkv"; for N in 001 002 003 004; do echo src > video_part_minute_${N}.mkv; done; echo p > video_part_minute_001_rife_48_merged.mkv; echo F > video_part_minute_001_rife_48_merged.mkv.done; echo p > video_part_minute_001_rife_48_encoded.mkv; echo F > video_part_minute_001_rife_48_encoded.mkv.done; echo p > video_part_minute_002_rife_48_merged.mkv; echo F > video_part_minute_002_rife_48_merged.mkv.done; echo p > video_part_minute_002_rife_48_encoded.mkv; echo p > video_part_minute_002_rife_48_encoded_video_only.mkv; echo p > video_part_minute_003_rife_48_merged.mkv; echo src > Film.mkv; sleep 30 > /dev/null 2>&1 & SLEEP_PID=$!'

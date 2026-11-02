@@ -235,7 +235,8 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 | `-a` | — | With `-E`: animation profile (as `movies_encoding -a`). Without `-E`: exit 2. |
 | `-g` | — | With `-E`: grain profile (as `movies_encoding -g`). Without `-E`: exit 2. |
 | `-H` | — | With `-E`: high-motion profile (as `movies_encoding -H`). Without `-E`: exit 2. |
-| `-S` | — | Silent: no terminal output; everything is written to `LOG/interpolation_nncn_silent_<timestamp>.log`. |
+| `-S` | — | Silent, as a background service: the same command is started again as a transient systemd service `interpolation-<movie>-<timestamp>` in the system slice, run as your user in the current directory, and the launcher exits 0. All output goes to `LOG/interpolation_nncn_silent_<timestamp>.log`. Needs root or `sudo` (it may ask for your password); otherwise it exits (1, or 127 without `sudo`/`systemd-run`) and suggests running interactively. See [Silent run as a service](#silent-run-as-a-service--s). |
+| `-M` | `SIZE` | With `-S`: `MemoryHigh` of the service, e.g. `20G`, `512M` or `50%`. Above it the kernel reclaims memory from the service's processes and slows them down, instead of letting memory run out. No limit by default. Without `-S` or with another format: exit 2. |
 | `-v` | — | Enable verbose diagnostics. |
 | `-h` | — | Print usage information. |
 
@@ -263,6 +264,31 @@ Each step of each chunk also gets a row in `TMP/timeline.csv` (`~`-separated), s
 | `chunk [%]` | the duration as a percent of the chunk's `chunk` row, filled in at the end of the run (empty for an interrupted run) |
 
 `encoding` and `quality_check` run in the background alongside the next chunk, so they can end after their chunk and exceed 100 %. Rows are in the order the steps ended. The sum of the step durations (without the `chunk` and `whole_run` rows) divided by `whole_run` is the average number of steps running at the same time.
+
+### Silent run as a service (`-S`)
+
+```bash
+./interpolation_nncn -i "Movie.mkv" -E -g -S -M 24G
+```
+
+The launcher checks the options, the input and the tools as an interactive run does, so such errors show at once. Then it starts the same command with `sudo systemd-run` and prints:
+
+- the unit name, e.g. `interpolation-Smokin_Aces_2006_-2026.11.02-16.50.33` (the movie name with characters systemd does not allow replaced by `_`, and the run's timestamp, the same as in its log directory);
+- the log, and how to follow it: `tail -f '<log>'`;
+- `systemctl status '<unit>'`, `sudo systemctl stop '<unit>'` and `systemctl list-units 'interpolation-*'`.
+
+Why a system service:
+
+- It survives closing the terminal, an SSH disconnect or a logout.
+- It runs in the system slice, not in the user slice that `systemd-oomd` watches under memory pressure.
+- It does **not** protect against the kernel's OOM killer, which chooses by memory use, whatever the slice (as with Smokin' Aces, Done item 16). `OOMScoreAdjust` was left out on purpose: protecting the run means the kernel kills something else (e.g. a VM). `-M` (`MemoryHigh`) slows the run down before memory runs out instead.
+
+Details:
+
+- Root or `sudo` is required, by choice: then the service has what an interactive run has (your user and groups, so the GPU, and `PATH`, `HOME`, `LANG`, `TERM`), and no fallbacks are needed. Run as root, it runs as root.
+- `systemctl stop` sends SIGINT to every process of the service, as Ctrl+C does in a terminal, so the Ctrl+C cleanup runs (Done item 18) and finished chunks are kept; the run exits 130. Not to the script alone: bash runs its trap only after its current tool (NCNN, ffmpeg) ends. Whatever still runs after 120 s is killed.
+- `--collect`: the unit disappears when it ends, also after a failure; its exit code is in the log.
+- To resume, run the same command again (with or without `-S`).
 
 ### Split points
 
@@ -547,7 +573,7 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - Keeping the merged part of a failed encode was by design (`-r -E` encodes it again), but the run went on, so every next failure left another 13 GB part.
     - Fix: `finishing_part_encoding` flags the failure (exit 137 is reported as most likely out of memory), and `stopping_after_failed_encode` stops the run with exit 1 once the chunk processed alongside is finished and marked, so no interpolation is lost. The failure is not retried at once: memory pressure from outside would most likely kill the retry too.
     - Also, `-r` did not know which profile a part had been encoded with, so continuing with `-g` gave parts 001–023 `film` and 024+ `grain`. The `_encoded.mkv.done` marker now has the profile on line 2 (only line 1, the movie name, is compared); `-r` warns for a skipped part of another profile, and the join lists them. Older markers count as `unknown`.
-    - Planned next: running the background jobs through `systemd-run` with memory limits, so HandBrake gets a limit of its own and the main script is protected from the OOM killer.
+    - Planned next: running the background jobs through `systemd-run` with memory limits (done differently, see Done item 19).
 
 17. **Resume by default; `-F` for a fresh start.** The user's idea: runs were almost always continued with `-r`, and a run without it processes finished chunks again (hours at 4K). A fresh start should be the explicit choice.
     - Resuming is safe as a default: a chunk is skipped only when its `.done` marker names the same movie and its part is non-empty, and a run stops with exit 2 when the chunks were split at other points.
@@ -562,6 +588,14 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - The `_merged.mkv.done` marker is now written before waiting for the previous chunk's encode and VMAF, so a Ctrl+C during that wait keeps the chunk which is already finished (before, it was processed again).
     - The chunk's audio and subtitle extracts in TMP are now removed when the chunk is done (they are in `_merged.mkv`), like its frames; before, they stayed until the end of the run.
     - Joining the parts encoded so far after Ctrl+C (a partial movie) is left for later.
+
+19. **`-S` runs as a systemd service.** The user's idea: the silent run should be a background service started by `systemd-run`, in the system slice instead of a user one. See [Silent run as a service](#silent-run-as-a-service--s).
+    - Before, `-S` only sent the output to a log; the script still ran in the terminal and ended with it.
+    - The system slice keeps it out of the user slice that `systemd-oomd` watches, and the run survives a logout. The kernel OOM killer, which killed HandBrake in Done item 16, chooses by memory use whatever the slice; `OOMScoreAdjust` was left out (the user's choice), because then something else would be killed. `-M` adds `MemoryHigh` (throttling instead of killing).
+    - Only with root or `sudo` (the user's simplification): no user-slice fallback, linger or permission checks; without them `-S` suggests an interactive run and exits.
+    - The service gets the launcher's timestamp (`SERVICE_RUN_TIMESTAMP`, read by `.config`), so the log printed by the launcher is the one the service writes.
+    - First design: `KillMode=mixed` (SIGINT to the script only). I caught this before committing: bash runs a trap only after its foreground tool ends, possibly after the stop timeout, so the cleanup would not run. SIGINT now goes to every process, as Ctrl+C does.
+    - Not tested with a real `sudo systemd-run` here (no sudo or user manager in the test environment); the tests check the command line with fakes.
 
 ### Codec benchmark
 
