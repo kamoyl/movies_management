@@ -396,7 +396,7 @@ RECOVER_SETUP='LOG="$PWD/log"; mkdir -p "$LOG" fr; rm -f fr/* recover_args.txt f
 printf "%s\n" 0.042000,K__ 0.000000,___ -0.042000,___ 0.209000,___ 0.125000,___ > next_packets.csv; echo 0.042000 > next_first.txt'
 OUTPUT="$(PATH="${WORK_DIR}/recoverbin:${PATH}" run_with_helpers "${RECOVER_SETUP}"'; recovering_lost_frames video_part_minute_002 fr 1437; echo "RECOVERED=${RECOVERED_FRAMES_COUNT} FILES=$(ls fr | tr "\n" " ")"; tr "\n" " " < recover_args.txt' 2>&1)"
 assert_contains "lost frames of the next chunk are recovered after the decoded ones" "${OUTPUT}" "RECOVERED=2 FILES=00001438.png 00001439.png"
-assert_contains "they are selected by their movie timestamps, tone-mapped" "${OUTPUT}" "select='lt(abs(t-120.036000),0.005)+lt(abs(t-120.078000),0.005)',libplacebo=tm"
+assert_contains "they are tone-mapped, then selected by their movie timestamps (libplacebo after select waited for the movie's end)" "${OUTPUT}" "libplacebo=tm,select='lt(abs(t-120.036000),0.005)+lt(abs(t-120.078000),0.005)'"
 assert_contains "the movie is decoded from before them, with its own timestamps" "${OUTPUT}" "-copyts -ss 119.036 -i Film.mkv"
 OUTPUT="$(PATH="${WORK_DIR}/recoverbin:${PATH}" run_with_helpers "${RECOVER_SETUP}"'; touch fail_ffmpeg; recovering_lost_frames video_part_minute_002 fr 1437; echo "RECOVERED=${RECOVERED_FRAMES_COUNT} FILES=[$(ls fr)]"' 2>&1)"; STATUS=$?
 assert_status   "a failed recovery does not stop the run" 0 "${STATUS}"

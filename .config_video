@@ -547,9 +547,13 @@ recovering_lost_frames()
   local SELECT_EXPRESSION
   SELECT_EXPRESSION="$(awk '{ printf "%slt(abs(t-%s),0.005)", (NR > 1 ? "+" : ""), $1 }' <<< "${LOST_FRAMES_PTS}")"
   local RECOVERY_FILTER="select='${SELECT_EXPRESSION}'"
+  # tone mapping BEFORE select: libplacebo passes a frame on only when the next one arrives, so
+  # after select it held the last lost frame until the end of the movie, and -frames:v stopped
+  # ffmpeg only then (about 8 minutes per split in the middle of a 4K movie, instead of seconds);
+  # it keeps the timestamps, so select picks the same frames
   if [ -n "${TONE_MAPPING_FILTER}" ]
   then
-    RECOVERY_FILTER="${RECOVERY_FILTER},${TONE_MAPPING_FILTER}"
+    RECOVERY_FILTER="${TONE_MAPPING_FILTER},${RECOVERY_FILTER}"
   fi
   # the seek lands on a keyframe before the lost frames, so the frames they reference are decoded;
   # -copyts keeps the movie timestamps for select
