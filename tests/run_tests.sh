@@ -340,6 +340,12 @@ assert_contains "-S without sudo stops with 1" "${OUTPUT}" "STATUS=1"
 assert_contains "-S without sudo suggests an interactive run" "${OUTPUT}" "run it interactively (without -S)"
 if [[ ${OUTPUT} == *STARTED* ]]; then fail "-S without sudo starts nothing"; else pass "-S without sudo starts nothing"; fi
 
+echo "sampling_frames (real ffmpeg on a generated video)"
+OUTPUT="$(run_with_helpers 'rm -rf smp; mkdir smp; cd smp || exit 99; ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x240:rate=24 -t 6 -c:v libx264 -g 48 v.mkv; sampling_frames v.mkv 6.000 fa; echo "STATUS=$?"; echo "FILES: $(ls fa | tr "\n" " ")"; sampling_frames v.mkv N/A fb; echo "BAD=$?"' 2>&1)"
+assert_contains "sampling_frames writes 7 evenly spread frames" "${OUTPUT}" "STATUS=0"
+assert_contains "sampling_frames names them like the old analysis (output0001.png first)" "${OUTPUT}" "FILES: output0001.png output0002.png output0003.png output0004.png output0005.png output0006.png output0007.png "
+assert_contains "sampling_frames fails on an unknown duration" "${OUTPUT}" "BAD=1"
+
 echo "Ctrl+C cleanup (exit_function, cleaning_after_interrupt)"
 INTERRUPT_SETUP='for FUNC in exit_function stop_background_jobs cleaning_after_interrupt; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; tput() { :; }; NCNN_METHOD=rife; KEEP_INTERMEDIATES=no; MOVIE_NAME_ARRAY=(video_part_minute_003); rm -rf intr; mkdir intr; cd intr || exit 99; LOG="$PWD/log"; TMP="$PWD/tmp"; TMP_OUT="$PWD/tmp_out"; mkdir -p "$LOG" "$TMP/frame_analysis" "$TMP/in_003/f" "$TMP/out_003" "$TMP_OUT/in_003" "$TMP_OUT/out_003"; echo s > "$TMP/statistics.txt"; echo t > "$TMP/timeline.csv"; echo a > "$TMP/video_part_minute_003.mka"; echo s > "$TMP/video_part_minute_003_subtitles.mkv"; echo v > "$TMP_OUT/video_part_minute_003_rife_48.mkv"; for N in 001 002 003 004; do echo src > video_part_minute_${N}.mkv; done; echo p > video_part_minute_001_rife_48_merged.mkv; echo F > video_part_minute_001_rife_48_merged.mkv.done; echo p > video_part_minute_001_rife_48_encoded.mkv; echo F > video_part_minute_001_rife_48_encoded.mkv.done; echo p > video_part_minute_002_rife_48_merged.mkv; echo F > video_part_minute_002_rife_48_merged.mkv.done; echo p > video_part_minute_002_rife_48_encoded.mkv; echo p > video_part_minute_002_rife_48_encoded_video_only.mkv; echo p > video_part_minute_003_rife_48_merged.mkv; echo src > Film.mkv; sleep 30 > /dev/null 2>&1 & SLEEP_PID=$!'
 # exit_function exits, so the results are printed by an EXIT trap (in a subshell, $$ is not its PID)
