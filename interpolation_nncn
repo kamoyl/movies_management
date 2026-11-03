@@ -368,8 +368,13 @@ intermediate_codec_options
 # KillSignal=SIGINT: systemctl stop sends SIGINT to every process of the service, as Ctrl+C does
 # to the terminal's process group, so exit_function runs the Ctrl+C cleanup. Not to the script
 # only (KillMode=mixed): bash runs the trap only after its foreground tool (NCNN, ffmpeg) ends,
-# which may take longer than TimeoutStopSec; whatever is left after it is killed. Everything is checked before (above), so the launcher reports
-# input errors at once instead of into the log.
+# which may take longer than TimeoutStopSec; whatever is left after it is killed.
+# SELinux: systemd (init_t) may execute only files of executable types; a script in a repository
+# has its directory's label (e.g. httpd_sys_content_t) and was refused ("Permission denied" at
+# step EXEC). /usr/bin/env is bin_t, so the service runs as unconfined_service_t, the domain of
+# any locally installed service, which may read the script: no policy change, no setenforce.
+# Everything is checked before (above), so the launcher reports input errors at once instead of
+# into the log.
 starting_as_service()
 {
   local SUDO_COMMAND=()
@@ -413,7 +418,7 @@ starting_as_service()
     --setenv=PATH="${PATH}" --setenv=HOME="${HOME}" --setenv=USER="${USER}" \
     --setenv=LANG="${LANG:-C.UTF-8}" --setenv=TERM="${TERM:-xterm-256color}" \
     --setenv=INTERPOLATION_NNCN_SERVICE=yes --setenv=SERVICE_RUN_TIMESTAMP="${CURRENT_TIMESTAMP}" \
-    "${SCRIPT}" "${ORIGINAL_ARGUMENTS[@]}"
+    /usr/bin/env bash "${SCRIPT}" "${ORIGINAL_ARGUMENTS[@]}"
   then
     error "  starting the service ${YELLOW}${UNIT_NAME}${RED} failed (see the message of systemd-run above)"
     ERROR_CODE="1"
@@ -425,11 +430,11 @@ starting_as_service()
     SUDO_PREFIX="sudo "
   fi
   inf "  started as service: ${YELLOW}${UNIT_NAME}.service"
-  inf "  log (all output):   ${BLUE}${LOG}/interpolation_nncn_silent_${CURRENT_TIMESTAMP}.log"
-  inf "  follow:  ${LIME}tail -f '${LOG}/interpolation_nncn_silent_${CURRENT_TIMESTAMP}.log'"
-  inf "  status:  ${LIME}systemctl status '${UNIT_NAME}'"
-  inf "  stop:    ${LIME}${SUDO_PREFIX}systemctl stop '${UNIT_NAME}'${CYAN} (runs the Ctrl+C cleanup, finished chunks are kept)"
-  inf "  list:    ${LIME}systemctl list-units 'interpolation-*'"
+  inf "    log (all output):   ${BLUE}${LOG}/interpolation_nncn_silent_${CURRENT_TIMESTAMP}.log"
+  inf "    follow:  ${LIME}tail -f '${LOG}/interpolation_nncn_silent_${CURRENT_TIMESTAMP}.log'"
+  inf "    status:  ${LIME}systemctl status '${UNIT_NAME}'"
+  inf "    stop:    ${LIME}${SUDO_PREFIX}systemctl stop '${UNIT_NAME}'${CYAN} (runs the Ctrl+C cleanup, finished chunks are kept)"
+  inf "    list:    ${LIME}systemctl list-units 'interpolation-*'"
   exit 0
   }
 
@@ -523,6 +528,12 @@ cleaning_after_interrupt()
       then
         safe_remove_dir "${WORK_ITEM}"
         REMOVED_COUNT=$((REMOVED_COUNT + 1))
+  # sampled frames of the chunk's preparation (removed at its end, so left only by an interrupt)
+  if [ -n "${TMP}" ] && [ -d "${TMP}/frame_analysis" ]
+  then
+    safe_remove_dir "${TMP}/frame_analysis"
+    REMOVED_COUNT=$((REMOVED_COUNT + 1))
+  fi
       fi
     done
     # frames-only videos (TMP_OUT) and audio/subtitle extracts (TMP); both directories belong to
