@@ -127,7 +127,7 @@ Exit codes: `0` success, `1` processing error, `2` invalid usage or input, `127`
 - `interpolation_nncn` resumes an interrupted run by default (before Done item 17 only with `-r`, which is still accepted). After a chunk finishes, a marker `video_part_minute_NNN_<method>_<fps>_merged.mkv.done` is written next to the merged chunk; it contains the whole movie name. A chunk is skipped only when its marker exists, the marker names the same movie, and the merged `.mkv` is non-empty. Otherwise the chunk is processed again. Resuming works with `-s`. Chunks finished before markers existed have no marker and are therefore processed again.
 - `-F` starts from scratch: before splitting, it removes the results of an earlier run of the same movie and method in the current directory (each removal is listed): the merged and encoded parts whose marker names this movie, with their markers, and the split points file. With `-s`, only the chunks from that number on are removed, and the split points stay (the earlier chunks are joined with the new ones). Other files (chunks, unfinished parts) have generic names and are overwritten as the chunks are processed again. `-F` with `-r` exits 2.
 - On exit, error, or Ctrl+C, `interpolation_nncn` stops the background processes it started directly (for example progress monitors), so they do not keep running after the script ends.
-- Ctrl+C also cleans up (see Done item 18): it waits up to 10 seconds for those processes to end, then removes what the interrupted work left behind, with a count: the frame directories, frames-only videos and audio/subtitle extracts in the run's TMP/TMP_OUT directories, the source chunks in the current directory (every run splits the movie again), and the parts without a `.done` marker (an unfinished merge or encode). Finished parts, their markers, `statistics.txt`, `timeline.csv` and the logs stay, so the next run resumes. With `-k`, nothing is removed. A second Ctrl+C stops the cleanup at once. It exits with 130.
+- Ctrl+C also cleans up (see Done item 18): it waits up to 10 seconds for those processes to end, then removes what the interrupted work left behind, with a count: the frame directories, the frame samples (`frame_analysis`), frames-only videos and audio/subtitle extracts in the run's TMP/TMP_OUT directories, the source chunks in the current directory (every run splits the movie again), and the parts without a `.done` marker (an unfinished merge or encode). Finished parts, their markers, `statistics.txt`, `timeline.csv` and the logs stay, so the next run resumes. With `-k`, nothing is removed. A second Ctrl+C stops the cleanup at once. It exits with 130.
 - The VMAF progress loop sleeps 2 seconds between checks instead of busy-waiting on one CPU core.
 - `movies_encoding` no longer calls `movie_data_collecting` twice, saving duplicate OMDb/TheMovieDB requests.
 
@@ -289,6 +289,7 @@ Details:
 - `systemctl stop` sends SIGINT to every process of the service, as Ctrl+C does in a terminal, so the Ctrl+C cleanup runs (Done item 18) and finished chunks are kept; the run exits 130. Not to the script alone: bash runs its trap only after its current tool (NCNN, ffmpeg) ends. Whatever still runs after 120 s is killed.
 - `--collect`: the unit disappears when it ends, also after a failure; its exit code is in the log.
 - To resume, run the same command again (with or without `-S`).
+- SELinux (enforcing) works without a policy change or `setenforce`: the service starts `/usr/bin/env bash <script>`, not the script itself. systemd (`init_t`) may not execute a script with a label such as `httpd_sys_content_t` (Smokin' Aces: `Permission denied` at step EXEC), but `/usr/bin/env` is `bin_t`, so the policy's transition `init_t → unconfined_service_t` applies, and that domain may read the script.
 
 ### Split points
 
@@ -597,6 +598,14 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - First design: `KillMode=mixed` (SIGINT to the script only). I caught this before committing: bash runs a trap only after its foreground tool ends, possibly after the stop timeout, so the cleanup would not run. SIGINT now goes to every process, as Ctrl+C does.
     - Not tested with a real `sudo systemd-run` here (no sudo or user manager in the test environment); the tests check the command line with fakes.
 
+20. **Fixes after the first `-S` runs.**
+    - SELinux: the service failed under enforcing SELinux (`Permission denied` at step EXEC; the user's workaround was `setenforce 0`). Options discussed: a permanent policy module, temporary permissive mode, a temporary module. Chosen: start the script through `/usr/bin/env bash`, which needs no policy change (see [Silent run as a service](#silent-run-as-a-service--s)).
+    - Recovery of frames lost at an open-GOP split stalled: `select` ran before the tone mapping (`libplacebo`), which keeps a frame until the next one arrives, so `ffmpeg` decoded the rest of the movie. Smokin' Aces chunks with recovered frames spent ~490–500 s in preparation instead of ~12 s. Now the tone mapping runs first: a test seek took 3.5 s instead of more than 200 s, with the same frame (`pts_time` checked with `showinfo`). This was my bug from the recovery commit.
+    - Frame analysis (the PNG size for the space estimate and the bit depth) decoded the whole chunk and kept every 100th frame. Now `sampling_frames` seeks to 7 evenly spaced points. On an idle machine (4K 10-bit, 60 s chunk) it is not faster (10.0 s vs 7.9 s), but it uses ~29 CPU-seconds instead of ~103, which matters when NCNN, HandBrake and VMAF run alongside; the average PNG size stayed within 0.1 %. My first estimate (~130 s saved per chunk) was wrong.
+    - The Ctrl+C cleanup also removes `frame_analysis` (~300 MB at 4K), the only leftover in the user's test.
+    - Logs are compressed with gzip, about 10 times smaller (one run: 9.5 MB → 0.9 MB): a chunk's logs when the chunk is done (also its encode and VMAF), the rest at the end of the run. The silent log stays plain, as it is still being written. Read them with `zless`, `zgrep` or `vim`. Generic helper `compressing_logs` in `.config`.
+    - The ToDo list from the script header moved to [Planned](#planned-in-agreed-order).
+
 ### Codec benchmark
 
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
@@ -664,6 +673,22 @@ Chunk 001, with nothing in the background yet, took 297 s; the gap to 568 s is m
 
    Open risk: RIFE was trained on 8-bit SDR images; HDR in PQ encoding has a different brightness distribution, so the quality has to be measured (VMAF, visual check) before it is used.
 
+**Early ToDo list** (moved from the header of `interpolation_nncn`; new ideas start as drafts in `questions.txt`):
+
+- Open:
+  - more `-v` (verbose) diagnostics where needed;
+  - least priority: let every `ffmpeg` call use `FFMPEG_GLOBAL_OPTIONS`.
+- Done:
+  - the `in`/`out` directories carry `CURRENT_TIMESTAMP`;
+  - `-o`/`-O` (var, var_out) are picked up correctly;
+  - help and documentation moved into the script, later into this README;
+  - quality analysis (VMAF, `-Q`);
+  - failed interpolation moments shown after a run, also after Ctrl+C;
+  - HDR converted to SDR (tone mapping), unless `-T`;
+  - a video up to `NO_SPLIT_MAX_SEC` is processed without splitting;
+  - silent version (`-S`, now a systemd service);
+  - the parts are joined only when all of them exist (`-E`).
+
 Dropped after measuring: **frames on tmpfs.** An 83 s 1080p clip (one chunk, `x264_crf10`), run twice with `-o`/`-O` on NVMe and twice on `/dev/shm`, took 115.6–115.7 s in every run (stages: extraction 21.1 s, NCNN 85.7–87.7 s, frame merge 17.7–18.2 s). PNG writing and reading are CPU work and NVMe keeps up, so RAM adds nothing; a 4K chunk (30–37 GB) would not fit anyway.
 
 ### How to measure
@@ -678,6 +703,8 @@ Process the same chunk before and after a change (for example `-F -s 029` on `vi
 - `-O DIR` sets `VAR_OUT`, a separate data/output root. It defaults to the same path as `VAR`.
 - `TMP` and `LOG` are always created as `tmp-<script>_<timestamp>` and `log-<script>_<timestamp>` beneath `VAR`; values inherited from the environment (for example `TMP=/tmp`) are ignored, so every run gets fresh, private directories.
 - Unless already set in the environment, `TMP_OUT` and `LOG_OUT` are created with the same naming pattern beneath `VAR_OUT`.
+
+Logs of `interpolation_nncn` are compressed with gzip (`name.log.gz`) when nothing writes to them anymore; read them with `zless`, `zgrep` or `zcat`. The silent log (`-S`) stays plain.
 
 For `interpolation_nncn`, `-O` is where the large extracted and processed frame files are stored, so a fast volume with ample free space is useful. `-o` holds the script's workspace and logs. With the default settings, both roots point to `$HOME/var`. The script reports the resolved paths and available space in verbose mode. The scripts may also create chunk and merged video files in the current working directory; the `-O` option does not relocate all video outputs. Choose both the current directory and configured roots with enough free space. The helper checks that requested roots can be created, but the scripts' use of `df --block-size G` is GNU/Linux-oriented.
 

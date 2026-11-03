@@ -1,20 +1,6 @@
 #!/usr/bin/env bash
 
-# ToDo:
-#   - DONE: in/out MUST be with CURRENT_TIMESTAMP
-#   - DONE: correct var and var_out - not picked up at all (silly issues in arg definitions)
-#   - DONE: move all comments/help and documentation here
-#   - DONE (but a bit of ugly): add and check quality analysis: encoding_quality_metric
-#   - DONE (for control+C now): show failed interpolation moments after each run/all together - only amount (check it out if possible even if process is interfeared
-#   - DONE: makes HDR conversion to SDR (if needed, to manage colors properly)
-#   - add VERBOSE whenever needed
-#   - DONE: when video file is equal or shorter then ${NO_SPLIT_MAX_SEC} - just run, without splitting
-#   - NICE_BUT_LEAST_PRIORITY: update ffmpeg to use FFMPEG_GLOBAL_OPTIONS
-#   - DONE: make silent version (all in the background without any notifications whatsovever
-#   - LEAST_PRIORITY now: run concatenation WHEN ONLY ALL parts existed
-#   - PROBABLY impossible to be done, as start of a range of N+1 fragment_id is based on previous one - but it would definately save both space, and a little time (maybe fake/dry run in mkvmerge, or send output of all but one/two now for processing, to /dev/null ?)
-#   - performance optimizations/details and some ideas are now in questions.txt
-#
+# ToDo and history: README.md, "Planned (in agreed order)" and "Early ToDo list"
 # Documentation and helpers (links, GPU tuning, HDR/SDR, tone mapping, VMAF): see README.md, "Interpolation reference notes"
 
 if [[ "${OSTYPE}" =~ "linux" ]]
@@ -459,11 +445,12 @@ TERMINAL_HEIGHT=$(tput lines)
 exit_function()
 {
   trap SIGINT
-  for NCNN_LOG in "${LOG}/"*_ncnn_${NCNN_METHOD}.log
+  # logs of finished chunks are already compressed (.log.gz), zgrep reads both
+  for NCNN_LOG in "${LOG}/"*_ncnn_${NCNN_METHOD}.log "${LOG}/"*_ncnn_${NCNN_METHOD}.log.gz
   do
     if [ -s "${NCNN_LOG}" ]
     then
-      warn "  log: ${BLUE}${NCNN_LOG}${WINE}, errors=$(grep fail "${NCNN_LOG}" | wc -l)"
+      warn "  log: ${BLUE}${NCNN_LOG}${WINE}, errors=$(zgrep fail "${NCNN_LOG}" | wc -l)"
     fi
   done
   tput cnorm 
@@ -528,12 +515,6 @@ cleaning_after_interrupt()
       then
         safe_remove_dir "${WORK_ITEM}"
         REMOVED_COUNT=$((REMOVED_COUNT + 1))
-  # sampled frames of the chunk's preparation (removed at its end, so left only by an interrupt)
-  if [ -n "${TMP}" ] && [ -d "${TMP}/frame_analysis" ]
-  then
-    safe_remove_dir "${TMP}/frame_analysis"
-    REMOVED_COUNT=$((REMOVED_COUNT + 1))
-  fi
       fi
     done
     # frames-only videos (TMP_OUT) and audio/subtitle extracts (TMP); both directories belong to
@@ -547,6 +528,12 @@ cleaning_after_interrupt()
       fi
     done
   done
+  # sampled frames of the chunk's preparation (removed at its end, so left only by an interrupt)
+  if [ -n "${TMP}" ] && [ -d "${TMP}/frame_analysis" ]
+  then
+    safe_remove_dir "${TMP}/frame_analysis"
+    REMOVED_COUNT=$((REMOVED_COUNT + 1))
+  fi
   # the current directory: source chunks, and parts which were not finished (no .done marker);
   # a movie too short to be split is processed under its own name
   for WORK_ITEM in video_part_minute_[0-9][0-9][0-9]*.mkv "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_"*.mkv
@@ -592,6 +579,8 @@ finishing_previous_chunk()
     echo "${PENDING_STATISTICS_BEFORE_VMAF}~${ENCODING_RUNTIME}~${QUALITY_METRIC_RUNTIME}~${PENDING_STATISTICS_SPACE}~${VMAF_MEAN}~${PENDING_PART_RUNTIME}" >> "${TMP}/statistics.txt"
   fi
   rm -f -- "video_part_minute_${PENDING_CHUNK_ID}.mkv"
+  # all steps of this chunk (also its encode and VMAF) are done, so nothing writes its logs anymore
+  compressing_logs "${LOG}/video_part_minute_${PENDING_CHUNK_ID}_"*
   PENDING_CHUNK_ID=""
   }
 
@@ -1096,6 +1085,15 @@ timeline_entry whole_run all
 timeline_percentages
 inf "    video mngt took : ${DARKCYAN}${RUNTIME}"
 inf "    timeline of all steps: ${YELLOW}${TMP}/timeline.csv"
+# the rest of the logs (the movie's, the last chunk's); the silent log is still being written
+for LOG_FILE in "${LOG}"/*
+do
+  if [[ ${LOG_FILE} != "${SILENT_LOG}" ]]
+  then
+    compressing_logs "${LOG_FILE}"
+  fi
+done
+inf "    logs are compressed (gzip), read them with zless or zgrep: ${YELLOW}${LOG}"
 
 printf "\033[%d;0H\033[2K %s\n" "${TERMINAL_HEIGHT}" "${TEAL}DONE"
 trap SIGINT
