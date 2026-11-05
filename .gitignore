@@ -24,3 +24,4 @@ var/
 # local symlinks to work and download volumes
 /var
 /download
+.venv/

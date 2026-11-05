@@ -149,7 +149,7 @@ bash tests/run_tests.sh    # behavior tests; no extra test framework needed
 
 ## Requirements and configuration
 
-These are Linux-oriented Bash scripts and rely on external command-line tools. The movie script checks for `curl`, `mkvmerge`, `ffprobe`, `jq`, ImageMagick's `convert`, and `wget`. The workflows also use tools including `ffmpeg`, `mediainfo`, `HandBrakeCLI`, `mkvpropedit`, `bc`, `tput`, and `sudo`; the interpolation workflow additionally needs the matching `*-ncnn-vulkan` executable and Vulkan-capable hardware/drivers. `interpolation_nncn` no longer runs `amdmemtweak` (changing the memory refresh made no measurable difference). Install the tools needed for the workflow and selected interpolation method; this repository does not install dependencies.
+These are Linux-oriented Bash scripts and rely on external command-line tools. The movie script checks for `curl`, `mkvmerge`, `ffprobe`, `jq`, ImageMagick's `convert`, and `wget`. The workflows also use tools including `ffmpeg`, `mediainfo`, `HandBrakeCLI`, `mkvpropedit`, `bc`, `tput`, and `sudo`; the interpolation workflow additionally needs the matching `*-ncnn-vulkan` executable and Vulkan-capable hardware/drivers. `interpolation_nncn` no longer runs `amdmemtweak` (changing the memory refresh made no measurable difference). Install the tools needed for the workflow and selected interpolation method; this repository does not install dependencies. The one exception is the Excel run report of `interpolation_nncn`: on first use it creates a Python virtual environment `.venv` in the scripts' directory (gitignored) and installs `xlsxwriter` into it, which needs `python3` with the `venv` module and network access once.
 
 On macOS the scripts look for GNU `greadlink`, but other commands and options are Linux/GNU-specific. A compatible GNU toolchain may be needed, and macOS execution is not guaranteed.
 
@@ -605,6 +605,11 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - The Ctrl+C cleanup also removes `frame_analysis` (~300 MB at 4K), the only leftover in the user's test.
     - Logs are compressed with gzip, about 10 times smaller (one run: 9.5 MB → 0.9 MB): a chunk's logs when the chunk is done (also its encode and VMAF), the rest at the end of the run or after Ctrl+C / `systemctl stop` (the latter added after the user's test: I had missed that path). The silent log stays plain, as it is still being written. Read them with `zless`, `zgrep` or `vim`. Generic helper `compressing_logs` in `.config`.
     - The ToDo list from the script header moved to [Planned](#planned-in-agreed-order).
+21. **Metrics, memory warning and Excel report** (first part of Planned item 1).
+    - `metrics_sampling` (generic, in `.config`) writes one row every `METRICS_INTERVAL_SEC` (default 5) to `TMP/metrics.csv`, `~`-separated: CPU busy and iowait, memory used/available, swap, the run's cgroup memory (with page cache), disk read/write, per AMD GPU busy and VRAM, and the memory (RSS) of NCNN, `ffmpeg`, HandBrake and `mkvmerge`, plus their sum `tools_rss`. One `awk` per sample reads `/proc`, so the sampler costs almost nothing.
+    - Before each background encode (`-E`), `checking_memory_headroom` compares the run's peak `tools_rss` with `MemAvailable` plus what the run holds now, with a 10 % margin. If it may not fit, it only warns (the OOM killer stopped HandBrake on Smokin' Aces twice: Done item 16, and 3 Nov). Before anything is measured the peak is `RUN_MEMORY_PEAK_DEFAULT_GB` (default 16 GB, a guess to tune after measured runs).
+    - At the end of the run (and after a stop, if `.venv` already exists) `metrics_to_excel.py` writes `TMP/report.xlsx`: sheets with the metrics, timeline, steps per chunk and statistics, and charts (CPU, memory, memory per tool, GPU busy, VRAM, disks, chunk steps, background encode and VMAF). A failed report only warns. It follows the style of the user's `report_conversion.py` (xlsxwriter, `~`-separated input), which is Azure-specific and so was not reused directly.
+    - The logs are now also compressed after Ctrl+C or `systemctl stop` (see item 20).
 
 ### Codec benchmark
 
@@ -664,10 +669,9 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 - 3–5 Nov: NCNN is ~75 s slower than before, probably because the slower `-g` encode now overlaps it; the metrics (item 1) should show it.
 - Carnival Row (4K HDR, same options) still spends ~135 s per chunk in preparation, against ~59 s for Smokin' Aces, which the frame sampling (Done item 20) did not change; the separate frame count, a full decode, is the main suspect.
 
-1. **Metrics, before further optimization.** Sample every 5 s into `metrics.csv` (next to `timeline.csv`): CPU, memory (also per tool: NCNN, ffmpeg, HandBrake, VMAF), GPU busy and VRAM (`/sys/class/drm/card*/device/`), disk I/O. Then:
+1. **Metrics, before further optimization.** The sampling, the memory warning and the Excel report are done (Done item 21). Still open, once a real run has collected metrics:
    - explain where the time goes (Carnival Row's preparation, the slower NCNN);
-   - warn before a background encode when the measured peak of the tools may not fit into `MemAvailable` (the OOM killer stopped HandBrake on Smokin' Aces twice: Done item 16, and 3 Nov), only a warning;
-   - an Excel export with charts, through the user's existing `report_conversion.py`.
+   - tune `RUN_MEMORY_PEAK_DEFAULT_GB` from the measured peaks.
 2. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It could also let NCNN run without `-v`, if the NCNN pause (`throttling_ncnn`, which reads the last `done` line) also used the output frames instead of the log. The result is lower peak space use, which makes the next items possible.
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**
@@ -705,7 +709,7 @@ Dropped after measuring: **frames on tmpfs.** An 83 s 1080p clip (one chunk, `x2
 
 ### How to measure
 
-Process the same chunk before and after a change (for example `-F -s 029` on `video_part_minute_029.mkv`; without `-F` a finished chunk is skipped) and compare the stage runtimes in `TMP/statistics.txt`. Use the same machine and settings for both runs.
+Process the same chunk before and after a change (for example `-F -s 029` on `video_part_minute_029.mkv`; without `-F` a finished chunk is skipped) and compare the stage runtimes in `TMP/statistics.txt`. Use the same machine and settings for both runs. `TMP/metrics.csv` and `TMP/report.xlsx` (Done item 21) show what the machine was doing meanwhile.
 
 ## Runtime directories and logs
 
@@ -717,6 +721,8 @@ Process the same chunk before and after a change (for example `-F -s 029` on `vi
 - Unless already set in the environment, `TMP_OUT` and `LOG_OUT` are created with the same naming pattern beneath `VAR_OUT`.
 
 Logs of `interpolation_nncn` are compressed with gzip (`name.log.gz`) when nothing writes to them anymore: a chunk's logs when the chunk is done, the rest at the end of the run or after Ctrl+C / `systemctl stop`. Read them with `zless`, `zgrep` or `zcat`. The silent log (`-S`) stays plain; after an error exit, the logs of the last chunk stay plain too (its processes may still be ending).
+
+Next to `timeline.csv`, `TMP` of `interpolation_nncn` holds `metrics.csv` (machine and tool metrics every 5 s) and, at the end of the run, `report.xlsx` with charts; see Done item 21.
 
 For `interpolation_nncn`, `-O` is where the large extracted and processed frame files are stored, so a fast volume with ample free space is useful. `-o` holds the script's workspace and logs. With the default settings, both roots point to `$HOME/var`. The script reports the resolved paths and available space in verbose mode. The scripts may also create chunk and merged video files in the current working directory; the `-O` option does not relocate all video outputs. Choose both the current directory and configured roots with enough free space. The helper checks that requested roots can be created, but the scripts' use of `df --block-size G` is GNU/Linux-oriented.
 

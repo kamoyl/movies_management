@@ -352,6 +352,35 @@ assert_contains "compressing_logs compresses files, skips .gz, symlinks, directo
 assert_contains "compressing_logs keeps the content" "${OUTPUT}" "READ: log"
 assert_contains "compressing_logs returns 0" "${OUTPUT}" "STATUS=0"
 
+echo "metrics (metrics_sampling, waiting_for_chunk_steps, checking_memory_headroom, metrics_to_excel.py)"
+OUTPUT="$(run_with_helpers 'eval "$(sed -n "/^metrics_sampling()/,/^  }/p" "'"${REPO_ROOT}"'/.config")"; rm -rf met; mkdir met; cd met || exit 99; METRICS_INTERVAL_SEC=1; metrics_sampling m.csv sleep bash & P=$!; sleep 2.6; kill $P; echo "ROWS=$(($(wc -l < m.csv) - 1))"; echo "COLUMNS=$(awk -F"~" "{print NF}" m.csv | sort -u | tr "\n" " ")"; head -1 m.csv' 2>&1)"
+assert_contains "metrics_sampling writes a row per interval after the first sample" "${OUTPUT}" "ROWS=2"
+assert_contains "metrics_sampling rows have as many columns as the header" "${OUTPUT}" "COLUMNS=$(awk -F'~' '{print NF}' <<< "$(grep '^time~' <<< "${OUTPUT}")") "
+assert_contains "metrics_sampling has system and per-tool columns" "${OUTPUT}" "time~epoch~cpu_busy [%]~cpu_iowait [%]~mem_used [GB]"
+assert_contains "metrics_sampling ends with the tools and their sum" "${OUTPUT}" "~sleep_rss [GB]~bash_rss [GB]~tools_rss [GB]"
+OUTPUT="$(run_with_helpers 'sleep 30 & METRICS_SAMPLING_PID=$!; sleep 0.2 & START=$SECONDS; waiting_for_chunk_steps; if [ $((SECONDS - START)) -lt 5 ]; then echo "NOT WAITED"; fi; kill $METRICS_SAMPLING_PID' 2>&1)"
+assert_contains "waiting_for_chunk_steps does not wait for the metrics sampling (30 s)" "${OUTPUT}" "NOT WAITED"
+MEMORY_SETUP='rm -rf mem; mkdir mem; cd mem || exit 99; TMP=$PWD; MEMINFO_FILE=$PWD/meminfo; printf "time~epoch~tools_rss [GB]\na~1~9.00\nb~2~20.00\nc~3~6.00\n" > metrics.csv'
+OUTPUT="$(run_with_helpers "${MEMORY_SETUP}"'; printf "MemTotal: 65000000 kB\nMemAvailable: 12582912 kB\n" > meminfo; checking_memory_headroom' 2>&1)"
+assert_contains "memory check warns when available + held is below the run's peak + 10 %" "${OUTPUT}" "12.0 GB available + 6.0 GB held by the run, its peak is 20.0 GB (measured) + 10 %"
+OUTPUT="$(run_with_helpers "${MEMORY_SETUP}"'; printf "MemAvailable: 20971520 kB\n" > meminfo; checking_memory_headroom; echo END' 2>&1)"
+if [[ ${OUTPUT} == *"may run short"* ]]; then fail "memory check is silent when the peak fits"; else pass "memory check is silent when the peak fits"; fi
+OUTPUT="$(run_with_helpers "${MEMORY_SETUP}"'; printf "time~epoch~tools_rss [GB]\n" > metrics.csv; printf "MemAvailable: 10485760 kB\n" > meminfo; checking_memory_headroom' 2>&1)"
+assert_contains "memory check uses the default peak before anything was measured" "${OUTPUT}" "its peak is 16.0 GB (assumed, RUN_MEMORY_PEAK_DEFAULT_GB)"
+if [ -x "${REPO_ROOT}/.venv/bin/python3" ] && "${REPO_ROOT}/.venv/bin/python3" -c "import xlsxwriter" 2>/dev/null
+then
+  mkdir -p "${WORK_DIR}/report"
+  printf 'time~epoch~cpu_busy [%%]~mem_used [GB]~card0_busy [%%]~ffmpeg_rss [GB]~tools_rss [GB]\n2026-11-05 10:00:00~1.0~50.0~10.00~~1.00~1.00\n2026-11-05 10:00:05~6.0~60.0~11.00~90~2.00~2.00\n' > "${WORK_DIR}/report/metrics.csv"
+  printf 'video_id~step~start~end~start_epoch~end_epoch~duration [s]~chunk [%%]\n021~interpolating~a~b~1~2~300.0~60\n021~encoding~a~b~1~2~290.0~\nall~whole_run~a~b~1~2~900.0~\n' > "${WORK_DIR}/report/timeline.csv"
+  printf 'video_id~runtime\n021~500.1[s]\n' > "${WORK_DIR}/report/statistics.txt"
+  OUTPUT="$("${REPO_ROOT}/.venv/bin/python3" "${REPO_ROOT}/metrics_to_excel.py" "${WORK_DIR}/report" "${WORK_DIR}/report/r.xlsx" 2>&1; echo "STATUS=$?"; "${REPO_ROOT}/.venv/bin/python3" -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); n=z.namelist(); print('SHEETS=%d CHARTS=%d' % (sum(x.startswith('xl/worksheets/sheet') for x in n), sum(x.startswith('xl/charts/chart') for x in n))); print('CHUNK=' + str('<t>021</t>' in z.read('xl/sharedStrings.xml').decode()))" "${WORK_DIR}/report/r.xlsx")"
+  assert_contains "metrics_to_excel.py writes the workbook" "${OUTPUT}" "STATUS=0"
+  assert_contains "metrics_to_excel.py: charts, metrics, timeline, steps per chunk, statistics; 6 charts" "${OUTPUT}" "SHEETS=5 CHARTS=6"
+  assert_contains "metrics_to_excel.py keeps chunk numbers as text" "${OUTPUT}" "CHUNK=True"
+else
+  echo "  skipped: metrics_to_excel.py (no .venv with xlsxwriter; a run prepares it)"
+fi
+
 echo "Ctrl+C cleanup (exit_function, cleaning_after_interrupt)"
 INTERRUPT_SETUP='for FUNC in exit_function stop_background_jobs cleaning_after_interrupt compressing_run_logs; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; eval "$(sed -n "/^compressing_logs()/,/^  }/p" "'"${REPO_ROOT}"'/.config")"; tput() { :; }; NCNN_METHOD=rife; KEEP_INTERMEDIATES=no; MOVIE_NAME_ARRAY=(video_part_minute_003); rm -rf intr; mkdir intr; cd intr || exit 99; LOG="$PWD/log"; TMP="$PWD/tmp"; TMP_OUT="$PWD/tmp_out"; mkdir -p "$LOG" "$TMP/frame_analysis" "$TMP/in_003/f" "$TMP/out_003" "$TMP_OUT/in_003" "$TMP_OUT/out_003"; echo s > "$TMP/statistics.txt"; echo t > "$TMP/timeline.csv"; echo a > "$TMP/video_part_minute_003.mka"; echo s > "$TMP/video_part_minute_003_subtitles.mkv"; echo v > "$TMP_OUT/video_part_minute_003_rife_48.mkv"; for N in 001 002 003 004; do echo src > video_part_minute_${N}.mkv; done; echo p > video_part_minute_001_rife_48_merged.mkv; echo F > video_part_minute_001_rife_48_merged.mkv.done; echo p > video_part_minute_001_rife_48_encoded.mkv; echo F > video_part_minute_001_rife_48_encoded.mkv.done; echo p > video_part_minute_002_rife_48_merged.mkv; echo F > video_part_minute_002_rife_48_merged.mkv.done; echo p > video_part_minute_002_rife_48_encoded.mkv; echo p > video_part_minute_002_rife_48_encoded_video_only.mkv; echo p > video_part_minute_003_rife_48_merged.mkv; echo src > Film.mkv; sleep 30 > /dev/null 2>&1 & SLEEP_PID=$!'
 # exit_function exits, so the results are printed by an EXIT trap (in a subshell, $$ is not its PID)

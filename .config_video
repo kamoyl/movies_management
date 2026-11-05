@@ -987,13 +987,14 @@ merging_streams_mkv()
   }
 
 # waits for this chunk's background steps; a bare "wait" would also wait for the previous chunk's
-# final encode (-E) and VMAF (-Q), which are meant to run alongside this chunk
+# final encode (-E) and VMAF (-Q), which are meant to run alongside this chunk, and for the
+# metrics sampling, which never ends by itself
 waiting_for_chunk_steps()
 {
   local JOB_PID
   for JOB_PID in $(jobs -p)
   do
-    if [[ ${JOB_PID} != "${PART_ENCODING_PID}" ]] && [[ ${JOB_PID} != "${QUALITY_METRIC_CHECK_PID}" ]]
+    if [[ ${JOB_PID} != "${PART_ENCODING_PID}" ]] && [[ ${JOB_PID} != "${QUALITY_METRIC_CHECK_PID}" ]] && [[ ${JOB_PID} != "${METRICS_SAMPLING_PID}" ]]
     then
       wait "${JOB_PID}"
     fi
@@ -2040,6 +2041,31 @@ checking_split_points_file()
   echo "${NEW_SPLIT_POINTS}" > "${SPLIT_POINTS_FILE}"
   }
 
+# Warns (only) when memory may run short for a final encode alongside the next chunk, as when the
+# OOM killer stopped HandBrake (Smokin' Aces, 3 Nov). The run's peak of all its tools together
+# (tools_rss in metrics.csv, at least RUN_MEMORY_PEAK_DEFAULT_GB, a guess until measured) is
+# compared with what the run can get: what its tools hold now plus MemAvailable.
+RUN_MEMORY_PEAK_DEFAULT_GB="${RUN_MEMORY_PEAK_DEFAULT_GB:-16}"
+MEMINFO_FILE="${MEMINFO_FILE:-/proc/meminfo}"
+checking_memory_headroom()
+{
+  local MEMORY_CHECK
+  MEMORY_CHECK="$(awk -F'~' -v DEFAULT="${RUN_MEMORY_PEAK_DEFAULT_GB}" '
+    FILENAME == MEMINFO && $0 ~ /^MemAvailable:/ { split($0, F, " "); AVAILABLE = F[2] / 1048576; next }
+    FILENAME != MEMINFO && FNR > 1 && $NF != "" { if ($NF + 0 > PEAK) PEAK = $NF + 0; NOW = $NF + 0 }
+    END {
+      SOURCE = "measured"
+      if (PEAK < DEFAULT) { PEAK = DEFAULT; SOURCE = "assumed, RUN_MEMORY_PEAK_DEFAULT_GB" }
+      printf "%s~%.1f~%.1f~%.1f~%s\n", (AVAILABLE + NOW < PEAK * 1.1 ? "short" : "ok"), AVAILABLE, NOW, PEAK, SOURCE
+    }' MEMINFO="${MEMINFO_FILE}" "${TMP}/metrics.csv" "${MEMINFO_FILE}" 2>/dev/null)"
+  if [[ ${MEMORY_CHECK} == short~* ]]
+  then
+    IFS='~' read -r _ MEMORY_AVAILABLE_GB MEMORY_HELD_GB MEMORY_PEAK_GB MEMORY_PEAK_SOURCE <<< "${MEMORY_CHECK}"
+    warn "    memory may run short for the encode alongside the next chunk: ${MEMORY_AVAILABLE_GB} GB available + ${MEMORY_HELD_GB} GB held by the run, its peak is ${MEMORY_PEAK_GB} GB (${MEMORY_PEAK_SOURCE}) + 10 %"
+    warn "    the OOM killer may stop HandBrake (the run then stops, finished chunks are kept); free some memory, e.g. stop a VM"
+  fi
+  }
+
 # Final encode of a processed part (interpolation_nncn -E) runs in two steps, like VMAF, so it
 # can run alongside the next chunk:
 #   starting_part_encoding MERGED ENCODED REFERENCE - starts HandBrake in the background and returns
@@ -2062,6 +2088,7 @@ starting_part_encoding()
   PART_ENCODED_FILE="${2}"
   PART_REFERENCE_FILE="${3}"
   PART_ENCODING_LOG="${LOG}/${PART_ENCODED_FILE}_handbrake.log"
+  checking_memory_headroom
   local FFPROBE_JSON="${TMP}/${PART_MERGED_FILE%.mkv}_ffprobe.json"
   ffprobe -v quiet -print_format json -show_streams "${PART_MERGED_FILE}" > "${FFPROBE_JSON}"
   handbrake_streams_options "${FFPROBE_JSON}"
