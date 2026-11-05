@@ -455,9 +455,26 @@ exit_function()
   done
   tput cnorm 
   cleaning_after_interrupt
+  compressing_run_logs
   error "  interrupted (Ctrl+C)"
   # 130 = 128 + SIGINT(2), the conventional exit code of an interrupted program
   exit 130
+  }
+
+# Compresses the logs not compressed yet when their chunk finished: the movie's and those of the
+# last or interrupted chunk. At the end of a run, or after Ctrl+C / systemctl stop once the
+# cleanup has waited for the processes. The silent log (-S) is still being written, so it stays.
+compressing_run_logs()
+{
+  local LOG_FILE
+  for LOG_FILE in "${LOG}"/*
+  do
+    if [[ ${LOG_FILE} != "${SILENT_LOG}" ]]
+    then
+      compressing_logs "${LOG_FILE}"
+    fi
+  done
+  inf "    logs are compressed (gzip), read them with zless or zgrep: ${YELLOW}${LOG}"
   }
 
 # Stops every process still started directly by this script (NCNN, ffmpeg, progress monitors),
@@ -1085,15 +1102,7 @@ timeline_entry whole_run all
 timeline_percentages
 inf "    video mngt took : ${DARKCYAN}${RUNTIME}"
 inf "    timeline of all steps: ${YELLOW}${TMP}/timeline.csv"
-# the rest of the logs (the movie's, the last chunk's); the silent log is still being written
-for LOG_FILE in "${LOG}"/*
-do
-  if [[ ${LOG_FILE} != "${SILENT_LOG}" ]]
-  then
-    compressing_logs "${LOG_FILE}"
-  fi
-done
-inf "    logs are compressed (gzip), read them with zless or zgrep: ${YELLOW}${LOG}"
+compressing_run_logs
 
 printf "\033[%d;0H\033[2K %s\n" "${TERMINAL_HEIGHT}" "${TEAL}DONE"
 trap SIGINT
