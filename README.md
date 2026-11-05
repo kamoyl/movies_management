@@ -67,7 +67,7 @@ below cost a failed or out-of-sync run; the details are in
 
 - *NCNN works on 8-bit images.* rife-ncnn-vulkan reads and writes
   8-bit images only, so HDR is tone mapped to SDR before
-  interpolation (Planned item 4 is the research on more than
+  interpolation (Planned item 5 is the research on more than
   8 bits).
 - *NCNN racing the extraction.* NCNN could read frames not yet
   written, and a monitor could delete them; NCNN keeps a margin
@@ -642,27 +642,39 @@ Decision: lossless x264 `ultrafast` is the default because it is the fastest and
 
 ### Planned (in agreed order)
 
-Current state, for comparison with the [Baseline](#baseline-before-optimization): averages of the `statistics.txt` rows of Smokin' Aces chunks 002–041 (4K HDR, 23.976 → 47.952 fps, `-Q -E`, before Done item 11):
+State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average per chunk without chunk 001:
 
-| Step | Time per chunk | Baseline |
-|---|---|---|
-| Extracting frames (including tone mapping) | ~101 s | ~350 s (tone mapping 250 + extraction 100) |
-| NCNN interpolation | ~304 s | ~290 s |
-| Merging frames | ~35 s | ~117 s |
-| Merging streams | ~29 s | — |
-| Final encode (`-E`, background) | ~145 s | — |
-| VMAF (background) | ~62 s | ~700 s |
-| **Chunk total** | **~568 s** | **~1400 s** |
+- **Baseline:** see [Baseline](#baseline-before-optimization).
+- **≤ 29 Oct:** `statistics.txt` rows of chunks 002–041, before Done item 11. The encode was probably without `-g` (the profile was not recorded yet), which explains the faster encode.
+- **3–5 Nov:** `timeline.csv` of the runs of 3 and 5 Nov (34–36 chunks), after Done item 20, with `-g`.
 
-Chunk 001, with nothing in the background yet, took 297 s; the gap to 568 s is mostly the serialized encode and VMAF (Done item 11).
+| Step | Baseline | ≤ 29 Oct | 3–5 Nov |
+|---|---|---|---|
+| Preparation (probes, frame analysis, frame count, recovery) | — | — | ~59 s |
+| Extracting frames (including tone mapping) | ~350 s (tone mapping 250 + extraction 100) | ~101 s | ~114 s |
+| NCNN interpolation | ~290 s | ~304 s | ~379 s |
+| Merging frames | ~117 s | ~35 s | ~35 s |
+| Merging streams | — | ~29 s | ~35 s |
+| Final encode (`-E`, background) | — | ~145 s | ~293 s (`-g`) |
+| VMAF (background) | ~700 s | ~62 s | ~96 s |
+| **Chunk total** | **~1400 s** | **~568 s** | **~515 s** |
 
-1. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It could also let NCNN run without `-v`, if the NCNN pause (`throttling_ncnn`, which reads the last `done` line) also used the output frames instead of the log. The result is lower peak space use, which makes the next items possible.
-2. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
-3. **Smaller items:**
+- In the ≤ 29 Oct runs, chunk 001, with nothing in the background yet, took 297 s; the gap to 568 s was mostly the serialized encode and VMAF (Done item 11).
+- Between them, the runs of 1–2 Nov averaged ~851 s per chunk: frame recovery at open-GOP splits stalled (preparation ~441 s, up to 700 s), fixed in Done item 20.
+- 3–5 Nov: NCNN is ~75 s slower than before, probably because the slower `-g` encode now overlaps it; the metrics (item 1) should show it.
+- Carnival Row (4K HDR, same options) still spends ~135 s per chunk in preparation, against ~59 s for Smokin' Aces, which the frame sampling (Done item 20) did not change; the separate frame count, a full decode, is the main suspect.
+
+1. **Metrics, before further optimization.** Sample every 5 s into `metrics.csv` (next to `timeline.csv`): CPU, memory (also per tool: NCNN, ffmpeg, HandBrake, VMAF), GPU busy and VRAM (`/sys/class/drm/card*/device/`), disk I/O. Then:
+   - explain where the time goes (Carnival Row's preparation, the slower NCNN);
+   - warn before a background encode when the measured peak of the tools may not fit into `MemAvailable` (the OOM killer stopped HandBrake on Smokin' Aces twice: Done item 16, and 3 Nov), only a warning;
+   - an Excel export with charts, through the user's existing `report_conversion.py`.
+2. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It could also let NCNN run without `-v`, if the NCNN pause (`throttling_ncnn`, which reads the last `done` line) also used the output frames instead of the log. The result is lower peak space use, which makes the next items possible.
+3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
+4. **Smaller items:**
    - replace fixed sleeps (`sleep 5` in extraction, `sleep 10` in the chunk loop, other 1–3 s sleeps) with event-based waits;
    - lower the PNG `-compression_level` (faster writes, larger files);
    - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item).
-4. **Research: interpolation above 8 bits (keep HDR without tone mapping).** Today an HDR source must be tone mapped to 8-bit SDR before NCNN. The limit is in rife-ncnn-vulkan's input/output, not in the network:
+5. **Research: interpolation above 8 bits (keep HDR without tone mapping).** Today an HDR source must be tone mapped to 8-bit SDR before NCNN. The limit is in rife-ncnn-vulkan's input/output, not in the network:
    - `main.cpp` loads images with `stbi_load_from_memory(…, 3)` (8 bits per channel), so a 10/16-bit PNG is cut to 8 bits on load; `stbi_write_png` writes 8 bits;
    - the GPU shaders convert `uint8` ↔ float: `rife_preproc.comp` multiplies by `1/255`, `rife_postproc.comp` by `255` and clamps to `0..255`;
    - the network itself works on floats `0.0…1.0`, stored as fp16 on the GPU (~11 bits of precision, enough for 10-bit video).
