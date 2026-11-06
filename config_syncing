@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+
+# Keeps the shared configuration files identical in all repositories of the author:
+#   .config .config_colours .var_management config_syncing (this script syncs itself too)
+# Topic files (.config_az, .config_apps, .config_video, ...) stay with their topic and are not synced.
+#
+# There is no master copy: the newest copy (modification time) of a file wins - but only when the
+# other copies differ from it by ADDITIONS alone (lines it lacks would be lost). Otherwise nothing
+# is written and the difference is shown: merge by hand, or name the winner with -s.
+# Copies are replaced atomically (temporary file + mv), so a script running at that moment keeps
+# the file it opened and a new one never reads half a file.
+#
+# Deliberately standalone (does not source .config): it must still work when .config is broken.
+#
+# Repositories: the arguments, otherwise one directory per line in
+#   ${XDG_CONFIG_HOME:-${HOME}/.config}/config_syncing/repositories
+# Exit codes: 0 identical / synced, 1 copies differ (-c) or cannot be synced, 2 usage,
+# 127 missing tool.
+
+SHARED_FILES=(.config .config_colours .var_management config_syncing)
+REPOSITORIES_LIST="${XDG_CONFIG_HOME:-${HOME}/.config}/config_syncing/repositories"
+
+usage()
+{
+echo "
+Usage:
+$0 [ -c ] [ -n ] [ REPOSITORY ... ]
+$0 -s REPOSITORY/FILE [ REPOSITORY ... ]
+$0 -h
+
+    Description: makes ${SHARED_FILES[*]} identical in all REPOSITORIES
+                 (default: the directories listed in ${REPOSITORIES_LIST});
+                 the newest copy wins when the others only lack lines of it
+    -c  check only: exit 1 when a copy differs (the identity test)
+    -n  dry run: shows what would be copied, writes nothing
+    -s  this copy wins, also over lines the other copies have (e.g. a removed function);
+        only its file is synced
+    -h  usage/help" 1>&2
+  }
+
+# copies SOURCE over TARGET atomically, keeping TARGET's permissions (cp -p of the old target
+# first, then its content replaced: portable, unlike GNU chmod --reference)
+copying()
+{
+  local SOURCE="$1" TARGET="$2" TEMPORARY
+  TEMPORARY="$(dirname "${TARGET}")/.$(basename "${TARGET}").config_syncing.$$"
+  if [ -e "${TARGET}" ]
+  then
+    if ! cp -p "${TARGET}" "${TEMPORARY}"
+    then
+      rm -f "${TEMPORARY}"
+      return 1
+    fi
+  fi
+  if ! cat "${SOURCE}" > "${TEMPORARY}"
+  then
+    rm -f "${TEMPORARY}"
+    return 1
+  fi
+  if ! mv -f "${TEMPORARY}" "${TARGET}"
+  then
+    rm -f "${TEMPORARY}"
+    return 1
+  fi
+  }
+
+# modification time in seconds: GNU stat (Linux), otherwise BSD stat (macOS)
+modification_time()
+{
+  if stat -c %Y "$1" 2> /dev/null
+  then
+    return 0
+  fi
+  stat -f %m "$1"
+  }
+
+CHECK=no
+DRY_RUN=no
+WINNER=""
+while getopts ":cns:h" ARG
+do
+  case "${ARG}" in
+    c)
+      CHECK=yes
+      ;;
+    n)
+      DRY_RUN=yes
+      ;;
+    s)
+      WINNER="${OPTARG}"
+      ;;
+    h)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+done
+shift $((OPTIND-1))
+
+for TOOL in diff cmp stat
+do
+  if ! type "${TOOL}" > /dev/null 2>&1
+  then
+    echo "ERROR: ${TOOL} is missing" 1>&2
+    exit 127
+  fi
+done
+
+REPOSITORIES=("$@")
+if [ ${#REPOSITORIES[@]} -eq 0 ] && [ -s "${REPOSITORIES_LIST}" ]
+then
+  while read -r LINE
+  do
+    if [ -n "${LINE}" ] && [[ ${LINE} != \#* ]]
+    then
+      REPOSITORIES+=("${LINE}")
+    fi
+  done < "${REPOSITORIES_LIST}"
+fi
+if [ ${#REPOSITORIES[@]} -lt 2 ]
+then
+  echo "ERROR: at least two repositories are needed (arguments or ${REPOSITORIES_LIST})" 1>&2
+  exit 2
+fi
+for REPOSITORY in "${REPOSITORIES[@]}"
+do
+  if [ ! -d "${REPOSITORY}" ]
+  then
+    echo "ERROR: not a directory: ${REPOSITORY}" 1>&2
+    exit 2
+  fi
+done
+
+FILES=("${SHARED_FILES[@]}")
+if [ -n "${WINNER}" ]
+then
+  if [ ! -f "${WINNER}" ]
+  then
+    echo "ERROR: no such file: ${WINNER}" 1>&2
+    exit 2
+  fi
+  FILES=("$(basename "${WINNER}")")
+  if [[ " ${SHARED_FILES[*]} " != *" ${FILES[0]} "* ]]
+  then
+    echo "ERROR: ${FILES[0]} is not a shared file (${SHARED_FILES[*]})" 1>&2
+    exit 2
+  fi
+fi
+
+STATUS=0
+PENDING=no
+for FILE in "${FILES[@]}"
+do
+  # the source: the named winner, otherwise the newest existing copy
+  if [ -n "${WINNER}" ]
+  then
+    SOURCE="${WINNER}"
+  else
+    SOURCE=""
+    NEWEST=0
+    for REPOSITORY in "${REPOSITORIES[@]}"
+    do
+      if [ -f "${REPOSITORY}/${FILE}" ]
+      then
+        MTIME=$(modification_time "${REPOSITORY}/${FILE}")
+        if (( MTIME > NEWEST ))
+        then
+          NEWEST=${MTIME}
+          SOURCE="${REPOSITORY}/${FILE}"
+        fi
+      fi
+    done
+    if [ -z "${SOURCE}" ]
+    then
+      echo "WARN:  ${FILE}: in none of the repositories"
+      continue
+    fi
+  fi
+
+  for REPOSITORY in "${REPOSITORIES[@]}"
+  do
+    TARGET="${REPOSITORY}/${FILE}"
+    if [ "$(readlink -f "${TARGET}")" == "$(readlink -f "${SOURCE}")" ]
+    then
+      continue
+    fi
+    if [ -f "${TARGET}" ] && cmp -s "${SOURCE}" "${TARGET}"
+    then
+      continue
+    fi
+    if [[ ${CHECK} == yes ]]
+    then
+      echo "DIFF:  ${TARGET} differs from ${SOURCE}"
+      STATUS=1
+      continue
+    fi
+    # lines only the target has would be lost - unless the winner was named
+    if [ -z "${WINNER}" ] && [ -f "${TARGET}" ] && diff "${SOURCE}" "${TARGET}" | grep -q '^>'
+    then
+      echo "ERROR: ${TARGET} has lines the newest copy ${SOURCE} lacks - merge by hand or use -s:" 1>&2
+      diff -u "${SOURCE}" "${TARGET}" 1>&2
+      STATUS=1
+      continue
+    fi
+    if [[ ${DRY_RUN} == yes ]]
+    then
+      echo "COPY:  ${SOURCE} -> ${TARGET} (dry run)"
+      PENDING=yes
+      continue
+    fi
+    if copying "${SOURCE}" "${TARGET}"
+    then
+      echo "COPY:  ${SOURCE} -> ${TARGET}"
+    else
+      echo "ERROR: cannot write ${TARGET}" 1>&2
+      STATUS=1
+    fi
+  done
+done
+
+if (( STATUS == 0 )) && [[ ${PENDING} == no ]]
+then
+  echo "OK:    ${FILES[*]} identical in ${#REPOSITORIES[@]} repositories"
+fi
+exit "${STATUS}"
