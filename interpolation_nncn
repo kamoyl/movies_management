@@ -462,8 +462,36 @@ exit_function()
     exporting_run_report
   fi
   error "  interrupted (Ctrl+C)"
+  warning_leftover_processes
   # 130 = 128 + SIGINT(2), the conventional exit code of an interrupted program
   exit 130
+  }
+
+# After a stop: lists this user's video processes still running (e.g. a hung HandBrake that
+# ignored SIGTERM, or another run), so a new run is not started alongside them by mistake.
+warning_leftover_processes()
+{
+  local LEFTOVER_PID LEFTOVER_LINE
+  local LEFTOVER_FOUND="no"
+  for LEFTOVER_PID in $(pgrep -u "$(id -u)" -f 'HandBrakeCLI|-ncnn-vulkan|interpolation_nncn' 2>/dev/null)
+  do
+    # this script and its command substitutions (same command line) are not leftovers
+    if [ "${LEFTOVER_PID}" = "$$" ] || [ "$(ps -o ppid= -p "${LEFTOVER_PID}" 2>/dev/null | tr -d ' ')" = "$$" ]
+    then
+      continue
+    fi
+    LEFTOVER_LINE="$(ps -o pid=,etime=,args= -p "${LEFTOVER_PID}" 2>/dev/null | cut -c1-150)"
+    if [ -z "${LEFTOVER_LINE}" ]
+    then
+      continue
+    fi
+    if [[ ${LEFTOVER_FOUND} == no ]]
+    then
+      warn "  still running (PID, time, command) - do not start a new run before they end; stop them with kill PID (kill -9 PID if they stay):"
+      LEFTOVER_FOUND="yes"
+    fi
+    warn "    ${LEFTOVER_LINE}"
+  done
   }
 
 # Compresses the logs not compressed yet when their chunk finished: the movie's and those of the

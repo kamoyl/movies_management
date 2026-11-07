@@ -2133,10 +2133,48 @@ starting_part_encoding()
     trap 'kill "${PART_HANDBRAKE_PID}" "${QUALITY_METRIC_CHECK_PID}" 2>/dev/null; exit 143' TERM
     QUALITY_METRIC_CHECK_PID=""
     start_time_collecting
-    nice -n 10 HandBrakeCLI -i "${PART_MERGED_FILE}" -o "${PART_VIDEO_FILE}" --encoder "${VIDEO_ENCODER[@]}" --crop "${PART_CROP}" --no-markers -a none -s none > "${PART_ENCODING_LOG}" 2>&1 &
+    # appending (empty log first): the watchdog line must not be overwritten by a HandBrake
+    # that ignores SIGTERM and keeps writing at its own file offset
+    : > "${PART_ENCODING_LOG}"
+    nice -n 10 HandBrakeCLI -i "${PART_MERGED_FILE}" -o "${PART_VIDEO_FILE}" --encoder "${VIDEO_ENCODER[@]}" --crop "${PART_CROP}" --no-markers -a none -s none >> "${PART_ENCODING_LOG}" 2>&1 &
     PART_HANDBRAKE_PID=$!
+    # watchdog: a hung encoder may keep printing the same percentage for hours (chunk 097 of
+    # Smokin' Aces: 99.96 % from 10:58 on, 52395 progress lines), so progress means a changed
+    # percentage or output size, not a growing log; HANDBRAKE_STALL_SEC (600) without progress
+    # stops HandBrake (SIGTERM, SIGKILL after 10 s) and reports exit code 124, like timeout
+    PART_PROGRESS_LAST=""
+    PART_PROGRESS_SINCE="${SECONDS}"
+    PART_HANDBRAKE_STALLED="no"
+    while kill -0 "${PART_HANDBRAKE_PID}" 2>/dev/null
+    do
+      sleep "${HANDBRAKE_WATCH_INTERVAL_SEC:-5}"
+      PART_PROGRESS="$(tail -c 400 "${PART_ENCODING_LOG}" 2>/dev/null | tr '\r' '\n' | grep -a "Encoding:" | tail -n1 | sed -n 's/^.*, \([0-9.]*\) %.*$/\1/p')~$(wc -c < "${PART_VIDEO_FILE}" 2>/dev/null)"
+      if [[ ${PART_PROGRESS} != "${PART_PROGRESS_LAST}" ]]
+      then
+        PART_PROGRESS_LAST="${PART_PROGRESS}"
+        PART_PROGRESS_SINCE="${SECONDS}"
+      elif [ $((SECONDS - PART_PROGRESS_SINCE)) -ge "${HANDBRAKE_STALL_SEC:-600}" ]
+      then
+        # HandBrake ends progress lines with \r only, so the watchdog line starts on a new line
+        printf '\n%s\n' "watchdog: no progress for $((SECONDS - PART_PROGRESS_SINCE)) s (percent~bytes: ${PART_PROGRESS_LAST}), HandBrake is stopped" >> "${PART_ENCODING_LOG}"
+        PART_HANDBRAKE_STALLED="yes"
+        kill "${PART_HANDBRAKE_PID}" 2>/dev/null
+        PART_STOP_WAITED_SEC=0
+        while kill -0 "${PART_HANDBRAKE_PID}" 2>/dev/null && [ "${PART_STOP_WAITED_SEC}" -lt 10 ]
+        do
+          sleep 1
+          PART_STOP_WAITED_SEC=$((PART_STOP_WAITED_SEC + 1))
+        done
+        kill -KILL "${PART_HANDBRAKE_PID}" 2>/dev/null
+        break
+      fi
+    done
     wait "${PART_HANDBRAKE_PID}"
     PART_HANDBRAKE_STATUS=$?
+    if [[ ${PART_HANDBRAKE_STALLED} == yes ]]
+    then
+      PART_HANDBRAKE_STATUS="124"
+    fi
     if [ "${PART_HANDBRAKE_STATUS}" -eq 0 ]
     then
       # HandBrake's video starts at 0, the merged part's at its first frame (non-zero after
@@ -2229,6 +2267,9 @@ finishing_part_encoding()
     then
       # 128 + 9: SIGKILL, which nothing in these scripts sends
       error "  HandBrake was killed (SIGKILL), most likely by the out-of-memory killer; check: ${YELLOW}journalctl -k | grep -i oom"
+    elif [ "${PART_ENCODING_STATUS}" -eq 124 ]
+    then
+      error "  HandBrake made no progress for ${HANDBRAKE_STALL_SEC:-600} s and was stopped by the watchdog (hung encoder); the end of its log shows where it stopped"
     fi
     PART_ENCODING_FAILED="yes"
     rm -f -- "${PART_ENCODED_FILE}"

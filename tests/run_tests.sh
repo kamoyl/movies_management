@@ -479,6 +479,20 @@ then
 fi
 ps -o ni= -p $$ | tr -d ' ' > hb_nice.txt
 printf '%s\n' "$@" > hb_args.txt
+# "hang": the same percentage forever, like the hung encode of chunk 097 ("hang_noterm" also
+# ignores SIGTERM)
+if [[ $(cat fail_hb 2>/dev/null) == hang* ]]
+then
+  if [[ $(cat fail_hb) == hang_noterm ]]
+  then
+    trap '' TERM
+  fi
+  while true
+  do
+    printf 'Encoding: task 1 of 1, 99.96 %% (1.00 fps, avg 1.00 fps, ETA 00h00m01s)\r'
+    sleep 0.2
+  done
+fi
 sleep 2
 if [ -e fail_hb ]
 then
@@ -570,6 +584,25 @@ OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; ec
 assert_contains "an encode killed with SIGKILL is reported with 137" "${OUTPUT}" "failed with exit code 137"
 assert_contains "an encode killed with SIGKILL points at the out-of-memory killer" "${OUTPUT}" "most likely by the out-of-memory killer"
 assert_contains "a killed encode keeps its merged part" "${OUTPUT}" "MERGED_KEPT"
+for HANG_MODE in hang hang_noterm
+do
+  OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo '"${HANG_MODE}"' > fail_hb; HANDBRAKE_STALL_SEC=2; HANDBRAKE_WATCH_INTERVAL_SEC=1; S=$(date +%s); starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; echo "TOOK=$(( $(date +%s) - S )) FLAG=${PART_ENCODING_FAILED}"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if pgrep -f "'"${WORK_DIR}"'/[h]bbin/HandBrakeCLI" > /dev/null; then echo HB_LEFT; fi; grep -a "^watchdog:" log/p_encoded.mkv_handbrake.log' 2>&1)"
+  assert_contains "watchdog (${HANG_MODE}): a hung encode is reported with 124" "${OUTPUT}" "failed with exit code 124"
+  assert_contains "watchdog (${HANG_MODE}): the reason is shown" "${OUTPUT}" "stopped by the watchdog"
+  assert_contains "watchdog (${HANG_MODE}): the log tells why HandBrake was stopped" "${OUTPUT}" "watchdog: no progress for"
+  assert_contains "watchdog (${HANG_MODE}): the run is stopped, the merged part kept" "${OUTPUT}" "FLAG=yes"
+  if [[ ${OUTPUT} == *HB_LEFT* ]]; then fail "watchdog (${HANG_MODE}): HandBrake does not stay behind"; else pass "watchdog (${HANG_MODE}): HandBrake does not stay behind"; fi
+done
+mkdir -p "${WORK_DIR}/lobin"
+printf '#!/usr/bin/env bash\nsleep 30\n' > "${WORK_DIR}/lobin/HandBrakeCLI"
+chmod +x "${WORK_DIR}/lobin/HandBrakeCLI"
+"${WORK_DIR}/lobin/HandBrakeCLI" &
+LEFTOVER_TEST_PID=$!
+OUTPUT="$(run_with_helpers 'eval "$(sed -n "/^warning_leftover_processes()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; warning_leftover_processes' 2>&1)"
+kill "${LEFTOVER_TEST_PID}" 2>/dev/null
+assert_contains "after a stop, a still running HandBrake is listed" "${OUTPUT}" "still running (PID, time, command)"
+assert_contains "with its PID" "${OUTPUT}" "${LEFTOVER_TEST_PID}"
+if grep -B2 'exit 130' "${REPO_ROOT}/interpolation_nncn" | grep -q 'warning_leftover_processes'; then pass "Ctrl+C ends with the leftover check"; else fail "Ctrl+C ends with the leftover check"; fi
 STOP_SETUP='eval "$(sed -n "/^stopping_after_failed_encode()/,/^  }/p;/^encoded_part_profile()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"'
 run_with_helpers "${STOP_SETUP}"'; PART_ENCODING_FAILED=no; stopping_after_failed_encode' > /dev/null 2>&1
 assert_status   "the run goes on after a successful encode" 0 $?
