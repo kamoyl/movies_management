@@ -18,12 +18,16 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 - Fix serialized background jobs and TrueHD frame drop; add timeline.csv ([07e7946](https://github_kamoyl/kamoyl/movies_management/commit/07e79461d3ab978b3a02b4a894e750105b419a8e) by Kamoyl).
 
+### Changed
+
+
 ### Removed
 
 - Remove the tone_mapping_runtime statistics column ([fe3bc96](https://github_kamoyl/kamoyl/movies_management/commit/fe3bc96fc68ad85f91ab95cc6033d826fcb4338e) by Kamoyl).
 
 ### Misc
 
+- memory.csv: memory estimate vs reality per encode; report sheet ([41bd21b](https://github_kamoyl/kamoyl/movies_management/commit/41bd21b611e913dc2f9584672bd00d62571d0f64) by Kamoyl).
 - HandBrake watchdog; leftover processes listed after Ctrl+C ([4837cd5](https://github_kamoyl/kamoyl/movies_management/commit/4837cd5c2dfc895d7df2f7ce2b9e1c578ac4ddcd) by Kamoyl).
 - .config synced from get-auditing; config_syncing added ([3f44637](https://github_kamoyl/kamoyl/movies_management/commit/3f44637150cbfcf9bf64e7c5037d9b315fce2660) by Kamoyl).
 - Metrics sampling, memory warning before the encode, Excel report ([82894a0](https://github_kamoyl/kamoyl/movies_management/commit/82894a054ba50c06e24680bde10c87afea075e1b) by Kamoyl).
