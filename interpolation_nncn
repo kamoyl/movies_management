@@ -530,6 +530,25 @@ exporting_run_report()
 
 # Stops every process still started directly by this script (NCNN, ffmpeg, progress monitors),
 # so Ctrl+C or an error does not leave them running and writing frames.
+# EXIT trap: stops the background jobs (also the metrics sampling, so metrics.csv is complete),
+# then, after an error exit (failed, exit 1), writes report.xlsx as well - the successful end and
+# Ctrl+C (130) write it themselves. A plain kill (SIGTERM) also runs this trap, but with $? 0, so
+# it cannot be told from the successful end: it gets no report, nor does kill -9.
+exiting_function()
+{
+  local EXIT_STATUS=$?
+  stop_background_jobs
+  if [ "${BASHPID}" != "$$" ]
+  then
+    return
+  fi
+  # METRICS_SAMPLING_PID: the run got that far (usage errors, exit 2, come before it)
+  if [ "${EXIT_STATUS}" -ne 0 ] && [ "${EXIT_STATUS}" -ne 130 ] && [ -n "${METRICS_SAMPLING_PID}" ] && [ -x "${SCRIPTS_HOME}/.venv/bin/python3" ]
+  then
+    exporting_run_report
+  fi
+  }
+
 stop_background_jobs()
 {
   # subshells (progress monitors) must not run this: $$ is still the main script there
@@ -616,7 +635,7 @@ cleaning_after_interrupt()
   }
 
 trap "exit_function" INT
-trap "stop_background_jobs" EXIT
+trap "exiting_function" EXIT
 
 # Writes the statistics row of the last finished chunk and removes its source chunk. With -E
 # and -Q it first waits for that chunk's final encode and VMAF, which ran in the background

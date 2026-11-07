@@ -610,6 +610,17 @@ kill "${LEFTOVER_TEST_PID}" 2>/dev/null
 assert_contains "after a stop, a still running HandBrake is listed" "${OUTPUT}" "still running (PID, time, command)"
 assert_contains "with its PID" "${OUTPUT}" "${LEFTOVER_TEST_PID}"
 if grep -B2 'exit 130' "${REPO_ROOT}/interpolation_nncn" | grep -q 'warning_leftover_processes'; then pass "Ctrl+C ends with the leftover check"; else fail "Ctrl+C ends with the leftover check"; fi
+mkdir -p "${WORK_DIR}/exitvenv/.venv/bin"
+printf '#!/bin/sh\n' > "${WORK_DIR}/exitvenv/.venv/bin/python3"
+chmod +x "${WORK_DIR}/exitvenv/.venv/bin/python3"
+OUTPUT=""
+for EXIT_CASE in "1 123" "0 123" "130 123" "1 "
+do
+  read -r EXIT_TEST_STATUS EXIT_TEST_PID <<< "${EXIT_CASE}"
+  OUTPUT+="${EXIT_TEST_STATUS}/${EXIT_TEST_PID:-none}:$(bash -c 'for FUNC in exiting_function stop_background_jobs; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; exporting_run_report() { echo REPORT; }; SCRIPTS_HOME="'"${WORK_DIR}"'/exitvenv"; METRICS_SAMPLING_PID="'"${EXIT_TEST_PID}"'"; trap exiting_function EXIT; exit '"${EXIT_TEST_STATUS}" 2>&1) "
+done
+assert_contains "an error exit writes the report; success, Ctrl+C and an exit before the metrics do not" "${OUTPUT}" "1/123:REPORT 0/123: 130/123: 1/none: "
+if grep -q '^trap "exiting_function" EXIT' "${REPO_ROOT}/interpolation_nncn"; then pass "the EXIT trap is exiting_function"; else fail "the EXIT trap is exiting_function"; fi
 STOP_SETUP='eval "$(sed -n "/^stopping_after_failed_encode()/,/^  }/p;/^encoded_part_profile()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"'
 run_with_helpers "${STOP_SETUP}"'; PART_ENCODING_FAILED=no; stopping_after_failed_encode' > /dev/null 2>&1
 assert_status   "the run goes on after a successful encode" 0 $?
