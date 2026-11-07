@@ -8,6 +8,7 @@ Reads from RUN_TMP_DIR (all "~"-separated, header first, each one optional):
   metrics.csv    - samples of metrics_sampling (.config): CPU, memory, disks, GPUs, tools
   timeline.csv   - one row per step and chunk (timeline_entry in .config_video)
   statistics.txt - one row per chunk, times as "12.3[s]"
+  memory.csv     - one row per final encode: memory estimate and what was used (memory_entry)
 Sheets: "charts" (line charts over time, steps per chunk), then one sheet per file.
 """
 
@@ -135,6 +136,28 @@ def charting_steps(workbook, charts, data, position, bold):
     return position
 
 
+def charting_memory(workbook, charts, data, position):
+    """columns per chunk: what the run could get and needed (estimate), what it used (reality)."""
+    header, rows = data
+    names = ["can get [GB]", "needed [GB]", "max tools_rss [GB]", "min available [GB]"]
+    columns = [header.index(name) for name in names if name in header]
+    if not columns or not rows:
+        return position
+    chart = workbook.add_chart({"type": "column"})
+    for index in columns:
+        chart.add_series({
+            "name": ["memory", 0, index],
+            "categories": ["memory", 1, 0, len(rows), 0],
+            "values": ["memory", 1, index, len(rows), index],
+        })
+    chart.set_title({"name": "Memory: estimate (can get, needed) and reality per chunk"})
+    chart.set_x_axis({"name": "chunk"})
+    chart.set_y_axis({"name": "GB"})
+    chart.set_size({"width": 1100, "height": 360})
+    charts.insert_chart(position, 0, chart)
+    return position + 19
+
+
 def main():
     if len(sys.argv) != 3:
         print(__doc__, file=sys.stderr)
@@ -143,7 +166,8 @@ def main():
     metrics = reading(os.path.join(run_dir, "metrics.csv"))
     timeline = reading(os.path.join(run_dir, "timeline.csv"))
     statistics = reading(os.path.join(run_dir, "statistics.txt"))
-    if not (metrics or timeline or statistics):
+    memory = reading(os.path.join(run_dir, "memory.csv"))
+    if not (metrics or timeline or statistics or memory):
         print("nothing to report in " + run_dir, file=sys.stderr)
         return 1
     workbook = xlsxwriter.Workbook(output)
@@ -156,6 +180,9 @@ def main():
     if timeline:
         writing_sheet(workbook, "timeline", timeline, bold)
         position = charting_steps(workbook, charts, timeline, position, bold)
+    if memory:
+        writing_sheet(workbook, "memory", memory, bold)
+        position = charting_memory(workbook, charts, memory, position)
     if statistics:
         writing_sheet(workbook, "statistics", statistics, bold)
     workbook.close()

@@ -610,6 +610,10 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - Before each background encode (`-E`), `checking_memory_headroom` compares the run's peak `tools_rss` with `MemAvailable` plus what the run holds now, with a 10 % margin. If it may not fit, it only warns (the OOM killer stopped HandBrake on Smokin' Aces twice: Done item 16, and 3 Nov). Before anything is measured the peak is `RUN_MEMORY_PEAK_DEFAULT_GB` (default 16 GB, a guess to tune after measured runs).
     - At the end of the run (and after a stop, if `.venv` already exists) `metrics_to_excel.py` writes `TMP/report.xlsx`: sheets with the metrics, timeline, steps per chunk and statistics, and charts (CPU, memory, memory per tool, GPU busy, VRAM, disks, chunk steps, background encode and VMAF). A failed report only warns. It follows the style of the user's `report_conversion.py` (xlsxwriter, `~`-separated input), which is Azure-specific and so was not reused directly.
     - The logs are now also compressed after Ctrl+C or `systemctl stop` (see item 20).
+22. **HandBrake watchdog, leftover processes, memory estimate log** (after Smokin' Aces hung on chunk 097, 6 Nov, and Carnival Row, 7 Nov).
+    - Watchdog: on chunk 097 HandBrake printed "99.96 %" from 10:58 on (52,395 progress lines against ~746 for a normal chunk) while the encoder was stuck. Now the encode is checked every 5 s; progress means a changed percentage or output size, not a growing log. After `HANDBRAKE_STALL_SEC` (default 600) without progress HandBrake gets SIGTERM, SIGKILL 10 s later, and the encode fails with 124 ("stopped by the watchdog"): the merged part is kept and the run stops with 1, so `-E` encodes it again. A `watchdog:` line in the HandBrake log tells why.
+    - After Ctrl+C or `systemctl stop`, the user's processes still matching HandBrake, NCNN or `interpolation_nncn` are listed (PID, time, command) with how to stop them, so no new run is started beside a hung one. Nothing is killed automatically; another movie's run is listed too.
+    - `TMP/memory.csv`: one row per final encode (also a failed one) with the estimate of `checking_memory_headroom` (available, held, can get, peak, needed, warned) and what was used meanwhile, from `metrics.csv` (min available, max swap, max `tools_rss`, max HandBrake). The report has a "memory" sheet and a chart per chunk. Carnival Row (7 Nov) showed the warning was not too pessimistic: it warned with ~18.8 GB to get against ~21.5 GB needed, and available memory fell to 0.00 GB at 08:46 (zram swap full, 8/8 GB) until the user stopped a VM; later it stayed at ~0.9 GB. HandBrake alone reached 16 GB. My first guess (summed RSS counting shared pages twice) was wrong: the cgroup's peak (21.3 GB) was even higher.
 
 ### Codec benchmark
 
@@ -671,7 +675,7 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 
 1. **Metrics, before further optimization.** The sampling, the memory warning and the Excel report are done (Done item 21). Still open, once a real run has collected metrics:
    - explain where the time goes (Carnival Row's preparation, the slower NCNN);
-   - tune `RUN_MEMORY_PEAK_DEFAULT_GB` from the measured peaks.
+   - tune `RUN_MEMORY_PEAK_DEFAULT_GB` from the measured peaks (`memory.csv`, Done item 22; Carnival Row: 19.5 GB).
 2. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It could also let NCNN run without `-v`, if the NCNN pause (`throttling_ncnn`, which reads the last `done` line) also used the output frames instead of the log. The result is lower peak space use, which makes the next items possible.
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**
@@ -722,7 +726,7 @@ Process the same chunk before and after a change (for example `-F -s 029` on `vi
 
 Logs of `interpolation_nncn` are compressed with gzip (`name.log.gz`) when nothing writes to them anymore: a chunk's logs when the chunk is done, the rest at the end of the run or after Ctrl+C / `systemctl stop`. Read them with `zless`, `zgrep` or `zcat`. The silent log (`-S`) stays plain; after an error exit, the logs of the last chunk stay plain too (its processes may still be ending).
 
-Next to `timeline.csv`, `TMP` of `interpolation_nncn` holds `metrics.csv` (machine and tool metrics every 5 s) and, at the end of the run, `report.xlsx` with charts; see Done item 21.
+Next to `timeline.csv`, `TMP` of `interpolation_nncn` holds `metrics.csv` (machine and tool metrics every 5 s), `memory.csv` (memory estimate and use per final encode, Done item 22) and, at the end of the run, `report.xlsx` with charts; see Done item 21.
 
 For `interpolation_nncn`, `-O` is where the large extracted and processed frame files are stored, so a fast volume with ample free space is useful. `-o` holds the script's workspace and logs. With the default settings, both roots point to `$HOME/var`. The script reports the resolved paths and available space in verbose mode. The scripts may also create chunk and merged video files in the current working directory; the `-O` option does not relocate all video outputs. Choose both the current directory and configured roots with enough free space. The helper checks that requested roots can be created, but the scripts' use of `df --block-size G` is GNU/Linux-oriented.
 

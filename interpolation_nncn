@@ -1157,6 +1157,10 @@ timeline_entry whole_run all
 timeline_percentages
 inf "    video mngt took : ${DARKCYAN}${RUNTIME}"
 inf "    timeline of all steps: ${YELLOW}${TMP}/timeline.csv"
+if [ -s "${TMP}/memory.csv" ]
+then
+  inf "    memory estimate and use per encode: ${YELLOW}${TMP}/memory.csv"
+fi
 kill "${METRICS_SAMPLING_PID}" 2>/dev/null
 compressing_run_logs
 exporting_run_report

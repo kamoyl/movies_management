@@ -367,15 +367,21 @@ OUTPUT="$(run_with_helpers "${MEMORY_SETUP}"'; printf "MemAvailable: 20971520 kB
 if [[ ${OUTPUT} == *"may run short"* ]]; then fail "memory check is silent when the peak fits"; else pass "memory check is silent when the peak fits"; fi
 OUTPUT="$(run_with_helpers "${MEMORY_SETUP}"'; printf "time~epoch~tools_rss [GB]\n" > metrics.csv; printf "MemAvailable: 10485760 kB\n" > meminfo; checking_memory_headroom' 2>&1)"
 assert_contains "memory check uses the default peak before anything was measured" "${OUTPUT}" "its peak is 16.0 GB (assumed, RUN_MEMORY_PEAK_DEFAULT_GB)"
+# row a is before the check (its 20 GB is the peak), rows b and c during the encode (the reality)
+OUTPUT="$(run_with_helpers "${MEMORY_SETUP}"'; printf "time~epoch~mem_available [GB]~swap_used [GB]~HandBrakeCLI_rss [GB]~tools_rss [GB]\na~1~30.00~0.00~0.00~20.00\nb~9999999998~2.50~3.00~15.00~18.00\nc~9999999999~0.80~8.00~16.00~19.00\n" > metrics.csv; printf "MemAvailable: 12582912 kB\n" > meminfo; checking_memory_headroom; memory_entry 137; memory_entry 0; cat memory.csv' 2>&1)"
+assert_contains "memory.csv has its header" "${OUTPUT}" "video_id~checked~epoch~available [GB]~held [GB]~can get [GB]~peak [GB]~peak source~needed [GB]~warned~encode status~min available [GB]~max swap [GB]~max tools_rss [GB]~max HandBrakeCLI [GB]"
+assert_contains "memory.csv: estimate, encode status and what was used after the check" "${OUTPUT}" "~12.0~19.0~31.0~20.0~measured~22.0~no~137~0.80~8.00~19.00~16.00"
+if [ "$(grep -c '~137~' <<< "${OUTPUT}")" -eq 1 ] && [[ ${OUTPUT} != *"~0~"* ]]; then pass "memory.csv: one row per check"; else fail "memory.csv: one row per check"; fi
 if [ -x "${REPO_ROOT}/.venv/bin/python3" ] && "${REPO_ROOT}/.venv/bin/python3" -c "import xlsxwriter" 2>/dev/null
 then
   mkdir -p "${WORK_DIR}/report"
   printf 'time~epoch~cpu_busy [%%]~mem_used [GB]~card0_busy [%%]~ffmpeg_rss [GB]~tools_rss [GB]\n2026-11-05 10:00:00~1.0~50.0~10.00~~1.00~1.00\n2026-11-05 10:00:05~6.0~60.0~11.00~90~2.00~2.00\n' > "${WORK_DIR}/report/metrics.csv"
   printf 'video_id~step~start~end~start_epoch~end_epoch~duration [s]~chunk [%%]\n021~interpolating~a~b~1~2~300.0~60\n021~encoding~a~b~1~2~290.0~\nall~whole_run~a~b~1~2~900.0~\n' > "${WORK_DIR}/report/timeline.csv"
   printf 'video_id~runtime\n021~500.1[s]\n' > "${WORK_DIR}/report/statistics.txt"
+  printf 'video_id~checked~epoch~available [GB]~held [GB]~can get [GB]~peak [GB]~peak source~needed [GB]~warned~encode status~min available [GB]~max swap [GB]~max tools_rss [GB]~max HandBrakeCLI [GB]\n021~a~1~12.0~0.1~12.1~19.5~measured~21.5~yes~0~0.90~8.00~19.53~16.15\n' > "${WORK_DIR}/report/memory.csv"
   OUTPUT="$("${REPO_ROOT}/.venv/bin/python3" "${REPO_ROOT}/metrics_to_excel.py" "${WORK_DIR}/report" "${WORK_DIR}/report/r.xlsx" 2>&1; echo "STATUS=$?"; "${REPO_ROOT}/.venv/bin/python3" -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); n=z.namelist(); print('SHEETS=%d CHARTS=%d' % (sum(x.startswith('xl/worksheets/sheet') for x in n), sum(x.startswith('xl/charts/chart') for x in n))); print('CHUNK=' + str('<t>021</t>' in z.read('xl/sharedStrings.xml').decode()))" "${WORK_DIR}/report/r.xlsx")"
   assert_contains "metrics_to_excel.py writes the workbook" "${OUTPUT}" "STATUS=0"
-  assert_contains "metrics_to_excel.py: charts, metrics, timeline, steps per chunk, statistics; 6 charts" "${OUTPUT}" "SHEETS=5 CHARTS=6"
+  assert_contains "metrics_to_excel.py: charts, metrics, timeline, steps per chunk, memory, statistics; 7 charts" "${OUTPUT}" "SHEETS=6 CHARTS=7"
   assert_contains "metrics_to_excel.py keeps chunk numbers as text" "${OUTPUT}" "CHUNK=True"
 else
   echo "  skipped: metrics_to_excel.py (no .venv with xlsxwriter; a run prepares it)"
@@ -586,11 +592,12 @@ assert_contains "an encode killed with SIGKILL points at the out-of-memory kille
 assert_contains "a killed encode keeps its merged part" "${OUTPUT}" "MERGED_KEPT"
 for HANG_MODE in hang hang_noterm
 do
-  OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo '"${HANG_MODE}"' > fail_hb; HANDBRAKE_STALL_SEC=2; HANDBRAKE_WATCH_INTERVAL_SEC=1; S=$(date +%s); starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; echo "TOOK=$(( $(date +%s) - S )) FLAG=${PART_ENCODING_FAILED}"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if pgrep -f "'"${WORK_DIR}"'/[h]bbin/HandBrakeCLI" > /dev/null; then echo HB_LEFT; fi; grep -a "^watchdog:" log/p_encoded.mkv_handbrake.log' 2>&1)"
+  OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo '"${HANG_MODE}"' > fail_hb; HANDBRAKE_STALL_SEC=2; HANDBRAKE_WATCH_INTERVAL_SEC=1; S=$(date +%s); starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; echo "TOOK=$(( $(date +%s) - S )) FLAG=${PART_ENCODING_FAILED}"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if pgrep -f "'"${WORK_DIR}"'/[h]bbin/HandBrakeCLI" > /dev/null; then echo HB_LEFT; fi; grep -a "^watchdog:" log/p_encoded.mkv_handbrake.log; tail -n1 t/memory.csv' 2>&1)"
   assert_contains "watchdog (${HANG_MODE}): a hung encode is reported with 124" "${OUTPUT}" "failed with exit code 124"
   assert_contains "watchdog (${HANG_MODE}): the reason is shown" "${OUTPUT}" "stopped by the watchdog"
   assert_contains "watchdog (${HANG_MODE}): the log tells why HandBrake was stopped" "${OUTPUT}" "watchdog: no progress for"
   assert_contains "watchdog (${HANG_MODE}): the run is stopped, the merged part kept" "${OUTPUT}" "FLAG=yes"
+  assert_contains "watchdog (${HANG_MODE}): a failed encode gets its memory.csv row" "${OUTPUT}" "~124~"
   if [[ ${OUTPUT} == *HB_LEFT* ]]; then fail "watchdog (${HANG_MODE}): HandBrake does not stay behind"; else pass "watchdog (${HANG_MODE}): HandBrake does not stay behind"; fi
 done
 mkdir -p "${WORK_DIR}/lobin"

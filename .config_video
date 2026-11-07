@@ -2056,14 +2056,65 @@ checking_memory_headroom()
     END {
       SOURCE = "measured"
       if (PEAK < DEFAULT) { PEAK = DEFAULT; SOURCE = "assumed, RUN_MEMORY_PEAK_DEFAULT_GB" }
-      printf "%s~%.1f~%.1f~%.1f~%s\n", (AVAILABLE + NOW < PEAK * 1.1 ? "short" : "ok"), AVAILABLE, NOW, PEAK, SOURCE
+      printf "%s~%.1f~%.1f~%.1f~%s~%.1f~%.1f\n", (AVAILABLE + NOW < PEAK * 1.1 ? "short" : "ok"), AVAILABLE, NOW, PEAK, SOURCE, AVAILABLE + NOW, PEAK * 1.1
     }' MEMINFO="${MEMINFO_FILE}" "${TMP}/metrics.csv" "${MEMINFO_FILE}" 2>/dev/null)"
-  if [[ ${MEMORY_CHECK} == short~* ]]
+  # kept for memory_entry, which compares this estimate with what the encode really used
+  MEMORY_CHECK_EPOCH="${EPOCHREALTIME}"
+  MEMORY_CHECK_VIDEO_ID="${VIDEO_FRAGMENT_ID:-000}"
+  IFS='~' read -r MEMORY_VERDICT MEMORY_AVAILABLE_GB MEMORY_HELD_GB MEMORY_PEAK_GB MEMORY_PEAK_SOURCE MEMORY_CAN_GET_GB MEMORY_NEEDED_GB <<< "${MEMORY_CHECK}"
+  if [[ ${MEMORY_VERDICT} == short ]]
   then
-    IFS='~' read -r _ MEMORY_AVAILABLE_GB MEMORY_HELD_GB MEMORY_PEAK_GB MEMORY_PEAK_SOURCE <<< "${MEMORY_CHECK}"
     warn "    memory may run short for the encode alongside the next chunk: ${MEMORY_AVAILABLE_GB} GB available + ${MEMORY_HELD_GB} GB held by the run, its peak is ${MEMORY_PEAK_GB} GB (${MEMORY_PEAK_SOURCE}) + 10 %"
     warn "    the OOM killer may stop HandBrake (the run then stops, finished chunks are kept); free some memory, e.g. stop a VM"
   fi
+  }
+
+# memory.csv (in TMP, next to timeline.csv): one row per final encode, written when it ends (also
+# when it failed, e.g. 137 = killed by the OOM killer), so the estimate of checking_memory_headroom
+# can be compared with reality. Columns:
+#   video_id~checked~epoch~available [GB]~held [GB]~can get [GB]~peak [GB]~peak source~
+#   needed [GB]~warned~encode status~min available [GB]~max swap [GB]~max tools_rss [GB]~
+#   max HandBrakeCLI [GB]
+# can get = available + held; needed = peak + 10 %; warned = can get < needed; the last four are
+# from metrics.csv between the check and the end of the encode (empty without metrics); the
+# encode runs alongside the next chunk, so they include that chunk's tools as well
+memory_entry()
+{
+  local MEMORY_FILE="${TMP}/memory.csv"
+  local MEMORY_USED
+  if [ -z "${MEMORY_CHECK_EPOCH}" ]
+  then
+    return
+  fi
+  if [ ! -s "${MEMORY_FILE}" ]
+  then
+    echo "video_id~checked~epoch~available [GB]~held [GB]~can get [GB]~peak [GB]~peak source~needed [GB]~warned~encode status~min available [GB]~max swap [GB]~max tools_rss [GB]~max HandBrakeCLI [GB]" > "${MEMORY_FILE}"
+  fi
+  # columns by their header names: the GPU columns before them differ between machines
+  MEMORY_USED="$(awk -F'~' -v SINCE="${MEMORY_CHECK_EPOCH}" '
+    FNR == 1 { for (I = 1; I <= NF; I++) { COLUMN[$I] = I }; next }
+    $2 + 0 >= SINCE + 0 {
+      AVAILABLE = $COLUMN["mem_available [GB]"] + 0
+      if (ROWS == 0 || AVAILABLE < MIN_AVAILABLE) { MIN_AVAILABLE = AVAILABLE }
+      if ($COLUMN["swap_used [GB]"] + 0 > MAX_SWAP) { MAX_SWAP = $COLUMN["swap_used [GB]"] + 0 }
+      if ($COLUMN["tools_rss [GB]"] + 0 > MAX_TOOLS) { MAX_TOOLS = $COLUMN["tools_rss [GB]"] + 0 }
+      if ("HandBrakeCLI_rss [GB]" in COLUMN && $COLUMN["HandBrakeCLI_rss [GB]"] + 0 > MAX_HANDBRAKE) { MAX_HANDBRAKE = $COLUMN["HandBrakeCLI_rss [GB]"] + 0 }
+      ROWS++
+    }
+    END {
+      if (ROWS > 0) { printf "%.2f~%.2f~%.2f~%.2f\n", MIN_AVAILABLE, MAX_SWAP, MAX_TOOLS, MAX_HANDBRAKE } else { print "~~~" }
+    }' "${TMP}/metrics.csv" 2>/dev/null)"
+  if [ -z "${MEMORY_USED}" ]
+  then
+    MEMORY_USED="~~~"
+  fi
+  local MEMORY_WARNED="no"
+  if [[ ${MEMORY_VERDICT} == short ]]
+  then
+    MEMORY_WARNED="yes"
+  fi
+  echo "${MEMORY_CHECK_VIDEO_ID}~$(epoch_to_human "${MEMORY_CHECK_EPOCH}")~${MEMORY_CHECK_EPOCH}~${MEMORY_AVAILABLE_GB}~${MEMORY_HELD_GB}~${MEMORY_CAN_GET_GB}~${MEMORY_PEAK_GB}~${MEMORY_PEAK_SOURCE}~${MEMORY_NEEDED_GB}~${MEMORY_WARNED}~${1}~${MEMORY_USED}" >> "${MEMORY_FILE}"
+  MEMORY_CHECK_EPOCH=""
   }
 
 # Final encode of a processed part (interpolation_nncn -E) runs in two steps, like VMAF, so it
@@ -2252,6 +2303,7 @@ finishing_part_encoding()
     # no status: the job was stopped before HandBrake ended
     PART_ENCODING_STATUS="1"
   fi
+  memory_entry "${PART_ENCODING_STATUS}"
   ENCODING_RUNTIME="$(cat "${TMP}/${PART_ENCODED_FILE}_encoding.runtime" 2>/dev/null)"
   if [ -z "${ENCODING_RUNTIME}" ]
   then
