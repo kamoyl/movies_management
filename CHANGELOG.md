@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- changelog_updating: working commit links for ssh-alias remotes ([e4e1a7e](https://github.com/kamoyl/movies_management/commit/e4e1a7e752b35be8901dc186f80dd14ba30ebc98) by Kamoyl).
 
 ### Removed
 
