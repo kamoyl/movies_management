@@ -24,10 +24,25 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- HandBrake watchdog; leftover processes listed after Ctrl+C ([4837cd5](https://github_kamoyl/kamoyl/movies_management/commit/4837cd5c2dfc895d7df2f7ce2b9e1c578ac4ddcd) by Kamoyl).
+- .config synced from get-auditing; config_syncing added ([3f44637](https://github_kamoyl/kamoyl/movies_management/commit/3f44637150cbfcf9bf64e7c5037d9b315fce2660) by Kamoyl).
+- Metrics sampling, memory warning before the encode, Excel report ([82894a0](https://github_kamoyl/kamoyl/movies_management/commit/82894a054ba50c06e24680bde10c87afea075e1b) by Kamoyl).
+- README: optimization state over time; metrics planned first ([f73c3c3](https://github_kamoyl/kamoyl/movies_management/commit/f73c3c36fc3ae025cab337722202a92dc1c48b4f) by Kamoyl).
+- Compress the remaining logs also after Ctrl+C / systemctl stop ([ce3e980](https://github_kamoyl/kamoyl/movies_management/commit/ce3e980a8294b8aa2dd069235d413cf3b5a37ac1) by Kamoyl).
+- Compress logs with gzip; ToDo list moved from the script header to README ([fb42af2](https://github_kamoyl/kamoyl/movies_management/commit/fb42af229fdc9b4b4e2dfa718ad3a5938b365b94) by Kamoyl).
+- Frame analysis: 7 sampled frames by seeking instead of decoding the whole chunk ([3d4a2cb](https://github_kamoyl/kamoyl/movies_management/commit/3d4a2cb6c50bf62ef3715bae88edca8212b437e1) by Kamoyl).
+- recovering_lost_frames: tone mapping before select, recovery took ~8 min per open-GOP split ([b6541d0](https://github_kamoyl/kamoyl/movies_management/commit/b6541d0e69524377786e8634dc37fc546553427a) by Kamoyl).
+- interpolation_nncn -S: start through /usr/bin/env (SELinux); Ctrl+C removes frame_analysis ([b682fe8](https://github_kamoyl/kamoyl/movies_management/commit/b682fe80c034af04698354ff6aa0bf4500fe2f25) by Kamoyl).
+- interpolation_nncn -S: run in the background as a systemd service ([1f95de0](https://github_kamoyl/kamoyl/movies_management/commit/1f95de0833525f7aeaeac6247eeef9d689fadc9a) by Kamoyl).
+- interpolation_nncn: Ctrl+C cleans up, keeping finished chunks ([d283cd3](https://github_kamoyl/kamoyl/movies_management/commit/d283cd3dc3088c52eeac80f10b48aa7d77da47c7) by Kamoyl).
+- interpolation_nncn: resume by default; -F for a fresh start ([f75f929](https://github_kamoyl/kamoyl/movies_management/commit/f75f929c766630082cd51e404989c9cd305b927d) by Kamoyl).
+- -E: stop the run after a failed encode; record the encode profile ([3fb04d3](https://github_kamoyl/kamoyl/movies_management/commit/3fb04d3db858386932b6b50c8680115848efb5cf) by Kamoyl).
+- Space monitor: fix divide by zero and the run-wide peak ([c7a0121](https://github_kamoyl/kamoyl/movies_management/commit/c7a012111d65d0410c13bca0c5f99a53224dc7af) by Kamoyl).
+- -E join: take audio and subtitles from the source, not the parts ([f18972f](https://github_kamoyl/kamoyl/movies_management/commit/f18972f0a5ea354a5e9926aa830431c6b14e8594) by Kamoyl).
+- Updated CHANGELOG only ([3a6cd16](https://github_kamoyl/kamoyl/movies_management/commit/3a6cd167a550f3884a1379c44747340e48200b36) by Kamoyl).
 - Joined movie in sync: recover open-GOP frames, exact frame rate ([b7f0359](https://github_kamoyl/kamoyl/movies_management/commit/b7f03598967c43e152176ab1ed115ee8cfcb9153) by Kamoyl).
 - updated CHANGELOG ([0a402fa](https://github_kamoyl/kamoyl/movies_management/commit/0a402fadbad5472043b2fe7362b9eb5821a70561) by Kamoyl).
 - README: add research item for interpolation above 8 bits ([3706956](https://github_kamoyl/kamoyl/movies_management/commit/370695631936248d08f5133f73ac50030653a0f0) by Kamoyl).
-- Updated CHANGELOG only ([dfa1114](https://github_kamoyl/kamoyl/movies_management/commit/dfa111433dbdc17ddb726a7d416e4f70bd770ffc) by Kamoyl).
 - interpolation_nncn: split only at keyframes the decoder can start from ([eff9fa3](https://github_kamoyl/kamoyl/movies_management/commit/eff9fa3d776bd58e94b1b82af9e3ce5b609eff5d) by Kamoyl).
 - README: drop "frames on tmpfs" from the planned optimizations, with measurement ([4630449](https://github_kamoyl/kamoyl/movies_management/commit/463044948f7cb6a2f3966fa1c15c447be79eb210) by Kamoyl).
 - .gitignore: ignore the local var and download symlinks ([745c3bd](https://github_kamoyl/kamoyl/movies_management/commit/745c3bd09171dbb1dff1e4b6c0a5279f6e022517) by Kamoyl).
