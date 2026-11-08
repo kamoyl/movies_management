@@ -549,6 +549,39 @@ exiting_function()
   fi
   }
 
+# PIDs of all processes started by the given PIDs (children, their children, ...); the command
+# substitution which calls it is a child of the script too, so it is skipped (BASHPID)
+descendant_pids()
+{
+  local PARENT_PID
+  local CHILD_PID
+  for PARENT_PID in "$@"
+  do
+    for CHILD_PID in $(pgrep -P "${PARENT_PID}" 2>/dev/null)
+    do
+      if [ "${CHILD_PID}" != "${BASHPID}" ]
+      then
+        echo "${CHILD_PID}"
+        descendant_pids "${CHILD_PID}"
+      fi
+    done
+  done
+  }
+
+# running_pids PID... - true while one of the PIDs still runs
+running_pids()
+{
+  local PID
+  for PID in "$@"
+  do
+    if kill -0 "${PID}" 2>/dev/null
+    then
+      return 0
+    fi
+  done
+  return 1
+  }
+
 stop_background_jobs()
 {
   # subshells (progress monitors) must not run this: $$ is still the main script there
@@ -557,7 +590,11 @@ stop_background_jobs()
     return
   fi
   local CHILD_PID
-  for CHILD_PID in $(pgrep -P $$ 2>/dev/null)
+  # also grandchildren: HandBrake runs in the encoding subshell, and ended only after the
+  # cleanup when it was not stopped itself (its 0-byte _video_only.mkv stayed, 8 Nov); the
+  # PIDs are kept, because a grandchild whose parent ended is no descendant anymore
+  STOPPED_PIDS=($(descendant_pids $$))
+  for CHILD_PID in "${STOPPED_PIDS[@]}"
   do
     kill "${CHILD_PID}" 2>/dev/null
     # a process paused by throttling_ncnn (SIGSTOP) handles SIGTERM only after SIGCONT
@@ -576,7 +613,7 @@ cleaning_after_interrupt()
   stop_background_jobs
   # at most 10 s for NCNN, ffmpeg and HandBrake to end, so they do not write into removed files
   local WAITED_SEC=0
-  while pgrep -P $$ > /dev/null 2>&1 && [ "${WAITED_SEC}" -lt 10 ]
+  while [ "${WAITED_SEC}" -lt 10 ] && running_pids "${STOPPED_PIDS[@]}"
   do
     sleep 1
     WAITED_SEC=$((WAITED_SEC + 1))

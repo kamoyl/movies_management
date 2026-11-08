@@ -388,7 +388,7 @@ else
 fi
 
 echo "Ctrl+C cleanup (exit_function, cleaning_after_interrupt)"
-INTERRUPT_SETUP='for FUNC in exit_function stop_background_jobs cleaning_after_interrupt compressing_run_logs; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; eval "$(sed -n "/^compressing_logs()/,/^  }/p" "'"${REPO_ROOT}"'/.config")"; tput() { :; }; NCNN_METHOD=rife; KEEP_INTERMEDIATES=no; MOVIE_NAME_ARRAY=(video_part_minute_003); rm -rf intr; mkdir intr; cd intr || exit 99; LOG="$PWD/log"; TMP="$PWD/tmp"; TMP_OUT="$PWD/tmp_out"; mkdir -p "$LOG" "$TMP/frame_analysis" "$TMP/in_003/f" "$TMP/out_003" "$TMP_OUT/in_003" "$TMP_OUT/out_003"; echo s > "$TMP/statistics.txt"; echo t > "$TMP/timeline.csv"; echo a > "$TMP/video_part_minute_003.mka"; echo s > "$TMP/video_part_minute_003_subtitles.mkv"; echo v > "$TMP_OUT/video_part_minute_003_rife_48.mkv"; for N in 001 002 003 004; do echo src > video_part_minute_${N}.mkv; done; echo p > video_part_minute_001_rife_48_merged.mkv; echo F > video_part_minute_001_rife_48_merged.mkv.done; echo p > video_part_minute_001_rife_48_encoded.mkv; echo F > video_part_minute_001_rife_48_encoded.mkv.done; echo p > video_part_minute_002_rife_48_merged.mkv; echo F > video_part_minute_002_rife_48_merged.mkv.done; echo p > video_part_minute_002_rife_48_encoded.mkv; echo p > video_part_minute_002_rife_48_encoded_video_only.mkv; echo p > video_part_minute_003_rife_48_merged.mkv; echo src > Film.mkv; sleep 30 > /dev/null 2>&1 & SLEEP_PID=$!'
+INTERRUPT_SETUP='for FUNC in exit_function descendant_pids running_pids stop_background_jobs cleaning_after_interrupt compressing_run_logs; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; eval "$(sed -n "/^compressing_logs()/,/^  }/p" "'"${REPO_ROOT}"'/.config")"; tput() { :; }; NCNN_METHOD=rife; KEEP_INTERMEDIATES=no; MOVIE_NAME_ARRAY=(video_part_minute_003); rm -rf intr; mkdir intr; cd intr || exit 99; LOG="$PWD/log"; TMP="$PWD/tmp"; TMP_OUT="$PWD/tmp_out"; mkdir -p "$LOG" "$TMP/frame_analysis" "$TMP/in_003/f" "$TMP/out_003" "$TMP_OUT/in_003" "$TMP_OUT/out_003"; echo s > "$TMP/statistics.txt"; echo t > "$TMP/timeline.csv"; echo a > "$TMP/video_part_minute_003.mka"; echo s > "$TMP/video_part_minute_003_subtitles.mkv"; echo v > "$TMP_OUT/video_part_minute_003_rife_48.mkv"; for N in 001 002 003 004; do echo src > video_part_minute_${N}.mkv; done; echo p > video_part_minute_001_rife_48_merged.mkv; echo F > video_part_minute_001_rife_48_merged.mkv.done; echo p > video_part_minute_001_rife_48_encoded.mkv; echo F > video_part_minute_001_rife_48_encoded.mkv.done; echo p > video_part_minute_002_rife_48_merged.mkv; echo F > video_part_minute_002_rife_48_merged.mkv.done; echo p > video_part_minute_002_rife_48_encoded.mkv; echo p > video_part_minute_002_rife_48_encoded_video_only.mkv; echo p > video_part_minute_003_rife_48_merged.mkv; echo src > Film.mkv; sleep 30 > /dev/null 2>&1 & SLEEP_PID=$!'
 # exit_function exits, so the results are printed by an EXIT trap (in a subshell, $$ is not its PID)
 OUTPUT="$(run_with_helpers "${INTERRUPT_SETUP}"'; trap '"'"'echo "STATUS=$?"; if kill -0 "${SLEEP_PID}" 2>/dev/null; then echo "CHILD RUNNING"; fi; echo "LEFT: $(ls | tr "\n" " ")"; echo "TMP: $(ls tmp tmp_out | tr "\n" " ")"'"'"' EXIT; exit_function' 2>&1)"
 assert_contains "Ctrl+C exits with 130" "${OUTPUT}" "STATUS=130"
@@ -397,6 +397,10 @@ if [[ ${OUTPUT} == *"CHILD RUNNING"* ]]; then fail "Ctrl+C stops the processes o
 assert_contains "Ctrl+C keeps finished parts and markers, removes source chunks and unfinished parts" "${OUTPUT}" "LEFT: Film.mkv log tmp tmp_out video_part_minute_001_rife_48_encoded.mkv video_part_minute_001_rife_48_encoded.mkv.done video_part_minute_001_rife_48_merged.mkv video_part_minute_001_rife_48_merged.mkv.done video_part_minute_002_rife_48_merged.mkv video_part_minute_002_rife_48_merged.mkv.done "
 assert_contains "Ctrl+C removes frames and extracts, keeps statistics and timeline" "${OUTPUT}" "TMP: tmp: statistics.txt timeline.csv  tmp_out: "
 assert_contains "Ctrl+C counts what it removed" "${OUTPUT}" "removed ${YELLOW:-}15"
+# a grandchild (HandBrake in the encoding subshell) which writes its output after TERM, as on 8 Nov
+OUTPUT="$(run_with_helpers "${INTERRUPT_SETUP}"'; ( bash -c '"'"'echo $$ > ../grandchild.pid; trap "sleep 1; echo late > video_part_minute_005_rife_48_encoded_video_only.mkv; exit 0" TERM; sleep 30 & wait'"'"'; : ) & sleep 0.5; trap '"'"'if kill -0 "$(cat ../grandchild.pid)" 2>/dev/null; then echo "GRANDCHILD RUNNING"; kill "$(cat ../grandchild.pid)"; fi; echo "LEFT: [$(ls | grep 005 | tr "\n" " ")]"'"'"' EXIT; exit_function' 2>&1)"
+if [[ ${OUTPUT} == *"GRANDCHILD RUNNING"* ]]; then fail "Ctrl+C stops grandchildren too (HandBrake)" "$(tail -n3 <<< "${OUTPUT}" | tr "\n" " ")"; else pass "Ctrl+C stops grandchildren too (HandBrake)"; fi
+assert_contains "Ctrl+C waits for grandchildren before removing their files" "${OUTPUT}" "LEFT: []"
 OUTPUT="$(run_with_helpers "${INTERRUPT_SETUP}"'; KEEP_INTERMEDIATES=yes; trap '"'"'echo "LEFT: $(ls | wc -l) $(ls tmp tmp_out | wc -l)"'"'"' EXIT; exit_function' 2>&1)"
 assert_contains "Ctrl+C with -k removes nothing" "${OUTPUT}" "LEFT: 17 13"
 assert_contains "Ctrl+C with -k says so" "${OUTPUT}" "-k: intermediate files are kept"
@@ -546,7 +550,7 @@ OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkd
 assert_contains "the crop is read from one scan of the whole video" "${OUTPUT}" "CROP=8:4:0:0"
 PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkdir -p "$LOG"; echo "" > crop.txt; detecting_crop whole.mkv' > /dev/null 2>&1
 assert_status "an unreadable crop stops the run with 1" 1 $?
-OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; S=$(date +%s); starting_part_encoding p_merged.mkv p_encoded.mkv ""; echo "RETURNED_AFTER=$(( $(date +%s) - S ))"; finishing_part_encoding; echo "DONE=$(head -n1 p_encoded.mkv.done) PROFILE=$(sed -n 2p p_encoded.mkv.done) RUNTIME=${ENCODING_RUNTIME} NICE=$(cat hb_nice.txt) CONTENT=$(cat p_encoded.mkv)"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_encoded_video_only.mkv ]; then echo VIDEO_ONLY_KEPT; fi; tr "\n" " " < hb_args.txt; echo; echo "MUX: $(tr "\n" " " < mux_args.txt)"' 2>&1)"
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo "My Movie" > p_merged.mkv.done; S=$(date +%s); starting_part_encoding p_merged.mkv p_encoded.mkv ""; echo "RETURNED_AFTER=$(( $(date +%s) - S ))"; finishing_part_encoding; echo "DONE=$(head -n1 p_encoded.mkv.done) PROFILE=$(sed -n 2p p_encoded.mkv.done) RUNTIME=${ENCODING_RUNTIME} NICE=$(cat hb_nice.txt) CONTENT=$(cat p_encoded.mkv)"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_merged.mkv.done ]; then echo MERGED_MARKER_KEPT; fi; if [ -e p_encoded_video_only.mkv ]; then echo VIDEO_ONLY_KEPT; fi; tr "\n" " " < hb_args.txt; echo; echo "MUX: $(tr "\n" " " < mux_args.txt)"' 2>&1)"
 assert_contains "starting returns at once (the encode keeps running)" "${OUTPUT}" "RETURNED_AFTER=0"
 assert_contains "finishing marks the encoded part with the movie name and profile" "${OUTPUT}" "DONE=My Movie PROFILE=film RUNTIME=0s"
 assert_contains "the encode runs with lower priority (nice 10)" "${OUTPUT}" "NICE=10"
@@ -556,12 +560,13 @@ assert_contains "HandBrake encodes the video only (no frames dropped for A/V syn
 assert_contains "HandBrake gets no audio or subtitles" "${OUTPUT}" "--no-markers -a none -s none"
 assert_contains "mkvmerge copies the chosen audio and subtitles from the part" "${OUTPUT}" "MUX: -o p_encoded.mkv p_encoded_video_only.mkv -D --no-chapters --no-attachments --no-global-tags --audio-tracks 1 --subtitle-tracks 2 p_merged.mkv"
 assert_contains "the muxed file is the encoded part" "${OUTPUT}" "CONTENT=fake muxed"
-OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo 0.042000 > start.txt; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; echo "MUX: $(tr "\n" " " < mux_args.txt)"' 2>&1)"
-assert_contains "the encoded video starts where the merged part's video starts" "${OUTPUT}" "MUX: -o p_encoded.mkv --sync 0:42 p_encoded_video_only.mkv -D"
 if [[ ${OUTPUT} == *VIDEO_ONLY_KEPT* ]]; then fail "the video-only encode is removed after muxing"; else pass "the video-only encode is removed after muxing"; fi
 if [[ ${OUTPUT} == *MERGED_KEPT* ]]; then fail "the merged part is removed after its encode"; else pass "the merged part is removed after its encode"; fi
-OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; KEEP_INTERMEDIATES=yes; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi' 2>&1)"
-assert_contains "-k keeps the merged part" "${OUTPUT}" "MERGED_KEPT"
+if [[ ${OUTPUT} == *MERGED_MARKER_KEPT* ]]; then fail "the merged part's marker is removed with it"; else pass "the merged part's marker is removed with it"; fi
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo 0.042000 > start.txt; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; echo "MUX: $(tr "\n" " " < mux_args.txt)"' 2>&1)"
+assert_contains "the encoded video starts where the merged part's video starts" "${OUTPUT}" "MUX: -o p_encoded.mkv --sync 0:42 p_encoded_video_only.mkv -D"
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; KEEP_INTERMEDIATES=yes; echo "My Movie" > p_merged.mkv.done; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ] && [ -e p_merged.mkv.done ]; then echo MERGED_KEPT; fi' 2>&1)"
+assert_contains "-k keeps the merged part and its marker" "${OUTPUT}" "MERGED_KEPT"
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${WORK_DIR}/vmafbin:${PATH}" run_with_helpers "${PART_SETUP}"'; touch fail_hb; QUALITY_METRIC_CHECK_PID=""; starting_part_encoding p_merged.mkv p_encoded.mkv o.mkv; finishing_part_encoding; echo "FLAG=${PART_ENCODING_FAILED}"; finishing_quality_metric; echo "MEAN=${VMAF_MEAN}"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_encoded.mkv.done ]; then echo MARKED; fi' 2>&1)"; STATUS=$?
 assert_status   "finishing a failed encode returns, the caller stops the run" 0 "${STATUS}"
 assert_contains "a failed encode is flagged for the caller" "${OUTPUT}" "FLAG=yes"
@@ -599,6 +604,7 @@ do
   assert_contains "watchdog (${HANG_MODE}): the run is stopped, the merged part kept" "${OUTPUT}" "FLAG=yes"
   assert_contains "watchdog (${HANG_MODE}): a failed encode gets its memory.csv row" "${OUTPUT}" "~124~"
   if [[ ${OUTPUT} == *HB_LEFT* ]]; then fail "watchdog (${HANG_MODE}): HandBrake does not stay behind"; else pass "watchdog (${HANG_MODE}): HandBrake does not stay behind"; fi
+  if [[ ${OUTPUT} == *"_video_only.mkv: No such file"* ]]; then fail "watchdog (${HANG_MODE}): no error before HandBrake writes its output" "$(grep "_video_only.mkv: No such file" <<< "${OUTPUT}" | head -n1)"; else pass "watchdog (${HANG_MODE}): no error before HandBrake writes its output"; fi
 done
 mkdir -p "${WORK_DIR}/lobin"
 printf '#!/usr/bin/env bash\nsleep 30\n' > "${WORK_DIR}/lobin/HandBrakeCLI"
@@ -617,7 +623,7 @@ OUTPUT=""
 for EXIT_CASE in "1 123" "0 123" "130 123" "1 "
 do
   read -r EXIT_TEST_STATUS EXIT_TEST_PID <<< "${EXIT_CASE}"
-  OUTPUT+="${EXIT_TEST_STATUS}/${EXIT_TEST_PID:-none}:$(bash -c 'for FUNC in exiting_function stop_background_jobs; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; exporting_run_report() { echo REPORT; }; SCRIPTS_HOME="'"${WORK_DIR}"'/exitvenv"; METRICS_SAMPLING_PID="'"${EXIT_TEST_PID}"'"; trap exiting_function EXIT; exit '"${EXIT_TEST_STATUS}" 2>&1) "
+  OUTPUT+="${EXIT_TEST_STATUS}/${EXIT_TEST_PID:-none}:$(bash -c 'for FUNC in exiting_function descendant_pids stop_background_jobs; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; exporting_run_report() { echo REPORT; }; SCRIPTS_HOME="'"${WORK_DIR}"'/exitvenv"; METRICS_SAMPLING_PID="'"${EXIT_TEST_PID}"'"; trap exiting_function EXIT; exit '"${EXIT_TEST_STATUS}" 2>&1) "
 done
 assert_contains "an error exit writes the report; success, Ctrl+C and an exit before the metrics do not" "${OUTPUT}" "1/123:REPORT 0/123: 130/123: 1/none: "
 if grep -q '^trap "exiting_function" EXIT' "${REPO_ROOT}/interpolation_nncn"; then pass "the EXIT trap is exiting_function"; else fail "the EXIT trap is exiting_function"; fi

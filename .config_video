@@ -2199,7 +2199,7 @@ starting_part_encoding()
     while kill -0 "${PART_HANDBRAKE_PID}" 2>/dev/null
     do
       sleep "${HANDBRAKE_WATCH_INTERVAL_SEC:-5}"
-      PART_PROGRESS="$(tail -c 400 "${PART_ENCODING_LOG}" 2>/dev/null | tr '\r' '\n' | grep -a "Encoding:" | tail -n1 | sed -n 's/^.*, \([0-9.]*\) %.*$/\1/p')~$(wc -c < "${PART_VIDEO_FILE}" 2>/dev/null)"
+      PART_PROGRESS="$(tail -c 400 "${PART_ENCODING_LOG}" 2>/dev/null | tr '\r' '\n' | grep -a "Encoding:" | tail -n1 | sed -n 's/^.*, \([0-9.]*\) %.*$/\1/p')~$(wc -c 2>/dev/null < "${PART_VIDEO_FILE}")"
       if [[ ${PART_PROGRESS} != "${PART_PROGRESS_LAST}" ]]
       then
         PART_PROGRESS_LAST="${PART_PROGRESS}"
@@ -2337,10 +2337,11 @@ finishing_part_encoding()
   # line 2: the profile, so -r can warn when the parts of one movie get different profiles
   printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" "${OPTIMIZATION}" > "${PART_ENCODED_FILE}.done"
   inf "    final encoding of ${YELLOW}${PART_MERGED_FILE}${CYAN} took ${DARKCYAN}${ENCODING_RUNTIME}"
-  # the encoded part replaces the merged one (kept with -k)
+  # the encoded part replaces the merged one (kept with -k); its marker goes with it, because
+  # the encoded part's marker is written first and a marker without its file is never used
   if [[ ${KEEP_INTERMEDIATES} == no ]]
   then
-    rm -f -- "${PART_MERGED_FILE}"
+    rm -f -- "${PART_MERGED_FILE}" "${PART_MERGED_FILE}.done"
   fi
   }
 
