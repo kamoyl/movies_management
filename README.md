@@ -301,6 +301,7 @@ Details:
 - Each chunk's frame count is the number of decoded frames, not packets, so the count always matches the extracted frames.
 - A chunk that starts after an open split has no video for its first frames (they were recovered into the previous chunk), so its processed video is placed at the time of its first decoded frame (`mkvmerge --sync`), and picture and sound stay in sync. This also fixes a source whose video does not start at 0 (for example 83 ms), which before led the sound by that much.
 - The chosen points are saved in `<movie>_split_points.txt` in the current directory. With `-r`, or `-s` other than `001`, the run stops with exit 2 if the existing chunks were split at other points, or by an older version (chunks marked `.done` but no points file). Then start the movie again with `-F`. Without `-k` the file is removed after the `-E` join.
+- Line 2 of that file is a fingerprint: the input's size and modification time and the split settings (`SPLIT_TIME_SEC`, `SPLIT_KEYFRAME_WINDOW_SEC`). A resumed run whose fingerprint still matches reuses the saved points and skips the scan (about 90 s for a 4K episode). With `-F`, a changed input or changed settings, or a file of an older version (one line), the points are chosen again.
 
 ### Final encode of each part (`-E`)
 
@@ -622,6 +623,9 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - The report is named after the movie: `TMP/<movie>_report.xlsx` (plain `report.xlsx` if the run stopped before the movie name was known).
     - Decided against: keeping the `.done` state in the mkv metadata instead of marker files. A marker is written at once, is cheap to check and easy to see, and also holds the movie name and the profile; tagging would rewrite a 1–2 GB part in place.
     - Checked, no change: the shrinking available memory was not a leak. HandBrake stayed at about 16 GB for 5 hours; the 11 qemu VMs on the host (39 GB configured) grow towards their full size after a boot, which left about 19 GB for HandBrake, NCNN and ffmpeg.
+24. **Split points reused on resume** (the user noticed the scan ran again on every resume).
+    - `choosing_split_points` read all video packets and decoded all keyframes of the whole movie on every run, about 90 s for a 4K episode, although `<movie>_split_points.txt` was only used as a check. Now `checking_split_points_file` also writes a fingerprint (input size, modification time, `SPLIT_TIME_SEC`, `SPLIT_KEYFRAME_WINDOW_SEC`) as line 2, and `reusing_split_points` takes the saved points when it still matches. Size and mtime were chosen over a checksum: hashing a 20–60 GB movie would cost more time than the scan it saves. Files of older versions have no line 2, so they are scanned once more and then rewritten.
+    - The whole movie is still split by mkvmerge on every run; extracting chunks only when needed is in Planned item 4.
 
 ### Codec benchmark
 
@@ -689,7 +693,9 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 4. **Smaller items:**
    - replace fixed sleeps (`sleep 5` in extraction, `sleep 10` in the chunk loop, other 1–3 s sleeps) with event-based waits;
    - lower the PNG `-compression_level` (faster writes, larger files);
-   - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item).
+   - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item);
+   - cut each chunk from the movie only when it is needed (`mkvmerge --split parts:`, in the background for the next chunk), instead of splitting the whole movie on every run; first prove it cuts the same frames as the split now (estimate: 1.5–2 sessions);
+   - encode-only mode with `-N none` (no interpolation), so `movies_encoding`-style encodes use the same chunked pipeline; compare chunked and whole-file encoding once.
 5. **Research: interpolation above 8 bits (keep HDR without tone mapping).** Today an HDR source must be tone mapped to 8-bit SDR before NCNN. The limit is in rife-ncnn-vulkan's input/output, not in the network:
    - `main.cpp` loads images with `stbi_load_from_memory(…, 3)` (8 bits per channel), so a 10/16-bit PNG is cut to 8 bits on load; `stbi_write_png` writes 8 bits;
    - the GPU shaders convert `uint8` ↔ float: `rife_preproc.comp` multiplies by `1/255`, `rife_postproc.comp` by `255` and clamps to `0..255`;

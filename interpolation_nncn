@@ -937,8 +937,12 @@ fi
 SPLIT_TIMESTAMPS=""
 if [ "${VIDEO_LENGTH}" -gt "${NO_SPLIT_MAX_SEC}" ]
 then
-  # sets SPLIT_TIMESTAMPS: keyframes starting a closed GOP, so no frame is lost at a split
-  choosing_split_points "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
+  # sets SPLIT_TIMESTAMPS: keyframes starting a closed GOP, so no frame is lost at a split;
+  # a resumed run reuses the saved points while the input and the split settings are unchanged
+  if ! reusing_split_points "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
+  then
+    choosing_split_points "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
+  fi
   if [ -z "${SPLIT_TIMESTAMPS}" ]
   then
     warn "  no keyframe to split ${YELLOW}${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv${YELLOW} at, so it is processed as one chunk"

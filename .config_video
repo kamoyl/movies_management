@@ -2010,9 +2010,51 @@ choosing_split_points()
   fi
   }
 
+# Prints what the split points depend on: the input's size and modification time and the split
+# settings. Saved as line 2 of "<movie>_split_points.txt", so a later run can reuse the points.
+split_points_fingerprint()
+{
+  local VIDEO_FILE="${1}"
+  local SIZE_MTIME
+  if [[ "${OSTYPE}" =~ "darwin" ]]
+  then
+    SIZE_MTIME="$(stat -f '%z %m' "${VIDEO_FILE}" 2>/dev/null)"
+  else
+    SIZE_MTIME="$(stat -c '%s %Y' "${VIDEO_FILE}" 2>/dev/null)"
+  fi
+  echo "input ${SIZE_MTIME:-unknown}, split ${SPLIT_TIME_SEC}s, window ${SPLIT_KEYFRAME_WINDOW_SEC:-10}s"
+  }
+
+# Sets SPLIT_TIMESTAMPS from "<movie>_split_points.txt" of an earlier run when its fingerprint
+# (line 2) still matches, so a resumed run skips the scan of choosing_split_points (~90 s for a
+# 4K episode). Returns 1 when the points have to be chosen: -F, no file, an older file without
+# fingerprint, or a changed input or split settings.
+reusing_split_points()
+{
+  local VIDEO_FILE="${1}"
+  local SPLIT_POINTS_FILE="${WHOLE_MOVIE_NAME_ARRAY[*]}_split_points.txt"
+  local SAVED_POINTS
+  if [[ ${FRESH_START} == yes ]] || [ ! -s "${SPLIT_POINTS_FILE}" ]
+  then
+    return 1
+  fi
+  if [[ "$(sed -n 2p "${SPLIT_POINTS_FILE}")" != "$(split_points_fingerprint "${VIDEO_FILE}")" ]]
+  then
+    return 1
+  fi
+  SAVED_POINTS="$(head -n1 "${SPLIT_POINTS_FILE}")"
+  SPLIT_TIMESTAMPS=""
+  if [[ ${SAVED_POINTS} != none ]]
+  then
+    SPLIT_TIMESTAMPS="${SAVED_POINTS}"
+  fi
+  inf "  split points reused from ${YELLOW}${SPLIT_POINTS_FILE}${CYAN} (input and split settings unchanged)"
+  }
+
 # A resumed run (the default) or -s may continue only with chunks split at the same points (an
 # older version split at plain 60 s keyframes). The points are kept in "<movie>_split_points.txt"
-# next to the chunks; -F removes the file (from chunk 001) before this check.
+# next to the chunks (line 1; line 2 is the fingerprint for reusing_split_points); -F removes the
+# file (from chunk 001) before this check.
 checking_split_points_file()
 {
   local SPLIT_POINTS_FILE="${WHOLE_MOVIE_NAME_ARRAY[*]}_split_points.txt"
@@ -2023,7 +2065,7 @@ checking_split_points_file()
   then
     if [ -e "${SPLIT_POINTS_FILE}" ]
     then
-      if [[ "$(cat "${SPLIT_POINTS_FILE}")" != "${NEW_SPLIT_POINTS}" ]]
+      if [[ "$(head -n1 "${SPLIT_POINTS_FILE}")" != "${NEW_SPLIT_POINTS}" ]]
       then
         error "  the finished chunks were split at other points (see ${SPLIT_POINTS_FILE}), so they cannot be continued; start the movie again with -F (from scratch)"
         ERROR_CODE="2"
@@ -2043,7 +2085,7 @@ checking_split_points_file()
       done
     fi
   fi
-  echo "${NEW_SPLIT_POINTS}" > "${SPLIT_POINTS_FILE}"
+  printf '%s\n%s\n' "${NEW_SPLIT_POINTS}" "$(split_points_fingerprint "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv")" > "${SPLIT_POINTS_FILE}"
   }
 
 # Warns (only) when memory may run short for a final encode alongside the next chunk, as when the

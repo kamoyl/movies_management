@@ -293,6 +293,14 @@ OUTPUT="$(run_with_helpers "${GUARD_SETUP}"'; RESUME=yes; echo "60.000s" > Film_
 assert_contains "other split points: the run says to start with -F" "${OUTPUT}" "start the movie again with -F"
 run_with_helpers "${GUARD_SETUP}"'; RESUME=yes; printf "Film\nfilm\n" > video_part_minute_001_rife_48_encoded.mkv.done; checking_split_points_file' > /dev/null 2>&1
 assert_status "an older version's encoded marker (two lines) is recognized" 2 $?
+REUSE_SETUP='WHOLE_MOVIE_NAME_ARRAY=(Film); SPLIT_TIME_SEC=60; FRESH_START=no; RESUME=yes; SPLIT_PART_START=001; rm -f Film_split_points.txt video_part_minute_*.done; echo movie > Film.mkv; touch -d "2026-01-01 00:00" Film.mkv'
+OUTPUT="$(run_with_helpers "${REUSE_SETUP}"'; SPLIT_TIMESTAMPS="62.000s,121.500s"; checking_split_points_file; SPLIT_TIMESTAMPS=""; if reusing_split_points Film.mkv; then echo "SAME=${SPLIT_TIMESTAMPS}"; fi; FRESH_START=yes; reusing_split_points Film.mkv || echo "F=scan"; FRESH_START=no; SPLIT_TIME_SEC=30; reusing_split_points Film.mkv || echo "SETTINGS=scan"; SPLIT_TIME_SEC=60; touch Film.mkv; reusing_split_points Film.mkv || echo "TOUCHED=scan"; echo 62.000s > Film_split_points.txt; reusing_split_points Film.mkv || echo "OLD=scan"; RESUME=no; SPLIT_TIMESTAMPS=""; checking_split_points_file; SPLIT_TIMESTAMPS=x; reusing_split_points Film.mkv && echo "NONE=[${SPLIT_TIMESTAMPS}]"; rm -f Film.mkv Film_split_points.txt' 2>&1)"
+assert_contains "a resumed run reuses the saved split points of an unchanged input" "${OUTPUT}" "SAME=62.000s,121.500s"
+assert_contains "-F chooses the split points again" "${OUTPUT}" "F=scan"
+assert_contains "changed split settings choose the split points again" "${OUTPUT}" "SETTINGS=scan"
+assert_contains "a changed input (mtime) chooses the split points again" "${OUTPUT}" "TOUCHED=scan"
+assert_contains "an older points file without fingerprint chooses the split points again" "${OUTPUT}" "OLD=scan"
+assert_contains "a saved 'none' is reused as no split points" "${OUTPUT}" "NONE=[]"
 
 echo "removing_earlier_results (-F)"
 FRESH_SETUP='eval "$(sed -n "/^removing_earlier_results()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; WHOLE_MOVIE_NAME_ARRAY=(My Film); NCNN_METHOD=rife; rm -rf fresh; mkdir fresh; cd fresh || exit 99; for N in 001 002 003; do echo part > video_part_minute_${N}_rife_48_merged.mkv; echo "My Film" > video_part_minute_${N}_rife_48_merged.mkv.done; echo part > video_part_minute_${N}_rife_48_encoded.mkv; printf "My Film\nfilm\n" > video_part_minute_${N}_rife_48_encoded.mkv.done; done; echo Other > video_part_minute_003_rife_48_merged.mkv.done; echo "My Film" > video_part_minute_002_dain_48_merged.mkv.done; echo pts > "My Film_split_points.txt"; echo part > "My Film_rife_48_merged.mkv"; echo "My Film" > "My Film_rife_48_merged.mkv.done"'
