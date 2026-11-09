@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- README: on-demand chunk cutting measured and rejected, background split planned ([4707e15](https://github.com/kamoyl/movies_management/commit/4707e1551f85b27c407662c3f080468c2d665e9a) by Kamoyl).
 - Reuse split points on resume when input and settings are unchanged ([ba94408](https://github.com/kamoyl/movies_management/commit/ba94408c5ceb798efc91cbbfef50e431519895a8) by Kamoyl).
 - Make interpolation_nncn safe to edit during a run, GPU-lost hint, report name ([c01080b](https://github.com/kamoyl/movies_management/commit/c01080b8b29128def3a6a04ed47e6b8d3964bbff) by Kamoyl).
 - Ctrl+C stops grandchildren, merged marker removed with its part, no stray wc error ([d2d1bd1](https://github.com/kamoyl/movies_management/commit/d2d1bd1741cff515a870a29743cc46510eadeeb9) by Kamoyl).
