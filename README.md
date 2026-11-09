@@ -625,7 +625,7 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - Checked, no change: the shrinking available memory was not a leak. HandBrake stayed at about 16 GB for 5 hours; the 11 qemu VMs on the host (39 GB configured) grow towards their full size after a boot, which left about 19 GB for HandBrake, NCNN and ffmpeg.
 24. **Split points reused on resume** (the user noticed the scan ran again on every resume).
     - `choosing_split_points` read all video packets and decoded all keyframes of the whole movie on every run, about 90 s for a 4K episode, although `<movie>_split_points.txt` was only used as a check. Now `checking_split_points_file` also writes a fingerprint (input size, modification time, `SPLIT_TIME_SEC`, `SPLIT_KEYFRAME_WINDOW_SEC`) as line 2, and `reusing_split_points` takes the saved points when it still matches. Size and mtime were chosen over a checksum: hashing a 20–60 GB movie would cost more time than the scan it saves. Files of older versions have no line 2, so they are scanned once more and then rewritten.
-    - The whole movie is still split by mkvmerge on every run; extracting chunks only when needed is in Planned item 4.
+    - The whole movie is still split by mkvmerge on every run; starting the first chunk while the split is still running is in Planned item 4.
 
 ### Codec benchmark
 
@@ -694,7 +694,9 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
    - replace fixed sleeps (`sleep 5` in extraction, `sleep 10` in the chunk loop, other 1–3 s sleeps) with event-based waits;
    - lower the PNG `-compression_level` (faster writes, larger files);
    - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item);
-   - cut each chunk from the movie only when it is needed (`mkvmerge --split parts:`, in the background for the next chunk), instead of splitting the whole movie on every run; first prove it cuts the same frames as the split now (estimate: 1.5–2 sessions);
+   - start chunk 001 while the whole movie is still being split (decided 2026-11-09, option A; about 1 session): run the existing `mkvmerge --split timestamps:` in the background and let chunk N start once `video_part_minute_(N+2).mkv` exists or mkvmerge has ended (N+1 is needed complete for the open-GOP recovery; strace showed mkvmerge closes a chunk before it opens the next one); then check its exit code and that it wrote one chunk more than there are split points. Saves the split time on every run (104 s for a 20 GB movie, 2.8 s for a cached 2.8 GB episode). Rejected on the way:
+     - cutting each chunk on demand with `mkvmerge --split parts:`: the packets are identical (5 Kindred chunks, 4 Indiana Jones chunks around open-GOP splits, checked with `ffmpeg -c copy -f framemd5`), but mkvmerge reads the movie from the start for every cut (20 GB movie: 6.7 s at 10 %, 53 s at 50 %, 74 s at 90 %), so all chunks would take over an hour;
+     - `ffmpeg -ss … -c copy`: seeks in 0.15 s, but its chunks have other packets (6727 against 5519);
    - encode-only mode with `-N none` (no interpolation), so `movies_encoding`-style encodes use the same chunked pipeline; compare chunked and whole-file encoding once.
 5. **Research: interpolation above 8 bits (keep HDR without tone mapping).** Today an HDR source must be tone mapped to 8-bit SDR before NCNN. The limit is in rife-ncnn-vulkan's input/output, not in the network:
    - `main.cpp` loads images with `stbi_load_from_memory(…, 3)` (8 bits per channel), so a 10/16-bit PNG is cut to 8 bits on load; `stbi_write_png` writes 8 bits;
