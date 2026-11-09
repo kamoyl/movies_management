@@ -301,6 +301,36 @@ assert_contains "changed split settings choose the split points again" "${OUTPUT
 assert_contains "a changed input (mtime) chooses the split points again" "${OUTPUT}" "TOUCHED=scan"
 assert_contains "an older points file without fingerprint chooses the split points again" "${OUTPUT}" "OLD=scan"
 assert_contains "a saved 'none' is reused as no split points" "${OUTPUT}" "NONE=[]"
+mkdir -p "${WORK_DIR}/bgsplitbin"
+cat > "${WORK_DIR}/bgsplitbin/mkvmerge" <<'EOF'
+#!/bin/bash
+for N in $(seq 1 "${FAKE_CHUNKS:-4}")
+do
+  F="$(printf 'video_part_minute_%03d.mkv' "${N}")"
+  echo "The file '${F}' has been opened for writing."
+  echo chunk > "${F}"
+  if [ "${N}" -eq 3 ]
+  then
+    sleep "${FAKE_PAUSE:-0}"
+  fi
+done
+exit "${FAKE_STATUS:-0}"
+EOF
+chmod +x "${WORK_DIR}/bgsplitbin/mkvmerge"
+BGSPLIT_SETUP='rm -rf bgsplit; mkdir bgsplit; cd bgsplit || exit 99; SPLIT_TIME_SEC=60; SPLIT_PART_START=001; SPLIT_TIMESTAMPS="60s,120s,180s"; LAST_VIDEO_FRAGMENT_ID=004'
+OUTPUT="$(FAKE_PAUSE=3 PATH="${WORK_DIR}/bgsplitbin:${PATH}" run_with_helpers "${BGSPLIT_SETUP}"'; starting_split m.mkv split.log; waiting_for_split_chunk 001; echo "FIRST: DONE=${SPLITTING_DONE} RUNNING=$(ps -p "${SPLITTING_PID}" > /dev/null && echo yes)"; waiting_for_split_chunk 004; echo "LAST: DONE=${SPLITTING_DONE} FILES=$(ls video_part_minute_* | tr "\n" " ")"' 2>&1)"
+assert_contains "chunk 001 starts while the split is still running" "${OUTPUT}" "FIRST: DONE=no RUNNING=yes"
+assert_contains "the last chunk waits for the end of the split, which is checked" "${OUTPUT}" "LAST: DONE=yes FILES=video_part_minute_001.mkv video_part_minute_002.mkv video_part_minute_003.mkv video_part_minute_004.mkv "
+OUTPUT="$(PATH="${WORK_DIR}/bgsplitbin:${PATH}" run_with_helpers "${BGSPLIT_SETUP}"'; SPLIT_PART_START=003; starting_split m.mkv split.log; waiting_for_split_chunk 003; waiting_for_split_chunk 004; echo "FILES=$(ls video_part_minute_* | tr "\n" " ")"' 2>&1)"
+assert_contains "-s: the chunks before it are removed when the split ends" "${OUTPUT}" "FILES=video_part_minute_003.mkv video_part_minute_004.mkv "
+OUTPUT="$(FAKE_STATUS=2 PATH="${WORK_DIR}/bgsplitbin:${PATH}" run_with_helpers "${BGSPLIT_SETUP}"'; starting_split m.mkv split.log; waiting_for_split_chunk 004; echo "NOT STOPPED"' 2>&1)"; STATUS=$?
+assert_status   "a failed background split stops the run with 1" 1 "${STATUS}"
+assert_contains "a failed background split is reported with mkvmerge's exit code" "${OUTPUT}" "failed with exit code"
+OUTPUT="$(FAKE_CHUNKS=3 PATH="${WORK_DIR}/bgsplitbin:${PATH}" run_with_helpers "${BGSPLIT_SETUP}"'; starting_split m.mkv split.log; waiting_for_split_chunk 004; echo "NOT STOPPED"' 2>&1)"; STATUS=$?
+assert_status   "a split with another number of chunks stops the run with 1" 1 "${STATUS}"
+assert_contains "a split with another number of chunks says which" "${OUTPUT}" "the split ended with chunk '003', expected 004"
+OUTPUT="$(FAKE_PAUSE=3 PATH="${WORK_DIR}/bgsplitbin:${PATH}" run_with_helpers "${BGSPLIT_SETUP}"'; PART_ENCODING_PID=""; QUALITY_METRIC_CHECK_PID=""; METRICS_SAMPLING_PID=""; starting_split m.mkv split.log; sleep 0.5; waiting_for_chunk_steps; echo "STEPS: RUNNING=$(ps -p "${SPLITTING_PID}" > /dev/null && echo yes)"; waiting_for_split_chunk 004' 2>&1)"
+assert_contains "waiting for a chunk's steps does not wait for the background split" "${OUTPUT}" "STEPS: RUNNING=yes"
 
 echo "removing_earlier_results (-F)"
 FRESH_SETUP='eval "$(sed -n "/^removing_earlier_results()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; WHOLE_MOVIE_NAME_ARRAY=(My Film); NCNN_METHOD=rife; rm -rf fresh; mkdir fresh; cd fresh || exit 99; for N in 001 002 003; do echo part > video_part_minute_${N}_rife_48_merged.mkv; echo "My Film" > video_part_minute_${N}_rife_48_merged.mkv.done; echo part > video_part_minute_${N}_rife_48_encoded.mkv; printf "My Film\nfilm\n" > video_part_minute_${N}_rife_48_encoded.mkv.done; done; echo Other > video_part_minute_003_rife_48_merged.mkv.done; echo "My Film" > video_part_minute_002_dain_48_merged.mkv.done; echo pts > "My Film_split_points.txt"; echo part > "My Film_rife_48_merged.mkv"; echo "My Film" > "My Film_rife_48_merged.mkv.done"'

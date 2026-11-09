@@ -987,14 +987,14 @@ merging_streams_mkv()
   }
 
 # waits for this chunk's background steps; a bare "wait" would also wait for the previous chunk's
-# final encode (-E) and VMAF (-Q), which are meant to run alongside this chunk, and for the
-# metrics sampling, which never ends by itself
+# final encode (-E) and VMAF (-Q), which are meant to run alongside this chunk, for the background
+# split of the movie (starting_split), and for the metrics sampling, which never ends by itself
 waiting_for_chunk_steps()
 {
   local JOB_PID
   for JOB_PID in $(jobs -p)
   do
-    if [[ ${JOB_PID} != "${PART_ENCODING_PID}" ]] && [[ ${JOB_PID} != "${QUALITY_METRIC_CHECK_PID}" ]] && [[ ${JOB_PID} != "${METRICS_SAMPLING_PID}" ]]
+    if [[ ${JOB_PID} != "${PART_ENCODING_PID}" ]] && [[ ${JOB_PID} != "${QUALITY_METRIC_CHECK_PID}" ]] && [[ ${JOB_PID} != "${METRICS_SAMPLING_PID}" ]] && [[ ${JOB_PID} != "${SPLITTING_PID:-}" ]]
     then
       wait "${JOB_PID}"
     fi
@@ -2086,6 +2086,64 @@ checking_split_points_file()
     fi
   fi
   printf '%s\n%s\n' "${NEW_SPLIT_POINTS}" "$(split_points_fingerprint "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv")" > "${SPLIT_POINTS_FILE}"
+  }
+
+# The movie is split in the background, so chunk 001 starts while later chunks are still being
+# written (the split took 104 s for a 20 GB movie). mkvmerge writes a chunk, closes it and only
+# then opens the next one (checked with strace), so an existing chunk N+1 means chunk N is complete.
+# starting_split VIDEO_FILE LOG_FILE - sets SPLITTING_PID; LAST_VIDEO_FRAGMENT_ID must be set.
+starting_split()
+{
+  SPLITTING_LOG="${2}"
+  SPLITTING_DONE="no"
+  mkvmerge -o "video_part_minute_%03d.mkv" --split "timestamps:${SPLIT_TIMESTAMPS}" "${1}" > "${SPLITTING_LOG}" 2>&1 &
+  SPLITTING_PID=$!
+  }
+
+# waiting_for_split_chunk CHUNK_ID - returns when chunk CHUNK_ID and the one after it are complete
+# (the open-GOP recovery reads the start of the next chunk): once chunk CHUNK_ID+2 exists, or the
+# split has ended (then finishing_split checks it first).
+waiting_for_split_chunk()
+{
+  local AFTER_NEXT_CHUNK
+  AFTER_NEXT_CHUNK="$(printf "video_part_minute_%03d.mkv" "$((10#${1} + 2))")"
+  while [[ ${SPLITTING_DONE} != yes ]] && [ ! -e "${AFTER_NEXT_CHUNK}" ]
+  do
+    if ps -p "${SPLITTING_PID}" > /dev/null 2>&1
+    then
+      sleep 1
+    else
+      finishing_split
+    fi
+  done
+  }
+
+# Checks the ended background split: stops the run when mkvmerge failed, or when it did not end
+# with chunk LAST_VIDEO_FRAGMENT_ID (one more than the split points; with more chunks the end of the
+# movie would be missing silently). Then removes the chunks before -s, which are not processed.
+finishing_split()
+{
+  local STATUS
+  local LAST_WRITTEN
+  local CHUNK_ID
+  wait "${SPLITTING_PID}"
+  STATUS=$?
+  SPLITTING_DONE="yes"
+  mkvtoolnix_status "${STATUS}" "splitting video into chunks of about ${SPLIT_TIME_SEC}s" "${SPLITTING_LOG}"
+  LAST_WRITTEN="$(grep "video_part_minute_" "${SPLITTING_LOG}" | tail -n1 | sed "s/\.mkv.*$//g;s/^.*_minute_//g")"
+  if [[ ${LAST_WRITTEN} != "${LAST_VIDEO_FRAGMENT_ID}" ]]
+  then
+    error "  the split ended with chunk '${LAST_WRITTEN}', expected ${LAST_VIDEO_FRAGMENT_ID} (one more than the split points), see log: ${SPLITTING_LOG}"
+    ERROR_CODE="1"
+    failed
+  fi
+  for CHUNK_ID in $(seq -w 001 "${LAST_VIDEO_FRAGMENT_ID}")
+  do
+    if [ $((10#${CHUNK_ID})) -lt $((10#${SPLIT_PART_START:-001})) ]
+    then
+      rm -f -- "video_part_minute_${CHUNK_ID}.mkv"
+    fi
+  done
   }
 
 # Warns (only) when memory may run short for a final encode alongside the next chunk, as when the
