@@ -3,6 +3,10 @@
 # ToDo and history: README.md, "Planned (in agreed order)" and "Early ToDo list"
 # Documentation and helpers (links, GPU tuning, HDR/SDR, tone mapping, VMAF): see README.md, "Interpolation reference notes"
 
+# Bash reads a running script from the file piece by piece, so editing it during a run (even indentation)
+# made bash continue mid-line ("syntax error near unexpected token"). Inside { ... exit; } the whole
+# script is read before anything runs, so it can be edited safely. The body is deliberately not indented.
+{
 if [[ "${OSTYPE}" =~ "linux" ]]
 then
   SCRIPT=$(readlink -f "$0")
@@ -510,19 +514,25 @@ compressing_run_logs()
   inf "    logs are compressed (gzip), read them with zless or zgrep: ${YELLOW}${LOG}"
   }
 
-# Writes the run's metrics, timeline and statistics with charts into ${TMP}/report.xlsx
-# (metrics_to_excel.py). The Python environment (.venv in the repository, with xlsxwriter) is
+# Writes the run's metrics, timeline and statistics with charts into ${TMP}/<movie>_report.xlsx
+# (metrics_to_excel.py; plain report.xlsx if the run stopped before the movie name was known).
+# The Python environment (.venv in the repository, with xlsxwriter) is
 # prepared on first use; without it the report is skipped, the run is not affected.
 exporting_run_report()
 {
+  local REPORT="${TMP}/report.xlsx"
+  if [ -n "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]
+  then
+    REPORT="${TMP}/${WHOLE_MOVIE_NAME_ARRAY[*]}_report.xlsx"
+  fi
   if ! python_venv_preparing "${SCRIPTS_HOME}/.venv" xlsxwriter
   then
     warn "    no report: the Python environment could not be prepared, see ${BLUE}${LOG}/python_venv_preparing.log"
     return
   fi
-  if "${SCRIPTS_HOME}/.venv/bin/python3" "${SCRIPTS_HOME}/metrics_to_excel.py" "${TMP}" "${TMP}/report.xlsx" > "${LOG}/metrics_to_excel.log" 2>&1
+  if "${SCRIPTS_HOME}/.venv/bin/python3" "${SCRIPTS_HOME}/metrics_to_excel.py" "${TMP}" "${REPORT}" > "${LOG}/metrics_to_excel.log" 2>&1
   then
-    inf "    report with charts: ${YELLOW}${TMP}/report.xlsx"
+    inf "    report with charts: ${YELLOW}${REPORT}"
   else
     warn "    no report: metrics_to_excel.py failed, see ${BLUE}${LOG}/metrics_to_excel.log"
   fi
@@ -981,200 +991,199 @@ then
   done
 fi
 
-  echo "video_id~extracting_streams_runtime~extracting_frames_runtime~interpolating_runtime~merging_frames_runtime~merging_streams_runtime~encoding_runtime~quality_check_runtime~max_space [GB]~max_space [%]~VMAF [mean]~runtime" > "${TMP}/statistics.txt"
-  echo "video_id~step~start~end~start_epoch~end_epoch~duration [s]~chunk [%]" > "${TMP}/timeline.csv"
-  for VIDEO_FRAGMENT_ID in $(seq -w ${SPLIT_PART_START} ${LAST_VIDEO_FRAGMENT_ID})
-  do
-    start_time_collecting
-    START_TIME_FRAGMENT_ID=${START_TIME}
-    IN_DIR="in_${VIDEO_FRAGMENT_ID}"
-    OUT_DIR="out_${VIDEO_FRAGMENT_ID}"
-    export IN_DIR
-    export OUT_DIR
-    if [[ ${RESUME} == yes ]]
+echo "video_id~extracting_streams_runtime~extracting_frames_runtime~interpolating_runtime~merging_frames_runtime~merging_streams_runtime~encoding_runtime~quality_check_runtime~max_space [GB]~max_space [%]~VMAF [mean]~runtime" > "${TMP}/statistics.txt"
+echo "video_id~step~start~end~start_epoch~end_epoch~duration [s]~chunk [%]" > "${TMP}/timeline.csv"
+for VIDEO_FRAGMENT_ID in $(seq -w ${SPLIT_PART_START} ${LAST_VIDEO_FRAGMENT_ID})
+do
+  start_time_collecting
+  START_TIME_FRAGMENT_ID=${START_TIME}
+  IN_DIR="in_${VIDEO_FRAGMENT_ID}"
+  OUT_DIR="out_${VIDEO_FRAGMENT_ID}"
+  export IN_DIR
+  export OUT_DIR
+  if [[ ${RESUME} == yes ]]
+  then
+    # the .done marker is written only after a chunk fully succeeded, so a half-written
+    # _merged.mkv from an interrupted run is never mistaken for a finished one
+    # shellcheck disable=SC2206 # the unquoted * is intentional: the glob finds the marker whatever the fps
+    if [[ ${WHOLE_VIDEO_IN_ONE_CHUNK} == yes ]]
     then
-      # the .done marker is written only after a chunk fully succeeded, so a half-written
-      # _merged.mkv from an interrupted run is never mistaken for a finished one
-      # shellcheck disable=SC2206 # the unquoted * is intentional: the glob finds the marker whatever the fps
-      if [[ ${WHOLE_VIDEO_IN_ONE_CHUNK} == yes ]]
+      # results of an unsplit video were already renamed to the input name
+      # shellcheck disable=SC2206
+      FINISHED_CHUNK_MARKERS=("${WHOLE_MOVIE_NAME_ARRAY[*]}"_${NCNN_METHOD}_*_merged.mkv.done)
+    else
+      # shellcheck disable=SC2206
+      FINISHED_CHUNK_MARKERS=(video_part_minute_${VIDEO_FRAGMENT_ID}_${NCNN_METHOD}_*_merged.mkv.done)
+    fi
+    if [[ ${FINAL_ENCODING} == yes ]]
+    then
+      # with -E a chunk is fully finished when its final encode is; its merged part may be removed
+      # shellcheck disable=SC2206
+      FINISHED_ENCODED_MARKERS=(video_part_minute_${VIDEO_FRAGMENT_ID}_${NCNN_METHOD}_*_encoded.mkv.done)
+      if [ -e "${FINISHED_ENCODED_MARKERS[0]}" ] && [ -s "${FINISHED_ENCODED_MARKERS[0]%.done}" ] && [[ "$(head -n1 "${FINISHED_ENCODED_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
       then
-        # results of an unsplit video were already renamed to the input name
-        # shellcheck disable=SC2206
-        FINISHED_CHUNK_MARKERS=("${WHOLE_MOVIE_NAME_ARRAY[*]}"_${NCNN_METHOD}_*_merged.mkv.done)
-      else
-        # shellcheck disable=SC2206
-        FINISHED_CHUNK_MARKERS=(video_part_minute_${VIDEO_FRAGMENT_ID}_${NCNN_METHOD}_*_merged.mkv.done)
-      fi
-      if [[ ${FINAL_ENCODING} == yes ]]
-      then
-        # with -E a chunk is fully finished when its final encode is; its merged part may be removed
-        # shellcheck disable=SC2206
-        FINISHED_ENCODED_MARKERS=(video_part_minute_${VIDEO_FRAGMENT_ID}_${NCNN_METHOD}_*_encoded.mkv.done)
-        if [ -e "${FINISHED_ENCODED_MARKERS[0]}" ] && [ -s "${FINISHED_ENCODED_MARKERS[0]%.done}" ] && [[ "$(head -n1 "${FINISHED_ENCODED_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
+        inf "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${CYAN} already finished and encoded (${FINISHED_ENCODED_MARKERS[0]%.done}), skipping"
+        ENCODED_PROFILE="$(encoded_part_profile "${FINISHED_ENCODED_MARKERS[0]}")"
+        if [[ ${ENCODED_PROFILE} != "${OPTIMIZATION}" ]]
         then
-          inf "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${CYAN} already finished and encoded (${FINISHED_ENCODED_MARKERS[0]%.done}), skipping"
-          ENCODED_PROFILE="$(encoded_part_profile "${FINISHED_ENCODED_MARKERS[0]}")"
-          if [[ ${ENCODED_PROFILE} != "${OPTIMIZATION}" ]]
-          then
-            # chunks are split again on every run, so without the marker the chunk is processed again
-            warn "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${WINE} was encoded with profile ${YELLOW}${ENCODED_PROFILE}${WINE}, this run uses ${YELLOW}${OPTIMIZATION}${WINE}; to encode it with ${OPTIMIZATION}, remove ${FINISHED_ENCODED_MARKERS[0]} and run again with -E"
-          fi
-          rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
-          continue
+          # chunks are split again on every run, so without the marker the chunk is processed again
+          warn "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${WINE} was encoded with profile ${YELLOW}${ENCODED_PROFILE}${WINE}, this run uses ${YELLOW}${OPTIMIZATION}${WINE}; to encode it with ${OPTIMIZATION}, remove ${FINISHED_ENCODED_MARKERS[0]} and run again with -E"
         fi
-      fi
-      if [ -e "${FINISHED_CHUNK_MARKERS[0]}" ] && [ -s "${FINISHED_CHUNK_MARKERS[0]%.done}" ] && [[ "$(cat "${FINISHED_CHUNK_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
-      then
-        if [[ ${FINAL_ENCODING} == yes ]]
-        then
-          # processed earlier, but not encoded yet (an earlier run without -E, or a failed encode):
-          # only the final encode is started, without VMAF (the chunk's frame data is not analysed)
-          inf "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${CYAN} already finished (${FINISHED_CHUNK_MARKERS[0]%.done}), only its final encode is started"
-          finishing_previous_chunk
-          stopping_after_failed_encode
-          RESUMED_MERGED_FILE="${FINISHED_CHUNK_MARKERS[0]%.done}"
-          # <fps>_merged.mkv, also for an unsplit video whose results got the input name
-          RESUMED_MERGED_SUFFIX="${RESUMED_MERGED_FILE##*_${NCNN_METHOD}_}"
-          starting_part_encoding "${RESUMED_MERGED_FILE}" "video_part_minute_${VIDEO_FRAGMENT_ID}_${NCNN_METHOD}_${RESUMED_MERGED_SUFFIX%_merged.mkv}_encoded.mkv" ""
-          PENDING_CHUNK_ID="${VIDEO_FRAGMENT_ID}"
-          PENDING_STATISTICS_ROW="no"
-        else
-          inf "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${CYAN} already finished (${FINISHED_CHUNK_MARKERS[0]%.done}), skipping"
-          rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
-        fi
+        rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
         continue
       fi
     fi
-    CURRENTLY_MANAGED_VIDEO_PART_PATH=$(grep "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" | grep ${VIDEO_FRAGMENT_ID} | awk '{print $3}' | sed "s/'//g")
-    CURRENTLY_MANAGED_VIDEO_PART_FILENAME=$(echo ${CURRENTLY_MANAGED_VIDEO_PART_PATH} | awk -F\/ '{print $NF}')
-    if [ -z "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}" ] || [ ! -s "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}" ]
+    if [ -e "${FINISHED_CHUNK_MARKERS[0]}" ] && [ -s "${FINISHED_CHUNK_MARKERS[0]%.done}" ] && [[ "$(cat "${FINISHED_CHUNK_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
     then
-      error "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${RED} not found (expected: video_part_minute_${VIDEO_FRAGMENT_ID}.mkv)"
-      ERROR_CODE="1"
-      failed
-    fi
-    FILE_NAME="${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}"
-    FILE_NAME_EXTENSION=${FILE_NAME: (-3)}
-    MOVIE_NAME_ARRAY=("${CURRENTLY_MANAGED_VIDEO_PART_FILENAME%.mkv}")
-    NEXT_MANAGED_VIDEO_PART_PATH=$(grep "has been opened for writing" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" | grep -A1 "${CURRENTLY_MANAGED_VIDEO_PART_PATH}" | tail -n1 | awk '{print $3}' | sed "s/'//g")
-    NEXT_MANAGED_VIDEO_PART_FILENAME=$(echo ${NEXT_MANAGED_VIDEO_PART_PATH} | awk -F\/ '{print $NF}')
-    if [[ ${VIDEO_FRAGMENT_ID} == "001" ]]
-    then
-      FIRST_VIDEO_PART="${CURRENTLY_MANAGED_VIDEO_PART_PATH}"
-    elif [[ ${VIDEO_FRAGMENT_ID} == "${LAST_VIDEO_FRAGMENT_ID}" ]]
-    then
-      LAST_VIDEO_PART="${CURRENTLY_MANAGED_VIDEO_PART_PATH}"
-      NEXT_MANAGED_VIDEO_PART_PATH=""
-    fi 
-    # checks every step itself (including NCNN failures) and stops the run on error
-    interpolation_video_file "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}"
-
-    printf "\033[%d;0H\033[2K ${WHITE}finishing: %s\n" "$((TERMINAL_HEIGHT - 12))" "                       DONE: ${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}" 2>/dev/null
-    # reaching this line means interpolation_video_file already required the _merged.mkv, so the
-    # chunk is finished; VMAF only measures it (an interrupted VMAF loses only its score)
-    # chunk names are the same for every movie, so the marker remembers which movie it belongs to;
-    # it is written before the wait for the previous chunk's encode below, so a Ctrl+C during
-    # that wait keeps this chunk
-    printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" > "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv.done"
-    # the chunk is done, so its intermediate files are not needed anymore (kept with -k); the
-    # frames-only video in TMP_OUT is a full copy of the video track of _merged.mkv
-    if [[ ${KEEP_INTERMEDIATES} == no ]]
-    then
-      rm -f -- "${TMP_OUT}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv"
-      # frame directories: input frames are in TMP_OUT, processed frames in TMP
-      rm -rf -- "${TMP_OUT:?}/${IN_DIR:?}" "${TMP_OUT:?}/${OUT_DIR:?}" "${TMP:?}/${IN_DIR:?}" "${TMP:?}/${OUT_DIR:?}"
-      # the chunk's audio and subtitle extracts are in _merged.mkv now
-      rm -f -- "${TMP}/${MOVIE_NAME_ARRAY[*]}.mka" "${TMP}/${MOVIE_NAME_ARRAY[*]}_subtitles.mkv"
-    fi
-
-    # the previous chunk's VMAF ran alongside this chunk; its row is written first, so the rows
-    # stay in chunk order and only one VMAF runs at a time
-    finishing_previous_chunk
-    # only now, so this chunk is kept as done (its row in statistics.txt is lost; the next -E run only encodes it)
-    stopping_after_failed_encode
-    
-    START_TIME=${START_TIME_FRAGMENT_ID}
-    end_time_collecting
-    PART_VIDEO_RUNTIME=${RUNTIME}
-    timeline_entry chunk
-    inf "    following video management took: ${DARKCYAN}${PART_VIDEO_RUNTIME}"
-    inf "      extracting"
-    if [ -s "${TMP}/EXTRACTING_STREAMS_RUNTIME" ]
-    then
-      EXTRACTING_STREAMS_RUNTIME=$(cat "${TMP}/EXTRACTING_STREAMS_RUNTIME")
-      inf "        streams took: ${DARKCYAN}${EXTRACTING_STREAMS_RUNTIME}"
-    fi
-    if [ -s "${TMP}/EXTRACTING_FRAMES_RUNTIME" ]
-    then
-      EXTRACTING_FRAMES_RUNTIME=$(cat "${TMP}/EXTRACTING_FRAMES_RUNTIME")
-      inf "        frames  took: ${DARKCYAN}${EXTRACTING_FRAMES_RUNTIME}"
-    fi
-    if [ -s "${TMP}/INTERPOLATING_FRAMES_RUNTIME" ]
-    then
-      INTERPOLATING_FRAMES_RUNTIME=$(cat "${TMP}/INTERPOLATING_FRAMES_RUNTIME")
-      inf "    interpolation done after ${DARKCYAN}${INTERPOLATING_FRAMES_RUNTIME}"
-    fi
-    inf "      merging"
-    if [ -s "${TMP}/MERGING_STREAMS_RUNTIME" ]
-    then
-      MERGING_STREAMS_RUNTIME=$(cat "${TMP}/MERGING_STREAMS_RUNTIME")
-      inf "        streams took: ${DARKCYAN}${MERGING_STREAMS_RUNTIME}"
-    fi
-    if [ -s "${TMP}/MERGING_FRAMES_RUNTIME" ]
-    then
-      MERGING_FRAMES_RUNTIME=$(cat "${TMP}/MERGING_FRAMES_RUNTIME")
-      inf "        frames  took: ${DARKCYAN}${MERGING_FRAMES_RUNTIME}"
-    fi
-    if [ -s "${TMP}/MAX_SPACE_TAKEN_OVERALL" ]
-    then
-      MAX_SPACE_TAKEN_OVERALL="$(cat "${TMP}/MAX_SPACE_TAKEN_OVERALL")"
-      if [[ ${MAX_SPACE_TAKEN_OVERALL} == "" ]] || [ ${MAX_SPACE_TAKEN_OVERALL} -eq 0 ] || [ -z ${MAX_SPACE_TAKEN_OVERALL} ]
+      if [[ ${FINAL_ENCODING} == yes ]]
       then
-        MAX_SPACE_TAKEN_OVERALL="1"
-      fi
-      MAX_SPACE_TAKEN_PERCENT=$(printf "%.0f\n" "$(echo "(${MAX_SPACE_TAKEN_OVERALL}/${MAX_TSPACE})*100" | bc -l)")
-      inf "    space used all together: ${DARKCYAN}${MAX_SPACE_TAKEN_OVERALL} [GB] ${CYAN}(which is only ${MAROON1}${MAX_SPACE_TAKEN_PERCENT} [%]${CYAN} of space which should be taken if not removed on-the-fly)"
-    fi
-    # the statistics row is written by finishing_previous_chunk, once VMAF of this chunk is known
-    PENDING_CHUNK_ID="${VIDEO_FRAGMENT_ID}"
-    PENDING_STATISTICS_BEFORE_VMAF="${VIDEO_FRAGMENT_ID}~${EXTRACTING_STREAMS_RUNTIME}~${EXTRACTING_FRAMES_RUNTIME}~${INTERPOLATING_FRAMES_RUNTIME}~${MERGING_FRAMES_RUNTIME}~${MERGING_STREAMS_RUNTIME}"
-    PENDING_STATISTICS_SPACE="${MAX_SPACE_TAKEN_OVERALL}~${MAX_SPACE_TAKEN_PERCENT}"
-    # the peak space is per chunk: without this reset the next chunk's monitors started from
-    # this chunk's peak, so max_space was the run's peak and [%] compared it with one chunk
-    rm -f -- "${TMP}/MAX_SPACE_TAKEN_INPUT_DIR" "${TMP}/MAX_SPACE_TAKEN_OUTPUT_DIR" "${TMP}/MAX_SPACE_TAKEN_OVERALL"
-    MAX_SPACE_TAKEN_INPUT_DIR=""
-    MAX_SPACE_TAKEN_OUTPUT_DIR=""
-    MAX_SPACE_TAKEN_OVERALL=""
-    PENDING_PART_RUNTIME="${PART_VIDEO_RUNTIME}"
-    PENDING_STATISTICS_ROW="yes"
-    if [[ ${FINAL_ENCODING} == "yes" ]]
-    then
-      # with -Q the final encode is compared with the original chunk, right after the encode
-      if [[ ${QUALITY_CHECK} == "yes" ]]
-      then
-        PART_VMAF_REFERENCE="video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
+        # processed earlier, but not encoded yet (an earlier run without -E, or a failed encode):
+        # only the final encode is started, without VMAF (the chunk's frame data is not analysed)
+        inf "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${CYAN} already finished (${FINISHED_CHUNK_MARKERS[0]%.done}), only its final encode is started"
+        finishing_previous_chunk
+        stopping_after_failed_encode
+        RESUMED_MERGED_FILE="${FINISHED_CHUNK_MARKERS[0]%.done}"
+        # <fps>_merged.mkv, also for an unsplit video whose results got the input name
+        RESUMED_MERGED_SUFFIX="${RESUMED_MERGED_FILE##*_${NCNN_METHOD}_}"
+        starting_part_encoding "${RESUMED_MERGED_FILE}" "video_part_minute_${VIDEO_FRAGMENT_ID}_${NCNN_METHOD}_${RESUMED_MERGED_SUFFIX%_merged.mkv}_encoded.mkv" ""
+        PENDING_CHUNK_ID="${VIDEO_FRAGMENT_ID}"
+        PENDING_STATISTICS_ROW="no"
       else
-        PART_VMAF_REFERENCE=""
+        inf "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${CYAN} already finished (${FINISHED_CHUNK_MARKERS[0]%.done}), skipping"
+        rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
       fi
-      starting_part_encoding "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_encoded.mkv" "${PART_VMAF_REFERENCE}"
-      inf "    final encoding started in the background, it runs alongside the next chunk"
-    elif [[ ${QUALITY_CHECK} == "yes" ]]
+      continue
+    fi
+  fi
+  CURRENTLY_MANAGED_VIDEO_PART_PATH=$(grep "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" | grep ${VIDEO_FRAGMENT_ID} | awk '{print $3}' | sed "s/'//g")
+  CURRENTLY_MANAGED_VIDEO_PART_FILENAME=$(echo ${CURRENTLY_MANAGED_VIDEO_PART_PATH} | awk -F\/ '{print $NF}')
+  if [ -z "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}" ] || [ ! -s "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}" ]
+  then
+    error "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${RED} not found (expected: video_part_minute_${VIDEO_FRAGMENT_ID}.mkv)"
+    ERROR_CODE="1"
+    failed
+  fi
+  FILE_NAME="${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}"
+  FILE_NAME_EXTENSION=${FILE_NAME: (-3)}
+  MOVIE_NAME_ARRAY=("${CURRENTLY_MANAGED_VIDEO_PART_FILENAME%.mkv}")
+  NEXT_MANAGED_VIDEO_PART_PATH=$(grep "has been opened for writing" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log" | grep -A1 "${CURRENTLY_MANAGED_VIDEO_PART_PATH}" | tail -n1 | awk '{print $3}' | sed "s/'//g")
+  NEXT_MANAGED_VIDEO_PART_FILENAME=$(echo ${NEXT_MANAGED_VIDEO_PART_PATH} | awk -F\/ '{print $NF}')
+  if [[ ${VIDEO_FRAGMENT_ID} == "001" ]]
+  then
+    FIRST_VIDEO_PART="${CURRENTLY_MANAGED_VIDEO_PART_PATH}"
+  elif [[ ${VIDEO_FRAGMENT_ID} == "${LAST_VIDEO_FRAGMENT_ID}" ]]
+  then
+    LAST_VIDEO_PART="${CURRENTLY_MANAGED_VIDEO_PART_PATH}"
+    NEXT_MANAGED_VIDEO_PART_PATH=""
+  fi 
+  # checks every step itself (including NCNN failures) and stops the run on error
+  interpolation_video_file "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}"
+
+  printf "\033[%d;0H\033[2K ${WHITE}finishing: %s\n" "$((TERMINAL_HEIGHT - 12))" "                       DONE: ${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}" 2>/dev/null
+  # reaching this line means interpolation_video_file already required the _merged.mkv, so the
+  # chunk is finished; VMAF only measures it (an interrupted VMAF loses only its score)
+  # chunk names are the same for every movie, so the marker remembers which movie it belongs to;
+  # it is written before the wait for the previous chunk's encode below, so a Ctrl+C during
+  # that wait keeps this chunk
+  printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" > "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv.done"
+  # the chunk is done, so its intermediate files are not needed anymore (kept with -k); the
+  # frames-only video in TMP_OUT is a full copy of the video track of _merged.mkv
+  if [[ ${KEEP_INTERMEDIATES} == no ]]
+  then
+    rm -f -- "${TMP_OUT}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv"
+    # frame directories: input frames are in TMP_OUT, processed frames in TMP
+    rm -rf -- "${TMP_OUT:?}/${IN_DIR:?}" "${TMP_OUT:?}/${OUT_DIR:?}" "${TMP:?}/${IN_DIR:?}" "${TMP:?}/${OUT_DIR:?}"
+    # the chunk's audio and subtitle extracts are in _merged.mkv now
+    rm -f -- "${TMP}/${MOVIE_NAME_ARRAY[*]}.mka" "${TMP}/${MOVIE_NAME_ARRAY[*]}_subtitles.mkv"
+  fi
+
+  # the previous chunk's VMAF ran alongside this chunk; its row is written first, so the rows
+  # stay in chunk order and only one VMAF runs at a time
+  finishing_previous_chunk
+  # only now, so this chunk is kept as done (its row in statistics.txt is lost; the next -E run only encodes it)
+  stopping_after_failed_encode
+  
+  START_TIME=${START_TIME_FRAGMENT_ID}
+  end_time_collecting
+  PART_VIDEO_RUNTIME=${RUNTIME}
+  timeline_entry chunk
+  inf "    following video management took: ${DARKCYAN}${PART_VIDEO_RUNTIME}"
+  inf "      extracting"
+  if [ -s "${TMP}/EXTRACTING_STREAMS_RUNTIME" ]
+  then
+    EXTRACTING_STREAMS_RUNTIME=$(cat "${TMP}/EXTRACTING_STREAMS_RUNTIME")
+    inf "        streams took: ${DARKCYAN}${EXTRACTING_STREAMS_RUNTIME}"
+  fi
+  if [ -s "${TMP}/EXTRACTING_FRAMES_RUNTIME" ]
+  then
+    EXTRACTING_FRAMES_RUNTIME=$(cat "${TMP}/EXTRACTING_FRAMES_RUNTIME")
+    inf "        frames  took: ${DARKCYAN}${EXTRACTING_FRAMES_RUNTIME}"
+  fi
+  if [ -s "${TMP}/INTERPOLATING_FRAMES_RUNTIME" ]
+  then
+    INTERPOLATING_FRAMES_RUNTIME=$(cat "${TMP}/INTERPOLATING_FRAMES_RUNTIME")
+    inf "    interpolation done after ${DARKCYAN}${INTERPOLATING_FRAMES_RUNTIME}"
+  fi
+  inf "      merging"
+  if [ -s "${TMP}/MERGING_STREAMS_RUNTIME" ]
+  then
+    MERGING_STREAMS_RUNTIME=$(cat "${TMP}/MERGING_STREAMS_RUNTIME")
+    inf "        streams took: ${DARKCYAN}${MERGING_STREAMS_RUNTIME}"
+  fi
+  if [ -s "${TMP}/MERGING_FRAMES_RUNTIME" ]
+  then
+    MERGING_FRAMES_RUNTIME=$(cat "${TMP}/MERGING_FRAMES_RUNTIME")
+    inf "        frames  took: ${DARKCYAN}${MERGING_FRAMES_RUNTIME}"
+  fi
+  if [ -s "${TMP}/MAX_SPACE_TAKEN_OVERALL" ]
+  then
+    MAX_SPACE_TAKEN_OVERALL="$(cat "${TMP}/MAX_SPACE_TAKEN_OVERALL")"
+    if [[ ${MAX_SPACE_TAKEN_OVERALL} == "" ]] || [ ${MAX_SPACE_TAKEN_OVERALL} -eq 0 ] || [ -z ${MAX_SPACE_TAKEN_OVERALL} ]
     then
-      # processed chunk = distorted (first), original chunk = reference (second)
-      starting_quality_metric "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
-      inf "    VMAF check started in the background, it runs alongside the next chunk"
+      MAX_SPACE_TAKEN_OVERALL="1"
+    fi
+    MAX_SPACE_TAKEN_PERCENT=$(printf "%.0f\n" "$(echo "(${MAX_SPACE_TAKEN_OVERALL}/${MAX_TSPACE})*100" | bc -l)")
+    inf "    space used all together: ${DARKCYAN}${MAX_SPACE_TAKEN_OVERALL} [GB] ${CYAN}(which is only ${MAROON1}${MAX_SPACE_TAKEN_PERCENT} [%]${CYAN} of space which should be taken if not removed on-the-fly)"
+  fi
+  # the statistics row is written by finishing_previous_chunk, once VMAF of this chunk is known
+  PENDING_CHUNK_ID="${VIDEO_FRAGMENT_ID}"
+  PENDING_STATISTICS_BEFORE_VMAF="${VIDEO_FRAGMENT_ID}~${EXTRACTING_STREAMS_RUNTIME}~${EXTRACTING_FRAMES_RUNTIME}~${INTERPOLATING_FRAMES_RUNTIME}~${MERGING_FRAMES_RUNTIME}~${MERGING_STREAMS_RUNTIME}"
+  PENDING_STATISTICS_SPACE="${MAX_SPACE_TAKEN_OVERALL}~${MAX_SPACE_TAKEN_PERCENT}"
+  # the peak space is per chunk: without this reset the next chunk's monitors started from
+  # this chunk's peak, so max_space was the run's peak and [%] compared it with one chunk
+  rm -f -- "${TMP}/MAX_SPACE_TAKEN_INPUT_DIR" "${TMP}/MAX_SPACE_TAKEN_OUTPUT_DIR" "${TMP}/MAX_SPACE_TAKEN_OVERALL"
+  MAX_SPACE_TAKEN_INPUT_DIR=""
+  MAX_SPACE_TAKEN_OUTPUT_DIR=""
+  MAX_SPACE_TAKEN_OVERALL=""
+  PENDING_PART_RUNTIME="${PART_VIDEO_RUNTIME}"
+  PENDING_STATISTICS_ROW="yes"
+  if [[ ${FINAL_ENCODING} == "yes" ]]
+  then
+    # with -Q the final encode is compared with the original chunk, right after the encode
+    if [[ ${QUALITY_CHECK} == "yes" ]]
+    then
+      PART_VMAF_REFERENCE="video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
     else
-      finishing_previous_chunk
+      PART_VMAF_REFERENCE=""
     fi
-    # after the last chunk the screen stays as it is, so the summary remains visible
-    if [[ ${VIDEO_FRAGMENT_ID} != "${LAST_VIDEO_FRAGMENT_ID}" ]]
-    then
-      sleep 10
-      # -x clears only the visible screen and keeps the scrollback
-      clear -x
-    fi
-  done
-#fi
+    starting_part_encoding "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_encoded.mkv" "${PART_VMAF_REFERENCE}"
+    inf "    final encoding started in the background, it runs alongside the next chunk"
+  elif [[ ${QUALITY_CHECK} == "yes" ]]
+  then
+    # processed chunk = distorted (first), original chunk = reference (second)
+    starting_quality_metric "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_merged.mkv" "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
+    inf "    VMAF check started in the background, it runs alongside the next chunk"
+  else
+    finishing_previous_chunk
+  fi
+  # after the last chunk the screen stays as it is, so the summary remains visible
+  if [[ ${VIDEO_FRAGMENT_ID} != "${LAST_VIDEO_FRAGMENT_ID}" ]]
+  then
+    sleep 10
+    # -x clears only the visible screen and keeps the scrollback
+    clear -x
+  fi
+done
 # the final encode and VMAF of the last chunk have no next chunk to run alongside, so they are waited for here
 finishing_previous_chunk
 stopping_after_failed_encode
@@ -1201,12 +1210,6 @@ then
   timeline_entry joining all
 fi
 
-# for VIDEO_FRAGMENT_ID in $(seq -w ${SPLIT_PART_START} ${LAST_VIDEO_FRAGMENT_ID})
-# do
-# mkvmerge --append-mode track -o "${WHOLE_MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_merge_${SPLIT_PART_START}-${LAST_VIDEO_FRAGMENT_ID}.mkv" $(ls --color=never video_part_minute_*_merged.mkv | sed "s/^/+/g" | tr "\n" " " | sed "s/^+//g")
-# ERROR_CODE
-# ... rm -rf video_part_minute_[0-9][0-9][0-9].mkv
-
 START_TIME=${START_TIME_WHOLE}
 end_time_collecting
 timeline_entry whole_run all
@@ -1224,3 +1227,5 @@ exporting_run_report
 printf "\033[%d;0H\033[2K %s\n" "${TERMINAL_HEIGHT}" "${TEAL}DONE"
 trap SIGINT
 tput cnorm
+exit
+}

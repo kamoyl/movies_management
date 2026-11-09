@@ -1302,6 +1302,11 @@ interpolation_video_file()
   if [ "${INTERPOLATING_ERRORS}" -ne 0 ]
   then
     error "  NCNN reported ${INTERPOLATING_ERRORS} failure(s), log: ${BLUE}${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
+    # -4 is VK_ERROR_DEVICE_LOST: the GPU or its driver gave up, the frames themselves are fine
+    if grep -qE 'vk[A-Za-z]+ failed -4' "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
+    then
+      error "  the GPU was lost (Vulkan device lost): check ${BLUE}journalctl -k${RED}, a reboot may be needed before -r"
+    fi
     ERROR_CODE="1"
     failed
   fi

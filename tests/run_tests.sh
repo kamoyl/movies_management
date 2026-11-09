@@ -77,6 +77,10 @@ do
   TERM=dumb bash "${REPO_ROOT}/${SCRIPT_NAME}" -i > /dev/null 2>&1
   assert_status   "${SCRIPT_NAME} rejects -i without a value with 2" 2 $?
 done
+# edit-safe: a syntax error just before the final exit must stop even -h, so bash read the whole file first
+sed 's/^exit$/fi fi\nexit/' "${REPO_ROOT}/interpolation_nncn" > "${WORK_DIR}/edit_safe_nncn"
+OUTPUT="$(TERM=dumb bash "${WORK_DIR}/edit_safe_nncn" -h 2>&1)"
+assert_contains "interpolation_nncn is read whole before it runs (safe to edit during a run)" "${OUTPUT}" "syntax error near unexpected token"
 OUTPUT="$(TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -h 2>&1)"
 assert_contains "interpolation_nncn -h documents -F (fresh start, resume by default)" "${OUTPUT}" "-F  fresh start: by default a run resumes"
 assert_contains "interpolation_nncn -h keeps -r (the default)" "${OUTPUT}" "-r  resume (the default"
@@ -627,6 +631,13 @@ do
 done
 assert_contains "an error exit writes the report; success, Ctrl+C and an exit before the metrics do not" "${OUTPUT}" "1/123:REPORT 0/123: 130/123: 1/none: "
 if grep -q '^trap "exiting_function" EXIT' "${REPO_ROOT}/interpolation_nncn"; then pass "the EXIT trap is exiting_function"; else fail "the EXIT trap is exiting_function"; fi
+mkdir -p "${WORK_DIR}/namevenv/.venv/bin"
+printf '#!/bin/sh\necho "FILE=$3"\n' > "${WORK_DIR}/namevenv/.venv/bin/python3"
+chmod +x "${WORK_DIR}/namevenv/.venv/bin/python3"
+REPORT_SETUP='eval "$(sed -n "/^exporting_run_report()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; python_venv_preparing() { :; }; SCRIPTS_HOME="'"${WORK_DIR}"'/namevenv"; TMP=/t; LOG=/l'
+OUTPUT="$(run_with_helpers "${REPORT_SETUP}"'; LOG='"${WORK_DIR}"'; WHOLE_MOVIE_NAME_ARRAY=(S02E07 - Kindred); exporting_run_report > /dev/null; cat metrics_to_excel.log; unset WHOLE_MOVIE_NAME_ARRAY; exporting_run_report > /dev/null; cat metrics_to_excel.log' 2>&1)"
+assert_contains "the report is named after the movie, plain report.xlsx before the name is known" "${OUTPUT}" "FILE=/t/S02E07 - Kindred_report.xlsx
+FILE=/t/report.xlsx"
 STOP_SETUP='eval "$(sed -n "/^stopping_after_failed_encode()/,/^  }/p;/^encoded_part_profile()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"'
 run_with_helpers "${STOP_SETUP}"'; PART_ENCODING_FAILED=no; stopping_after_failed_encode' > /dev/null 2>&1
 assert_status   "the run goes on after a successful encode" 0 $?
@@ -637,7 +648,7 @@ OUTPUT="$(run_with_helpers "${STOP_SETUP}"'; printf "M\ngrain\n" > new.done; ech
 assert_contains "the profile is read from the marker, unknown for older markers" "${OUTPUT}" "NEW=grain OLD=unknown"
 # the run stops only after the chunk processed alongside the failed encode is marked as done
 LINE_MARK="$(grep -n '_merged.mkv.done"$' "${REPO_ROOT}/interpolation_nncn" | tail -n1 | cut -d: -f1)"
-LINE_STOP="$(grep -n '^    stopping_after_failed_encode$' "${REPO_ROOT}/interpolation_nncn" | cut -d: -f1)"
+LINE_STOP="$(awk -v M="${LINE_MARK}" 'NR > M && /^done$/ { exit } NR > M && /^ +stopping_after_failed_encode$/ { print NR; exit }' "${REPO_ROOT}/interpolation_nncn")"
 if [ -n "${LINE_MARK}" ] && [ -n "${LINE_STOP}" ] && [ "${LINE_MARK}" -lt "${LINE_STOP}" ]; then pass "a failed encode stops the run after the current chunk is marked"; else fail "a failed encode stops the run after the current chunk is marked"; fi
 
 echo "checking_space_background (space estimates of a small chunk)"
