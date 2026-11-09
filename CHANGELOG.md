@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- Make interpolation_nncn safe to edit during a run, GPU-lost hint, report name ([c01080b](https://github.com/kamoyl/movies_management/commit/c01080b8b29128def3a6a04ed47e6b8d3964bbff) by Kamoyl).
 - Ctrl+C stops grandchildren, merged marker removed with its part, no stray wc error ([d2d1bd1](https://github.com/kamoyl/movies_management/commit/d2d1bd1741cff515a870a29743cc46510eadeeb9) by Kamoyl).
 - report.xlsx also after an error exit (EXIT trap) ([c1f7cd0](https://github.com/kamoyl/movies_management/commit/c1f7cd0eeb51ec92e40d534a7b21f9708554a83a) by Kamoyl).
 - memory.csv: memory estimate vs reality per encode; report sheet ([41bd21b](https://github.com/kamoyl/movies_management/commit/41bd21b611e913dc2f9584672bd00d62571d0f64) by Kamoyl).
