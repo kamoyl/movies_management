@@ -635,6 +635,11 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - Checked on Kindred with the real mkvmerge v102: chunk 001 was ready after 2 s, the whole split took 5 s. Tests use a fake mkvmerge: chunk 001 starts during the split, the last chunk waits for its end, `-s` cleanup, a failed split (exit code in the message, run stops with 1), a wrong number of chunks.
     - Rejected: cutting each chunk on demand with `mkvmerge --split parts:` (identical packets, but mkvmerge reads the movie from the start for every cut: 74 s at 90 % of a 20 GB movie) and `ffmpeg -ss … -c copy` (fast, but other packets).
     - Not gained: on a resume, chunks already done still wait for the split to reach them.
+26. **Slow preparation explained, memory default raised** (Kindred runs of 2026-11-08, Planned item 1).
+    - Preparation took ~119 s per chunk in the first run (chunks 002–041) and ~16 s in the rerun (041–052), with the same code (no commit between the runs). The frame count (a full decode, 6.7 s for a 60 s 4K chunk on an idle host) and the frame sampling (9.6 s) were not the cause, and the CPU was busy in both runs (77 % and 91 %).
+    - `metrics.csv` showed the cause: in the first run, while the previous chunk's HandBrake encode ran (~16 GB), available memory fell to 0 and the 8 GB swap was full, with ~100 MB/s of disk reads (thrashing). Each preparation ended ~10 s after that encode ended, when ~14.7 GB came free. In the rerun ~12.5 GB stayed available. The memory warning (Done item 21) had warned in the first run (`memory.csv`: `warned yes`).
+    - `RUN_MEMORY_PEAK_DEFAULT_GB`, used until the run has measured its own peak, is now 20 GB instead of 16: the measured 4K HDR peaks were 16.1 and 19.2 GB (Kindred) and 19.5 GB (Carnival Row).
+    - Open: lowering HandBrake's memory (Planned item 1).
 
 ### Codec benchmark
 
@@ -692,11 +697,11 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 - In the ≤ 29 Oct runs, chunk 001, with nothing in the background yet, took 297 s; the gap to 568 s was mostly the serialized encode and VMAF (Done item 11).
 - Between them, the runs of 1–2 Nov averaged ~851 s per chunk: frame recovery at open-GOP splits stalled (preparation ~441 s, up to 700 s), fixed in Done item 20.
 - 3–5 Nov: NCNN is ~75 s slower than before, probably because the slower `-g` encode now overlaps it; the metrics (item 1) should show it.
-- Carnival Row (4K HDR, same options) still spends ~135 s per chunk in preparation, against ~59 s for Smokin' Aces, which the frame sampling (Done item 20) did not change; the separate frame count, a full decode, is the main suspect.
+- Carnival Row (4K HDR, same options) spent ~120–135 s per chunk in preparation, against ~59 s for Smokin' Aces. Explained in Done item 26: the host was out of memory while the previous chunk's encode ran, not the code; with free memory it took 16–20 s.
 
 1. **Metrics, before further optimization.** The sampling, the memory warning and the Excel report are done (Done item 21). Still open, once a real run has collected metrics:
-   - explain where the time goes (Carnival Row's preparation, the slower NCNN);
-   - tune `RUN_MEMORY_PEAK_DEFAULT_GB` from the measured peaks (`memory.csv`, Done item 22; Carnival Row: 19.5 GB).
+   - explain the slower NCNN (Carnival Row's preparation and `RUN_MEMORY_PEAK_DEFAULT_GB` are done, see Done item 26);
+   - measure whether HandBrake's ~16 GB for a 4K HDR part can be lowered (x265 `frame-threads`, `rc-lookahead`, `pools`) without a slower encode or a lower quality; it is what left the host without memory in Done item 26.
 2. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It could also let NCNN run without `-v`, if the NCNN pause (`throttling_ncnn`, which reads the last `done` line) also used the output frames instead of the log. The result is lower peak space use, which makes the next items possible.
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**

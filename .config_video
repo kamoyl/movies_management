@@ -2150,7 +2150,8 @@ finishing_split()
 # OOM killer stopped HandBrake (Smokin' Aces, 3 Nov). The run's peak of all its tools together
 # (tools_rss in metrics.csv, at least RUN_MEMORY_PEAK_DEFAULT_GB, a guess until measured) is
 # compared with what the run can get: what its tools hold now plus MemAvailable.
-RUN_MEMORY_PEAK_DEFAULT_GB="${RUN_MEMORY_PEAK_DEFAULT_GB:-16}"
+# The default follows measured 4K HDR peaks: Kindred 16.1 and 19.2 GB, Carnival Row 19.5 GB.
+RUN_MEMORY_PEAK_DEFAULT_GB="${RUN_MEMORY_PEAK_DEFAULT_GB:-20}"
 MEMINFO_FILE="${MEMINFO_FILE:-/proc/meminfo}"
 checking_memory_headroom()
 {

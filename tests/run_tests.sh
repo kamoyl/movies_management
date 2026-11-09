@@ -408,7 +408,7 @@ assert_contains "memory check warns when available + held is below the run's pea
 OUTPUT="$(run_with_helpers "${MEMORY_SETUP}"'; printf "MemAvailable: 20971520 kB\n" > meminfo; checking_memory_headroom; echo END' 2>&1)"
 if [[ ${OUTPUT} == *"may run short"* ]]; then fail "memory check is silent when the peak fits"; else pass "memory check is silent when the peak fits"; fi
 OUTPUT="$(run_with_helpers "${MEMORY_SETUP}"'; printf "time~epoch~tools_rss [GB]\n" > metrics.csv; printf "MemAvailable: 10485760 kB\n" > meminfo; checking_memory_headroom' 2>&1)"
-assert_contains "memory check uses the default peak before anything was measured" "${OUTPUT}" "its peak is 16.0 GB (assumed, RUN_MEMORY_PEAK_DEFAULT_GB)"
+assert_contains "memory check uses the default peak before anything was measured" "${OUTPUT}" "its peak is 20.0 GB (assumed, RUN_MEMORY_PEAK_DEFAULT_GB)"
 # row a is before the check (its 20 GB is the peak), rows b and c during the encode (the reality)
 OUTPUT="$(run_with_helpers "${MEMORY_SETUP}"'; printf "time~epoch~mem_available [GB]~swap_used [GB]~HandBrakeCLI_rss [GB]~tools_rss [GB]\na~1~30.00~0.00~0.00~20.00\nb~9999999998~2.50~3.00~15.00~18.00\nc~9999999999~0.80~8.00~16.00~19.00\n" > metrics.csv; printf "MemAvailable: 12582912 kB\n" > meminfo; checking_memory_headroom; memory_entry 137; memory_entry 0; cat memory.csv' 2>&1)"
 assert_contains "memory.csv has its header" "${OUTPUT}" "video_id~checked~epoch~available [GB]~held [GB]~can get [GB]~peak [GB]~peak source~needed [GB]~warned~encode status~min available [GB]~max swap [GB]~max tools_rss [GB]~max HandBrakeCLI [GB]"
