@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- Reuse split points on resume when input and settings are unchanged ([ba94408](https://github.com/kamoyl/movies_management/commit/ba94408c5ceb798efc91cbbfef50e431519895a8) by Kamoyl).
 - Make interpolation_nncn safe to edit during a run, GPU-lost hint, report name ([c01080b](https://github.com/kamoyl/movies_management/commit/c01080b8b29128def3a6a04ed47e6b8d3964bbff) by Kamoyl).
 - Ctrl+C stops grandchildren, merged marker removed with its part, no stray wc error ([d2d1bd1](https://github.com/kamoyl/movies_management/commit/d2d1bd1741cff515a870a29743cc46510eadeeb9) by Kamoyl).
 - report.xlsx also after an error exit (EXIT trap) ([c1f7cd0](https://github.com/kamoyl/movies_management/commit/c1f7cd0eeb51ec92e40d534a7b21f9708554a83a) by Kamoyl).
