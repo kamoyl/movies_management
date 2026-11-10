@@ -131,7 +131,7 @@ Exit codes: `0` success, `1` processing error, `2` invalid usage or input, `127`
 - `-F` starts from scratch: before splitting, it removes the results of an earlier run of the same movie and method in the current directory (each removal is listed): the merged and encoded parts whose marker names this movie, with their markers, and the split points file. With `-s`, only the chunks from that number on are removed, and the split points stay (the earlier chunks are joined with the new ones). Other files (chunks, unfinished parts) have generic names and are overwritten as the chunks are processed again. `-F` with `-r` exits 2.
 - On exit, error, or Ctrl+C, `interpolation_nncn` stops the background processes it started, also the indirect ones (for example HandBrake in the encoding subshell), so they do not keep running after the script ends. The cleanup waits for exactly those processes, because one whose parent already ended is no longer a child of the script (before 8 Nov HandBrake ended after the cleanup and left a 0-byte `_video_only.mkv`).
 - After a chunk's final encode (`-E`), its merged `.mkv` is removed together with its `.done` marker (kept with `-k`); the encoded part's own marker is written first.
-- Ctrl+C also cleans up (see Done item 18): it waits up to 10 seconds for those processes to end, then removes what the interrupted work left behind, with a count: the frame directories, the frame samples (`frame_analysis`), frames-only videos and audio/subtitle extracts in the run's TMP/TMP_OUT directories, the source chunks in the current directory (every run splits the movie again), and the parts without a `.done` marker (an unfinished merge or encode). Finished parts, their markers, `statistics.txt`, `timeline.csv` and the logs stay, so the next run resumes. With `-k`, nothing is removed. A second Ctrl+C stops the cleanup at once. It exits with 130.
+- Ctrl+C, and since Done item 29 also a failed run (exit 1), cleans up (see Done item 18): it waits up to 10 seconds for those processes to end, then removes what the interrupted work left behind, with a count: the frame directories, the frame samples (`frame_analysis`), frames-only videos and audio/subtitle extracts in the run's TMP/TMP_OUT directories, the source chunks in the current directory (every run splits the movie again), and the parts without a `.done` marker (an unfinished merge or encode). Finished parts, their markers, `statistics.txt`, `timeline.csv` and the logs stay, so the next run resumes. With `-k`, nothing is removed. A second Ctrl+C stops the cleanup at once. Ctrl+C exits with 130, a failed run keeps its 1. At start-up a run also removes the frames and intermediate videos that earlier runs left when they could not clean up (`kill -9`), see Done item 29.
 - The VMAF progress loop sleeps 2 seconds between checks instead of busy-waiting on one CPU core.
 - `movies_encoding` no longer calls `movie_data_collecting` twice, saving duplicate OMDb/TheMovieDB requests.
 
@@ -654,6 +654,10 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - The cause is `enable-overlays=1` in `VIDEO_ENCODER` (HandBrakeCLI build 2024-06-21 with the system's SVT-AV1 3.1.2). With `enable-overlays=0` chunks 006 and 040 finished normally.
     - Turning overlays off costs nothing measurable: chunk 052 encoded both ways had VMAF 87.978 (on) and 87.972 (off) against the merged part, was 0.13 % smaller (162.9 vs 163.1 MB) and ~2 % faster (128–129 s vs 130–131 s, two runs each, one after another on an idle machine; a first measurement showed ~32 %, but a VMAF check ran alongside the overlays-on encode).
     - Chosen: `enable-overlays=0`. A newer HandBrake was not tried: the setting brings no gain, so removing it is the simpler fix.
+29. **Cleanup after a failed run, and of earlier runs** (the user found extracted and interpolated PNGs left behind, 10 Nov).
+    - Only Ctrl+C cleaned up (Done item 18). A run that stopped with an error (exit 1: a lost GPU, an encode stopped by the watchdog or killed by the OOM killer) only stopped its processes, so the frames of its current chunk stayed. Now a failed exit runs the same cleanup; finished parts and their markers stay.
+    - A run killed with `kill -9` (or a lost machine) can run no cleanup, and each run has its own TMP, so a later run never saw those frames. Now every run writes `run.pid` into its TMP/TMP_OUT (not with `-k`), and at start-up removes the frame directories and intermediate videos of earlier runs whose `run.pid` names a process that has ended. A running run, a `-k` run and directories of runs before this change (no `run.pid`) are left alone; their logs, CSVs and reports always stay.
+    - Discussed with the user and dropped from the plan (10 Nov): reusing the split chunks (the split runs in the background now, and reusing old chunks caused the "chunk 008 not found" of Done item 27), waiting for memory before NCNN, GPU-loss handling and lowering HandBrake's memory: the warnings say enough, the user decides.
 
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
@@ -689,6 +693,8 @@ Decision: lossless x264 `ultrafast` is the default because it is the fastest and
 
 ### Planned (in agreed order)
 
+Order agreed on 10 Nov: performance first (the fixed sleeps and PNG compression of item 4, then items 2 and 3), then `-N none` as the first step of combining `interpolation_nncn` with `movies_encoding`, then hardening the `-S` service. Dropped: see Done item 29.
+
 State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average per chunk without chunk 001:
 
 - **Baseline:** see [Baseline](#baseline-before-optimization).
@@ -713,15 +719,13 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 
 1. **Metrics, before further optimization.** The sampling, the memory warning and the Excel report are done (Done item 21). Still open, once a real run has collected metrics:
    - explain the slower NCNN (Carnival Row's preparation and `RUN_MEMORY_PEAK_DEFAULT_GB` are done, see Done item 26);
-   - measure whether HandBrake's ~16 GB for a 4K HDR part can be lowered (x265 `frame-threads`, `rc-lookahead`, `pools`) without a slower encode or a lower quality; it is what left the host without memory in Done item 26.
 2. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It could also let NCNN run without `-v`, if the NCNN pause (`throttling_ncnn`, which reads the last `done` line) also used the output frames instead of the log. The result is lower peak space use, which makes the next items possible.
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**
-   - when the memory check warns (`memory.csv`: `warned yes`), wait for the previous chunk's encode before NCNN starts, instead of only warning: Edge of Tomorrow chunk 051's encode was killed by the OOM killer (exit 137, 10 Nov), with available memory at 0 and swap full;
    - replace fixed sleeps (`sleep 5` in extraction, `sleep 10` in the chunk loop, other 1–3 s sleeps) with event-based waits;
    - lower the PNG `-compression_level` (faster writes, larger files);
    - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item);
-   - encode-only mode with `-N none` (no interpolation), so `movies_encoding`-style encodes use the same chunked pipeline; compare chunked and whole-file encoding once.
+   - encode-only mode with `-N none` (no interpolation), so `movies_encoding`-style encodes use the same chunked pipeline; compare chunked and whole-file encoding once. The first step of combining `interpolation_nncn` with `movies_encoding`.
 5. **Research: interpolation above 8 bits (keep HDR without tone mapping).** Today an HDR source must be tone mapped to 8-bit SDR before NCNN. The limit is in rife-ncnn-vulkan's input/output, not in the network:
    - `main.cpp` loads images with `stbi_load_from_memory(…, 3)` (8 bits per channel), so a 10/16-bit PNG is cut to 8 bits on load; `stbi_write_png` writes 8 bits;
    - the GPU shaders convert `uint8` ↔ float: `rife_preproc.comp` multiplies by `1/255`, `rife_postproc.comp` by `255` and clamps to `0..255`;

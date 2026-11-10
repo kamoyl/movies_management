@@ -540,19 +540,26 @@ exporting_run_report()
 
 # Stops every process still started directly by this script (NCNN, ffmpeg, progress monitors),
 # so Ctrl+C or an error does not leave them running and writing frames.
-# EXIT trap: stops the background jobs (also the metrics sampling, so metrics.csv is complete),
-# then, after an error exit (failed, exit 1), writes report.xlsx as well - the successful end and
-# Ctrl+C (130) write it themselves. A plain kill (SIGTERM) also runs this trap, but with $? 0, so
-# it cannot be told from the successful end: it gets no report, nor does kill -9.
+# EXIT trap: stops the background jobs (also the metrics sampling, so metrics.csv is complete);
+# after an error exit (failed, exit 1) it also removes the unfinished work, as Ctrl+C does (the
+# frames of a failed chunk were left before, e.g. after a lost GPU), and writes report.xlsx - the
+# successful end and Ctrl+C (130) write it themselves. A plain kill (SIGTERM) also runs this trap,
+# but with $? 0, so it cannot be told from the successful end: it gets no cleanup and no report,
+# nor does kill -9; the next run removes their frames (cleaning_earlier_runs).
 exiting_function()
 {
   local EXIT_STATUS=$?
-  stop_background_jobs
+  # METRICS_SAMPLING_PID: the run got that far (usage errors, exit 2, come before it)
+  if [ "${BASHPID}" == "$$" ] && [ "${EXIT_STATUS}" -ne 0 ] && [ "${EXIT_STATUS}" -ne 130 ] && [ -n "${METRICS_SAMPLING_PID}" ]
+  then
+    cleaning_after_interrupt
+  else
+    stop_background_jobs
+  fi
   if [ "${BASHPID}" != "$$" ]
   then
     return
   fi
-  # METRICS_SAMPLING_PID: the run got that far (usage errors, exit 2, come before it)
   if [ "${EXIT_STATUS}" -ne 0 ] && [ "${EXIT_STATUS}" -ne 130 ] && [ -n "${METRICS_SAMPLING_PID}" ] && [ -x "${SCRIPTS_HOME}/.venv/bin/python3" ]
   then
     exporting_run_report
@@ -612,11 +619,78 @@ stop_background_jobs()
   done
   }
 
-# Ctrl+C: stops the processes of this run, then removes what the interrupted work left behind:
-# the frame directories, frames-only videos and stream extracts in TMP/TMP_OUT, the source chunks
-# (every run splits the movie again) and the parts without a .done marker in the current
-# directory. Finished parts and their markers stay, so the next run resumes. With -k nothing is
-# removed. A second Ctrl+C stops the cleanup at once (exit_function restores the default first).
+# removing_work_files DIR... - removes what a run's work left in its work directories (TMP,
+# TMP_OUT): frame directories, frames-only videos (TMP_OUT), audio/subtitle extracts (TMP) and the
+# sampled frames of a preparation; logs, CSVs and reports stay. Adds to REMOVED_COUNT.
+# safe_remove_dir allows only TMP/TMP_OUT, so the caller sets those to the directories given.
+removing_work_files()
+{
+  local WORK_DIR_ROOT
+  local WORK_ITEM
+  for WORK_DIR_ROOT in "$@"
+  do
+    # an interrupt during start-up may come before the work directories are set
+    if [ -z "${WORK_DIR_ROOT}" ] || [ ! -d "${WORK_DIR_ROOT}" ]
+    then
+      continue
+    fi
+    for WORK_ITEM in "${WORK_DIR_ROOT}"/in_[0-9][0-9][0-9] "${WORK_DIR_ROOT}"/out_[0-9][0-9][0-9] "${WORK_DIR_ROOT}"/frame_analysis
+    do
+      if [ -d "${WORK_ITEM}" ]
+      then
+        safe_remove_dir "${WORK_ITEM}"
+        REMOVED_COUNT=$((REMOVED_COUNT + 1))
+      fi
+    done
+    # both directories belong to one run only, so every video there is an intermediate
+    for WORK_ITEM in "${WORK_DIR_ROOT}"/*.mkv "${WORK_DIR_ROOT}"/*.mka
+    do
+      if [ -f "${WORK_ITEM}" ]
+      then
+        rm -f -- "${WORK_ITEM}"
+        REMOVED_COUNT=$((REMOVED_COUNT + 1))
+      fi
+    done
+  done
+  }
+
+# Start-up: removes the frames and intermediate videos which earlier runs left in their work
+# directories, because they ended without any cleanup (kill -9, a lost machine) or before this
+# cleanup existed for failed runs. Only directories with a run.pid of an ended run (a run writes
+# run.pid unless -k) are touched, so a run still going, or one kept with -k, is never cleaned.
+# A reused PID only makes the cleanup skip the directory.
+cleaning_earlier_runs()
+{
+  local EARLIER_DIR
+  local EARLIER_PID
+  local REMOVED_COUNT=0
+  for EARLIER_DIR in "${VAR}/tmp-${SCRIPT_NAME}_"* "${VAR_OUT}/tmp-${SCRIPT_NAME}_"*
+  do
+    if [ ! -f "${EARLIER_DIR}/run.pid" ] || [[ ${EARLIER_DIR} == "${TMP}" ]] || [[ ${EARLIER_DIR} == "${TMP_OUT}" ]]
+    then
+      continue
+    fi
+    EARLIER_PID="$(cat "${EARLIER_DIR}/run.pid")"
+    if [[ ${EARLIER_PID} =~ ^[0-9]+$ ]] && kill -0 "${EARLIER_PID}" 2>/dev/null
+    then
+      continue
+    fi
+    # bash keeps these assignments for this one call only
+    TMP="${EARLIER_DIR}" TMP_OUT="" removing_work_files "${EARLIER_DIR}"
+    rm -f -- "${EARLIER_DIR}/run.pid"
+  done
+  if [ "${REMOVED_COUNT}" -gt 0 ]
+  then
+    inf "  removed ${YELLOW}${REMOVED_COUNT}${CYAN} frame director(ies) or intermediate file(s) left by earlier runs"
+  fi
+  }
+
+# Ctrl+C or a failed run (exit 1): stops the processes of this run, then removes what the
+# unfinished work left behind: the frame directories, frames-only videos and stream extracts in
+# TMP/TMP_OUT, the source chunks (every run splits the movie again) and the parts without a .done
+# marker in the current directory. Finished parts and their markers stay, so the next run resumes.
+# With -k nothing is removed. A second Ctrl+C stops the cleanup at once (exit_function restores
+# the default first).
 cleaning_after_interrupt()
 {
   inf "  closing processes and cleaning; finished chunks are kept, the next run resumes them"
@@ -634,40 +708,8 @@ cleaning_after_interrupt()
     return
   fi
   local REMOVED_COUNT=0
-  local WORK_DIR_ROOT
   local WORK_ITEM
-  for WORK_DIR_ROOT in "${TMP}" "${TMP_OUT}"
-  do
-    # an interrupt during start-up may come before the work directories are set
-    if [ -z "${WORK_DIR_ROOT}" ] || [ ! -d "${WORK_DIR_ROOT}" ]
-    then
-      continue
-    fi
-    for WORK_ITEM in "${WORK_DIR_ROOT}"/in_[0-9][0-9][0-9] "${WORK_DIR_ROOT}"/out_[0-9][0-9][0-9]
-    do
-      if [ -d "${WORK_ITEM}" ]
-      then
-        safe_remove_dir "${WORK_ITEM}"
-        REMOVED_COUNT=$((REMOVED_COUNT + 1))
-      fi
-    done
-    # frames-only videos (TMP_OUT) and audio/subtitle extracts (TMP); both directories belong to
-    # this run only, so every video there is an intermediate
-    for WORK_ITEM in "${WORK_DIR_ROOT}"/*.mkv "${WORK_DIR_ROOT}"/*.mka
-    do
-      if [ -f "${WORK_ITEM}" ]
-      then
-        rm -f -- "${WORK_ITEM}"
-        REMOVED_COUNT=$((REMOVED_COUNT + 1))
-      fi
-    done
-  done
-  # sampled frames of the chunk's preparation (removed at its end, so left only by an interrupt)
-  if [ -n "${TMP}" ] && [ -d "${TMP}/frame_analysis" ]
-  then
-    safe_remove_dir "${TMP}/frame_analysis"
-    REMOVED_COUNT=$((REMOVED_COUNT + 1))
-  fi
+  removing_work_files "${TMP}" "${TMP_OUT}"
   # the current directory: source chunks, and parts which were not finished (no .done marker);
   # a movie too short to be split is processed under its own name
   for WORK_ITEM in video_part_minute_[0-9][0-9][0-9]*.mkv "${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_"*.mkv
@@ -881,6 +923,15 @@ joining_encoded_parts()
 PENDING_CHUNK_ID=""
 PENDING_STATISTICS_ROW="no"
 PART_ENCODING_PID=""
+
+cleaning_earlier_runs
+# marks the work directories as this run's, for cleaning_earlier_runs of a later run; not with -k,
+# whose intermediates are kept on purpose
+if [[ ${KEEP_INTERMEDIATES} != yes ]]
+then
+  echo "$$" > "${TMP}/run.pid"
+  echo "$$" > "${TMP_OUT}/run.pid"
+fi
 
 start_time_collecting
 START_TIME_WHOLE=${START_TIME}
