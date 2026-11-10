@@ -1679,7 +1679,9 @@ handbrake_encode_settings()
   # VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts aq-mode=2)
   # VIDEO_ENCODER=(svt_av1 -quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts rc=1:tune=0:enable-overlays=1:scd=1)
   
-  VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts tune=0:enable-overlays=1:aq-mode=2)
+  # enable-overlays=1 deadlocks SVT-AV1 3.1.2 (HandBrake 20240621) at the end of some chunks (hang at 99.96%);
+  # overlays off: same VMAF (-0.006), ~0.1% smaller, ~30% faster
+  VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts tune=0:enable-overlays=0:aq-mode=2)
   AUDIO_ENCODER="copy"
   }
 

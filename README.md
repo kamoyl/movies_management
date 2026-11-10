@@ -62,6 +62,9 @@ below cost a failed or out-of-sync run; the details are in
 - *Profile changed on resume.* Continuing with `-g` mixed two
   profiles in one movie; markers record it and a resumed run warns
   (Done 16).
+- *Hang at 99.96 %.* SVT-AV1 `enable-overlays=1` deadlocked at
+  the end of some parts; overlays are off, with the same quality
+  (Done 28).
 
 **Tools and encoders**
 
@@ -644,7 +647,13 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - `-s 007` and `-s 008` stopped with `chunk 008 not found` a few seconds after the start, although `video_part_minute_008.mkv` was there. It was a chunk of an earlier run: `waiting_for_split_chunk` took the existing N+2 as "written", but the chunk's name was not in the split log yet. The 14 KB `video_part_minute_001.mkv` was mkvmerge rewriting chunk 001 when the run stopped. Now `starting_split` removes the source chunks first; they are split again on every run anyway.
     - The chunks before `-s` (e.g. 001–039 with `-s 040`, ~25 GB of the source) stayed until the end of the movie: `finishing_split` ran only when chunk N+2 did not exist, so in practice only at the last chunks. Now an ended mkvmerge is checked before the chunk, so the first wait after the split runs `finishing_split`, and `removing_chunks_before_start` also removes each complete chunk before `-s` while the split still runs.
     - Not a bug: `-s 029` started with chunk 030, because 029 had been interpolated by the run before (killed by the lost GPU while encoding); only its final encode was missing, which ran alongside 030.
-    - Not changed here: the encodes of chunks 006 and 040 hung at 99.96 % (the last frame; the watchdog stopped them), and the encode of 051 was killed by the OOM killer (exit 137) with the 11 VMs using ~39 GB; see Planned item 4.
+    - Not changed here: the encodes of chunks 006 and 040 hung at 99.96 % (the last frame; the watchdog stopped them; fixed in Done item 28), and the encode of 051 was killed by the OOM killer (exit 137) with the 11 VMs using ~39 GB; see Planned item 4.
+28. **HandBrake hang at 99.96 %: SVT-AV1 overlays off** (Edge of Tomorrow chunks 006 and 040, 9–10 Nov; probably also chunk 097 in Done item 22's watchdog note).
+    - Reproduced outside the script: the full chunk 006 hung again at 99.96 % with exactly the same output size (30,670,848 bytes) as in the run, so the hang is deterministic, not memory or load.
+    - Stack traces (`eu-stack`) of the hung HandBrakeCLI: HandBrake waited in `svt_av1_enc_get_packet` while all 125 SVT-AV1 threads waited in `svt_get_full_object`, a deadlock while SVT-AV1 flushes the end of the stream.
+    - The cause is `enable-overlays=1` in `VIDEO_ENCODER` (HandBrakeCLI build 2024-06-21 with the system's SVT-AV1 3.1.2). With `enable-overlays=0` chunks 006 and 040 finished normally.
+    - Turning overlays off costs nothing measurable: chunk 052 encoded both ways had VMAF 87.978 (on) and 87.972 (off) against the merged part, was 0.13 % smaller (162.9 vs 163.1 MB) and ~32 % faster (24.8 vs 18.8 fps).
+    - Chosen: `enable-overlays=0`. A newer HandBrake was not tried: the setting brings no gain, so removing it is the simpler fix.
 
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
@@ -708,7 +717,6 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 2. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It could also let NCNN run without `-v`, if the NCNN pause (`throttling_ncnn`, which reads the last `done` line) also used the output frames instead of the log. The result is lower peak space use, which makes the next items possible.
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**
-   - HandBrake hangs on the last frame of some parts (Edge of Tomorrow chunks 006 and 040, both at 99.96 %, also when repeated; the watchdog stops them). Suspect: the HandBrake build of 2024-06-21 with the system's SVT-AV1 3.1.2; check where HandBrakeCLI comes from and try a current HandBrake. A test needs more than 8 GB of free memory, so not while the VMs are at full size;
    - when the memory check warns (`memory.csv`: `warned yes`), wait for the previous chunk's encode before NCNN starts, instead of only warning: Edge of Tomorrow chunk 051's encode was killed by the OOM killer (exit 137, 10 Nov), with available memory at 0 and swap full;
    - replace fixed sleeps (`sleep 5` in extraction, `sleep 10` in the chunk loop, other 1–3 s sleeps) with event-based waits;
    - lower the PNG `-compression_level` (faster writes, larger files);
