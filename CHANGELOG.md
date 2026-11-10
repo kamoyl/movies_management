@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- Cleanup after a failed run, and of frames left by earlier runs ([cc6e768](https://github.com/kamoyl/movies_management/commit/cc6e76891be3a7c5ef9787aa03500ce4151a24e6) by Kamoyl).
 - HandBrake overlays: correct the speed gain (~2 %, not ~32 %) ([2f64de7](https://github.com/kamoyl/movies_management/commit/2f64de7bc8d680c93bb9eb0c0b87410d0cda804d) by Kamoyl).
 - HandBrake: SVT-AV1 enable-overlays=0 (fixes the hang at 99.96 %) ([98f6feb](https://github.com/kamoyl/movies_management/commit/98f6feb0515c8249de9284941abe0254a482cd0c) by Kamoyl).
 - Background split: remove stale chunks first, remove chunks before -s early; CI installs ffmpeg ([507593d](https://github.com/kamoyl/movies_management/commit/507593dc8d6612788179e2f937c13ec1346a19ea) by Kamoyl).
