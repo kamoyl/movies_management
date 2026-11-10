@@ -2096,24 +2096,51 @@ starting_split()
 {
   SPLITTING_LOG="${2}"
   SPLITTING_DONE="no"
+  # chunks of an earlier run would look complete before mkvmerge rewrites them (Edge of Tomorrow,
+  # 9 Nov: "chunk 008 not found"); every run splits again, so they are not needed
+  rm -f -- video_part_minute_[0-9][0-9][0-9].mkv
   mkvmerge -o "video_part_minute_%03d.mkv" --split "timestamps:${SPLIT_TIMESTAMPS}" "${1}" > "${SPLITTING_LOG}" 2>&1 &
   SPLITTING_PID=$!
   }
 
 # waiting_for_split_chunk CHUNK_ID - returns when chunk CHUNK_ID and the one after it are complete
 # (the open-GOP recovery reads the start of the next chunk): once chunk CHUNK_ID+2 exists, or the
-# split has ended (then finishing_split checks it first).
+# split has ended (then finishing_split checks it first). An ended split is checked before the
+# chunk, so the first wait after its end always runs finishing_split.
 waiting_for_split_chunk()
 {
   local AFTER_NEXT_CHUNK
   AFTER_NEXT_CHUNK="$(printf "video_part_minute_%03d.mkv" "$((10#${1} + 2))")"
-  while [[ ${SPLITTING_DONE} != yes ]] && [ ! -e "${AFTER_NEXT_CHUNK}" ]
+  while [[ ${SPLITTING_DONE} != yes ]]
   do
-    if ps -p "${SPLITTING_PID}" > /dev/null 2>&1
+    if ! ps -p "${SPLITTING_PID}" > /dev/null 2>&1
     then
-      sleep 1
-    else
       finishing_split
+    elif [ -e "${AFTER_NEXT_CHUNK}" ]
+    then
+      removing_chunks_before_start
+      return 0
+    else
+      removing_chunks_before_start
+      sleep 1
+    fi
+  done
+  }
+
+# Removes the complete chunks before -s (chunk N is complete once chunk N+1 exists, or the split
+# has ended), so they do not take space until the end of the split.
+removing_chunks_before_start()
+{
+  local CHUNK_ID
+  for CHUNK_ID in $(seq -w 001 "${LAST_VIDEO_FRAGMENT_ID}")
+  do
+    if [ $((10#${CHUNK_ID})) -ge $((10#${SPLIT_PART_START:-001})) ]
+    then
+      break
+    fi
+    if [[ ${SPLITTING_DONE} == yes ]] || [ -e "$(printf "video_part_minute_%03d.mkv" "$((10#${CHUNK_ID} + 1))")" ]
+    then
+      rm -f -- "video_part_minute_${CHUNK_ID}.mkv"
     fi
   done
   }
@@ -2125,7 +2152,6 @@ finishing_split()
 {
   local STATUS
   local LAST_WRITTEN
-  local CHUNK_ID
   wait "${SPLITTING_PID}"
   STATUS=$?
   SPLITTING_DONE="yes"
@@ -2137,13 +2163,7 @@ finishing_split()
     ERROR_CODE="1"
     failed
   fi
-  for CHUNK_ID in $(seq -w 001 "${LAST_VIDEO_FRAGMENT_ID}")
-  do
-    if [ $((10#${CHUNK_ID})) -lt $((10#${SPLIT_PART_START:-001})) ]
-    then
-      rm -f -- "video_part_minute_${CHUNK_ID}.mkv"
-    fi
-  done
+  removing_chunks_before_start
   }
 
 # Warns (only) when memory may run short for a final encode alongside the next chunk, as when the

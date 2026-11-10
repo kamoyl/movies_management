@@ -12,5 +12,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: ShellCheck
         run: bash tests/shellcheck.sh
+      # sampling_frames is tested with a real ffmpeg, which the runner image does not have
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
       - name: Tests
         run: bash tests/run_tests.sh

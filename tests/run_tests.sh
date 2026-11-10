@@ -309,7 +309,7 @@ do
   F="$(printf 'video_part_minute_%03d.mkv' "${N}")"
   echo "The file '${F}' has been opened for writing."
   echo chunk > "${F}"
-  if [ "${N}" -eq 3 ]
+  if [ "${N}" -eq "${FAKE_PAUSE_AT:-3}" ]
   then
     sleep "${FAKE_PAUSE:-0}"
   fi
@@ -323,6 +323,13 @@ assert_contains "chunk 001 starts while the split is still running" "${OUTPUT}" 
 assert_contains "the last chunk waits for the end of the split, which is checked" "${OUTPUT}" "LAST: DONE=yes FILES=video_part_minute_001.mkv video_part_minute_002.mkv video_part_minute_003.mkv video_part_minute_004.mkv "
 OUTPUT="$(PATH="${WORK_DIR}/bgsplitbin:${PATH}" run_with_helpers "${BGSPLIT_SETUP}"'; SPLIT_PART_START=003; starting_split m.mkv split.log; waiting_for_split_chunk 003; waiting_for_split_chunk 004; echo "FILES=$(ls video_part_minute_* | tr "\n" " ")"' 2>&1)"
 assert_contains "-s: the chunks before it are removed when the split ends" "${OUTPUT}" "FILES=video_part_minute_003.mkv video_part_minute_004.mkv "
+OUTPUT="$(FAKE_PAUSE=3 PATH="${WORK_DIR}/bgsplitbin:${PATH}" run_with_helpers "${BGSPLIT_SETUP}"'; for N in 1 2 3 4; do echo stale > video_part_minute_00${N}.mkv; done; starting_split m.mkv split.log; waiting_for_split_chunk 001; echo "WRITTEN=$(grep -c "opened for writing" split.log)"; waiting_for_split_chunk 004' 2>&1)"
+assert_contains "chunks of an earlier run do not count as split" "${OUTPUT}" "WRITTEN=3"
+BGSPLIT6_SETUP="${BGSPLIT_SETUP}"'; SPLIT_TIMESTAMPS="60s,120s,180s,240s,300s"; LAST_VIDEO_FRAGMENT_ID=006; SPLIT_PART_START=002'
+OUTPUT="$(FAKE_CHUNKS=6 FAKE_PAUSE_AT=4 FAKE_PAUSE=3 PATH="${WORK_DIR}/bgsplitbin:${PATH}" run_with_helpers "${BGSPLIT6_SETUP}"'; starting_split m.mkv split.log; waiting_for_split_chunk 002; echo "DURING: DONE=${SPLITTING_DONE} FILES=$(ls video_part_minute_* | tr "\n" " ")"; waiting_for_split_chunk 006' 2>&1)"
+assert_contains "-s: a complete chunk before it is removed while the split runs" "${OUTPUT}" "DURING: DONE=no FILES=video_part_minute_002.mkv video_part_minute_003.mkv video_part_minute_004.mkv "
+OUTPUT="$(FAKE_CHUNKS=6 PATH="${WORK_DIR}/bgsplitbin:${PATH}" run_with_helpers "${BGSPLIT6_SETUP}"'; starting_split m.mkv split.log; sleep 1; waiting_for_split_chunk 002; echo "AFTER: DONE=${SPLITTING_DONE}"' 2>&1)"
+assert_contains "an ended split is checked even when the next chunks exist" "${OUTPUT}" "AFTER: DONE=yes"
 OUTPUT="$(FAKE_STATUS=2 PATH="${WORK_DIR}/bgsplitbin:${PATH}" run_with_helpers "${BGSPLIT_SETUP}"'; starting_split m.mkv split.log; waiting_for_split_chunk 004; echo "NOT STOPPED"' 2>&1)"; STATUS=$?
 assert_status   "a failed background split stops the run with 1" 1 "${STATUS}"
 assert_contains "a failed background split is reported with mkvmerge's exit code" "${OUTPUT}" "failed with exit code"
