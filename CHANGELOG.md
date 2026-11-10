@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- HandBrake: SVT-AV1 enable-overlays=0 (fixes the hang at 99.96 %) ([98f6feb](https://github.com/kamoyl/movies_management/commit/98f6feb0515c8249de9284941abe0254a482cd0c) by Kamoyl).
 - Background split: remove stale chunks first, remove chunks before -s early; CI installs ffmpeg ([507593d](https://github.com/kamoyl/movies_management/commit/507593dc8d6612788179e2f937c13ec1346a19ea) by Kamoyl).
 - Explain Carnival Row's slow preparation (memory, not code); memory default 16 -> 20 GB ([c093b90](https://github.com/kamoyl/movies_management/commit/c093b90917caafe75b1cb9dc13b4bea0accc759f) by Kamoyl).
 - Start chunk 001 while the movie is still being split (background mkvmerge) ([cd465d8](https://github.com/kamoyl/movies_management/commit/cd465d894513ff604a0f116895e0201e4ca4bb6a) by Kamoyl).
