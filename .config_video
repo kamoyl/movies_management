@@ -102,6 +102,12 @@ safe_remove_dir()
   failed
   }
 
+# zlib level of the extracted PNG frames (ffmpeg's default is 6). Measured on 240 4K HDR frames of
+# Edge of Tomorrow with the tone-mapping filter (10 Nov): level 1 took 8.4-9.2 s and 1509 MB,
+# level 6 13.5 s and 1314 MB, so extraction is ~35 % faster for ~15 % more space; level 0 is slower
+# again (3.7x the size, the disk becomes the limit). Reading them back takes the same time.
+PNG_COMPRESSION_LEVEL="${PNG_COMPRESSION_LEVEL:-1}"
+
 # remove_numbered_frames DIR FROM TO - deletes DIR/<FROM>.png ... DIR/<TO>.png (8-digit names);
 # replaces "eval rm {N..1}.png": no code execution from file names, no "argument list too long"
 remove_numbered_frames()
@@ -560,7 +566,7 @@ recovering_lost_frames()
   local SEEK_TIME
   SEEK_TIME="$(LC_ALL=C awk -v t="$(head -n1 <<< "${LOST_FRAMES_PTS}")" 'BEGIN { s = t - 1; printf "%.3f", (s < 0 ? 0 : s) }')"
   inf "    recovering ${YELLOW}${LOST_FRAMES_COUNT}${CYAN} frame(s) lost at the split ${YELLOW}${SPLIT_POINT}s${CYAN} (open GOP) from ${YELLOW}${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
-  ffmpeg -y -hide_banner -loglevel error -threads 0 -copyts -ss "${SEEK_TIME}" -i "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" -map 0:v:0 -vf "${RECOVERY_FILTER}" -fps_mode passthrough -frames:v "${LOST_FRAMES_COUNT}" -start_number "$((DECODED_FRAMES_COUNT + 1))" "${FRAMES_DIR}/%08d.png" >> "${RECOVERY_LOG}" 2>&1
+  ffmpeg -y -hide_banner -loglevel error -threads 0 -copyts -ss "${SEEK_TIME}" -i "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" -map 0:v:0 -vf "${RECOVERY_FILTER}" -fps_mode passthrough -frames:v "${LOST_FRAMES_COUNT}" -compression_level "${PNG_COMPRESSION_LEVEL}" -start_number "$((DECODED_FRAMES_COUNT + 1))" "${FRAMES_DIR}/%08d.png" >> "${RECOVERY_LOG}" 2>&1
   local RECOVERY_STATUS=$?
   local FRAME_NUMBER
   local RECOVERED_FILES="0"
@@ -611,7 +617,7 @@ extracting_mkv_frames()
   fi
   # passthrough: one PNG per decoded frame (= INPUT_FRAMES_COUNT); the image2 default (cfr) would
   # duplicate frames at timestamp gaps, so NCNN, the placeholders and VMAF would not match anymore
-  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${VIDEO_FILE_NAME}.mkv" "${EXTRACTION_FILTER[@]}" -fps_mode passthrough "${VIDEO_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/"%08d.png > "${LOG}/${VIDEO_FILE_NAME}_inter_inframes.log" 2>&1 & echo "$!" > "${TMP}/${VIDEO_FILE_NAME}_inter_inframes.pid"
+  ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${VIDEO_FILE_NAME}.mkv" "${EXTRACTION_FILTER[@]}" -fps_mode passthrough -compression_level "${PNG_COMPRESSION_LEVEL}" "${VIDEO_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}/"%08d.png > "${LOG}/${VIDEO_FILE_NAME}_inter_inframes.log" 2>&1 & echo "$!" > "${TMP}/${VIDEO_FILE_NAME}_inter_inframes.pid"
   FFMPEG_EX_BACKGROUND_PROCESS_PID=$(cat "${TMP}/${VIDEO_FILE_NAME}_inter_inframes.pid")
   if [[ ${VERBOSE} == yes ]]
   then

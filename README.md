@@ -658,6 +658,10 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - Only Ctrl+C cleaned up (Done item 18). A run that stopped with an error (exit 1: a lost GPU, an encode stopped by the watchdog or killed by the OOM killer) only stopped its processes, so the frames of its current chunk stayed. Now a failed exit runs the same cleanup; finished parts and their markers stay.
     - A run killed with `kill -9` (or a lost machine) can run no cleanup, and each run has its own TMP, so a later run never saw those frames. Now every run writes `run.pid` into its TMP/TMP_OUT (not with `-k`), and at start-up removes the frame directories and intermediate videos of earlier runs whose `run.pid` names a process that has ended. A running run, a `-k` run and directories of runs before this change (no `run.pid`) are left alone; their logs, CSVs and reports always stay.
     - Discussed with the user and dropped from the plan (10 Nov): reusing the split chunks (the split runs in the background now, and reusing old chunks caused the "chunk 008 not found" of Done item 27), waiting for memory before NCNN, GPU-loss handling and lowering HandBrake's memory: the warnings say enough, the user decides.
+30. **Faster frame extraction: PNG compression level 1** (first performance item of the order agreed on 10 Nov).
+    - The extracted frames were written with ffmpeg's default zlib level (6). `PNG_COMPRESSION_LEVEL` (`.config_video`, default 1) is now passed to the extraction and to the frame recovery at open-GOP splits; PNG is lossless at every level, so the frames are the same.
+    - Measured on 240 4K HDR frames of Edge of Tomorrow with the tone-mapping filter, levels alternated, on the NVMe drive of `VAR`: level 1 took 8.4–9.2 s for 1509 MB, level 6 13.5 s for 1314 MB, so ~35 % faster for ~15 % more space. For a 60 s chunk (~1440 frames) that is ~28 s less extraction and ~1.2 GB more peak space. Level 0 (no compression) was slower than level 1, as its 3.7× larger files made the disk the limit. Reading the frames back took the same time at every level.
+    - NCNN's output PNGs are written by rife-ncnn-vulkan itself and cannot be changed without rebuilding it.
 
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
@@ -723,7 +727,6 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**
    - replace fixed sleeps (`sleep 5` in extraction, `sleep 10` in the chunk loop, other 1–3 s sleeps) with event-based waits;
-   - lower the PNG `-compression_level` (faster writes, larger files);
    - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item);
    - encode-only mode with `-N none` (no interpolation), so `movies_encoding`-style encodes use the same chunked pipeline; compare chunked and whole-file encoding once. The first step of combining `interpolation_nncn` with `movies_encoding`.
 5. **Research: interpolation above 8 bits (keep HDR without tone mapping).** Today an HDR source must be tone mapped to 8-bit SDR before NCNN. The limit is in rife-ncnn-vulkan's input/output, not in the network:

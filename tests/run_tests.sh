@@ -178,9 +178,9 @@ EOF
 chmod +x "${WORK_DIR}/argsbin/ffmpeg"
 EXTRACT_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; IN_DIR=in; TARGET_FRAME_COUNT=2; INPUT_FRAMES_COUNT=10; mkdir -p "$TMP" "$LOG" o/in/c; rm -f ffmpeg_args.txt'
 OUTPUT="$(PATH="${WORK_DIR}/argsbin:${PATH}" run_with_helpers "${EXTRACT_SETUP}"'; TONE_MAPPING_FILTER="libplacebo=tm"; extracting_mkv_frames c o t; wait; tr "\n" " " < ffmpeg_args.txt' 2>&1)"
-assert_contains "HDR: frames are extracted through the tone-mapping filter" "${OUTPUT}" "-i c.mkv -vf libplacebo=tm -fps_mode passthrough o/in/c/%08d.png"
+assert_contains "HDR: frames are extracted through the tone-mapping filter, PNG level 1" "${OUTPUT}" "-i c.mkv -vf libplacebo=tm -fps_mode passthrough -compression_level 1 o/in/c/%08d.png"
 OUTPUT="$(PATH="${WORK_DIR}/argsbin:${PATH}" run_with_helpers "${EXTRACT_SETUP}"'; TONE_MAPPING_FILTER=""; extracting_mkv_frames c o t; wait; tr "\n" " " < ffmpeg_args.txt' 2>&1)"
-assert_contains "SDR: frames are extracted without a filter" "${OUTPUT}" "-i c.mkv -fps_mode passthrough o/in/c/%08d.png"
+assert_contains "SDR: frames are extracted without a filter, PNG level 1" "${OUTPUT}" "-i c.mkv -fps_mode passthrough -compression_level 1 o/in/c/%08d.png"
 OUTPUT="$(PATH="${WORK_DIR}/argsbin:${PATH}" run_with_helpers "${EXTRACT_SETUP}"'; OUT_DIR=out; NCNN_METHOD=rife; OUTPUT_FPS_ROUND=48; OUTPUT_FRAME_RATE=48000/1001; INTERMEDIATE_CODEC_OPTIONS=(-c:v ffv1); merging_frames_mkv c t o; wait; tr "\n" " " < ffmpeg_args.txt' 2>&1)"
 assert_contains "frames are merged at the exact rational rate (not a rounded 47.96)" "${OUTPUT}" "-framerate 48000/1001 -i t/out/c_rife_48/%08d.png"
 
