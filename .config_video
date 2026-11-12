@@ -717,6 +717,47 @@ fi
 NCNN_GPUS="${NCNN_GPUS:-${NCNN_GPUS_DEFAULT}}"
 NCNN_THREADS="${NCNN_THREADS:-${NCNN_THREADS_DEFAULT}}"
 
+# highest_unneeded_input_frame NCNN_LOG - prints the highest input frame no unfinished output needs
+# (0: none yet). NCNN (-v) logs "<in0>.png [<in1>.png <time>] -> <out>.png done" per saved output,
+# out of order with several threads. If outputs 1..m are all done, every unfinished output is later
+# than m and reads only input frames >= in0 of output m, so the frames below it can be removed. A
+# missing or failed output stops m there, so frames are kept rather than removed too early (no fixed
+# margin; replaying real 2x logs it keeps ~20 input frames instead of ~276).
+highest_unneeded_input_frame()
+{
+  awk '
+    function frame_number(path,    parts, count)
+    {
+      count = split(path, parts, "/")
+      sub(/\.png$/, "", parts[count])
+      return parts[count] + 0
+    }
+    / done$/ {
+      for (field = 2; field < NF; field++)
+      {
+        if ($field == "->")
+        {
+          first_input[frame_number($(field + 1))] = frame_number($1)
+        }
+      }
+    }
+    END {
+      last_in_order = 0
+      while ((last_in_order + 1) in first_input)
+      {
+        last_in_order++
+      }
+      if (last_in_order > 0 && first_input[last_in_order] > 1)
+      {
+        print first_input[last_in_order] - 1
+      }
+      else
+      {
+        print 0
+      }
+    }' "${1}" 2>/dev/null || echo 0
+  }
+
 interpolating_extracted_frames()
 {
   if [ $# -ne 3 ]
@@ -785,24 +826,17 @@ interpolating_extracted_frames()
           # when ( - 300) is set with 2x ncnn interpolation - there are NONE over-removed frames
           LAST_MANAGED_FRAME_PERCENT="$(echo "(${LAST_MANAGED_FRAME}/${INPUT_FRAMES_COUNT}) * 100" | bc -l)"
           LAST_MANAGED_FRAME_PERCENT="$(printf "%.0f\n" "${LAST_MANAGED_FRAME_PERCENT}" 2>/dev/null | tee "${TMP}/LAST_MANAGED_FRAME_PERCENT")"
-          MANAGED_FRAME_TO_REMOVE=$(echo "${LAST_MANAGED_FRAME} - (${TARGET_FRAME_COUNT}*150)" | bc -l )
-          if [[ ${MANAGED_FRAME_TO_REMOVE} =~ ^[0-9]+$ ]]
+          MANAGED_FRAME_TO_REMOVE="$(highest_unneeded_input_frame "${LOG}/${LOG_FILE}.log")"
+          if [ "${MANAGED_FRAME_TO_REMOVE}" -gt "${REMOVED_INPUT_FRAMES_UP_TO}" ]
           then
             MANAGED_FILE_TO_REMOVE="$(printf "%08d\n" "${MANAGED_FRAME_TO_REMOVE}")"
-          else
-            # still within the safety margin at the start of a chunk, nothing to remove yet
-            MANAGED_FILE_TO_REMOVE="-"
-          fi
-          if [[ ${MANAGED_FRAME_TO_REMOVE} =~ ^[0-9]+$ ]] && [ ${MANAGED_FRAME_TO_REMOVE} -gt 50 ]
-          then
-            # MANAGED_FILE_TO_REMOVE="$(printf "%08d\n" "${MANAGED_FRAME_TO_REMOVE}")"
-            #if [[ ${VERBOSE} == no ]]
-            #then
-            #  printf "\033[%d;0H\033[2K ${WHITE}f:${CHARTREUSE3}${SHOW_FUNCTION_NAME} %s\n" "$((TERMINAL_HEIGHT - 16))" " ${MAGENTA2}currently interpolated frame ${BROWN}${LAST_MANAGED_FRAME} ${LIGHT_MAGENTA}${LAST_MANAGED_FRAME_PERCENT} [%] (removing: ${MANAGED_FILE_TO_REMOVE})" 2>/dev/null
-            #fi
             # only frames not removed in an earlier round are deleted
             remove_numbered_frames "${FRAMES_IN_DIR}/${IN_DIR}/${VIDEO_FILE_NAME}" "$((REMOVED_INPUT_FRAMES_UP_TO + 1))" "${MANAGED_FRAME_TO_REMOVE}"
             REMOVED_INPUT_FRAMES_UP_TO="${MANAGED_FRAME_TO_REMOVE}"
+          elif [ "${REMOVED_INPUT_FRAMES_UP_TO}" -eq 0 ]
+          then
+            # at the start of a chunk no output is finished in order yet, nothing to remove
+            MANAGED_FILE_TO_REMOVE="-"
           fi
           if [[ ${VERBOSE} == no ]]
           then

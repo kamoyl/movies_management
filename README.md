@@ -686,6 +686,12 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - The service got only `PATH`, `HOME`, `USER`, `LANG` and `TERM`, so `INTERMEDIATE_CODEC=x264_crf10 ./interpolation_nncn … -S` ran with the default codec, without any message; the same for `PNG_COMPRESSION_LEVEL`, the NCNN settings and `DESTINATION_DIR`.
     - Now each of them goes to `systemd-run` as `--setenv` with the launcher's value (its own or the default), `DESTINATION_DIR` only when set. Tested with the fake `systemd-run` (codec, a destination with a space, no destination).
 
+33. **Predictable deletion of input frames** (12 Nov, Planned item 2).
+    - Before: every 2 s the first input of the *last* `done` line in the NCNN log, minus a fixed margin of 300 input frames (`TARGET_FRAME_COUNT*150`; the comment said 200 still removed frames too early). With several NCNN threads the outputs finish out of order (output 4 after 13 in a real log), so the margin was a guess.
+    - Now `highest_unneeded_input_frame` finds *m*, the last output for which outputs 1…*m* are all done. Every unfinished output comes later and reads only inputs ≥ the first input of output *m*, so the frames below it are removed. A missing or failed output stops *m*, so frames are kept rather than removed too early. Works for the one-input format of the upscalers too.
+    - Replayed on 30 real Edge of Tomorrow logs (83 040 log lines, the check after each line): neither rule ever removed a frame still needed (the old one kept at least 218 frames in hand), and the input frames on disk fell from ~276 to ~20 on average, ~1.6 GB less peak space per 4K chunk at PNG level 1.
+    - Checked end to end on a generated 20 s 720p clip: 960 of 960 frames at 48 fps, removal moved on during the chunk, no errors. The commented-out old display code in that loop was removed.
+
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
 | Codec / settings | Time (Mac) | Size | VMAF |
@@ -751,7 +757,7 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 
 1. **Metrics, before further optimization.** The sampling, the memory warning and the Excel report are done (Done item 21). Still open, once a real run has collected metrics:
    - explain the slower NCNN (Carnival Row's preparation and `RUN_MEMORY_PEAK_DEFAULT_GB` are done, see Done item 26);
-2. **Predictable deletion of input frames.** Track the highest contiguous output frame *m*. RIFE output frames 2k−1…2k+1 need input frame *k*, so input frames below ~*m*/2 can be deleted safely. This replaces the current log grep with its 300-frame margin. It could also let NCNN run without `-v`, if the NCNN pause (`throttling_ncnn`, which reads the last `done` line) also used the output frames instead of the log. The result is lower peak space use, which makes the next items possible.
+2. **Predictable deletion of input frames.** Done (Done item 33). Left open: running NCNN without `-v` would need `throttling_ncnn` and the deletion to read the output frames instead of the log; not worth it while the log costs nothing measurable.
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**
    - replace the remaining fixed sleeps (1–3 s polling intervals in the progress loops) with event-based waits; the `sleep 5` and `sleep 10` on the main path are done (Done item 31);

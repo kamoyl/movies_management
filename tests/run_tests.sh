@@ -130,6 +130,14 @@ done
 run_with_helpers 'TMP=""; TMP_OUT=""; safe_remove_dir "/in_001/x"' > /dev/null
 assert_status "refuses everything when TMP and TMP_OUT are empty" 1 $?
 
+echo "highest_unneeded_input_frame (NCNN log, outputs finished out of order)"
+OUTPUT="$(run_with_helpers 'mkdir hl; cd hl || exit 99
+for pair in 1:1 3:2 2:1 5:3; do printf "/in/%08d.png /in/%08d.png 0.5 -> /out/%08d.png done\n" "${pair#*:}" "$((${pair#*:} + 1))" "${pair%:*}" >> rife.log; done
+printf "decode image /in/00000004.png failed\n/in/00000003.png /in/00000004.png 0.0 -> /out/00000004.png" >> rife.log
+for n in 1 2 3 4; do printf "/in/%08d.png -> /out/%08d.png done\n" "$n" "$n" >> up.log; done
+echo "RIFE=$(highest_unneeded_input_frame rife.log) UP=$(highest_unneeded_input_frame up.log) NONE=$(highest_unneeded_input_frame none.log)"')"
+assert_contains "frees only the inputs below the first input of the last output done in order (gap at 4, failed and partial lines ignored); one input per output (upscalers); no log: none" "${OUTPUT}" "RIFE=1 UP=3 NONE=0"
+
 echo "remove_numbered_frames"
 OUTPUT="$(run_with_helpers 'mkdir f; for n in 1 2 3 4 5 6; do printf -v x "f/%08d.png" $n; touch "$x"; done
 touch "f/\$(touch PWNED).png"
