@@ -1319,7 +1319,7 @@ interpolation_video_file()
   interpolating_extracted_frames  "${MOVIE_NAME_ARRAY[*]}"            "${TMP_OUT}"    "${TMP}"
   if [[ ${VERBOSE} == yes ]]
   then
-    warn "      VERBOSE, so waiting till the end of interpolating_extracted_frames function"
+    warn "      VERBOSE: no on-screen space monitor; waiting till the end of interpolating_extracted_frames"
   fi
   if [[ ${VERBOSE} == no ]]
   then
@@ -1359,7 +1359,7 @@ interpolation_video_file()
   merging_frames_mkv              "${MOVIE_NAME_ARRAY[*]}"               "${TMP}"          "${TMP_OUT}"
   if [[ ${VERBOSE} == yes ]]
   then
-    warn "      VERBOSE, so waiting till the end of merging_frames_mkv function"
+    warn "      VERBOSE: no on-screen space monitor; waiting till the end of merging_frames_mkv"
   fi
   if [[ ${VERBOSE} == no ]]
   then

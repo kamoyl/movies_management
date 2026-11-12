@@ -692,6 +692,10 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - Replayed on 30 real Edge of Tomorrow logs (83 040 log lines, the check after each line): neither rule ever removed a frame still needed (the old one kept at least 218 frames in hand), and the input frames on disk fell from ~276 to ~20 on average, ~1.6 GB less peak space per 4K chunk at PNG level 1.
     - Checked end to end on a generated 20 s 720p clip: 960 of 960 frames at 48 fps, removal moved on during the chunk, no errors. The commented-out old display code in that loop was removed.
 
+34. **Small items** (12 Nov).
+    - Logs of a run that ended without its cleanup (`kill -9`, a closed terminal; the 10 Nov 14:30 run of Edge of Tomorrow left those of chunks 102–103) are now compressed by the next run's start-up, with the rest of that run's leftovers (Done item 29). Checked for that run: no OOM kill, no reboot and no GPU error around its end (the `amdgpu` lines at 18:30:04 are the idle GPU waking up, not a reset), so it was stopped from outside.
+    - With `-v` the messages after starting NCNN and the frame merge said the script waits for them; what `-v` actually changes there is that the on-screen space monitor is off, and they now say so. (With `-v` the extraction does finish before NCNN starts, on purpose.)
+
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
 | Codec / settings | Time (Mac) | Size | VMAF |
@@ -726,7 +730,7 @@ Decision: lossless x264 `ultrafast` is the default because it is the fastest and
 
 ### Planned (in agreed order)
 
-Order agreed on 10 Nov: performance first (the fixed sleeps and PNG compression of item 4, then items 2 and 3), then `-N none` as the first step of combining `interpolation_nncn` with `movies_encoding`, then hardening the `-S` service. Dropped: see Done item 29.
+Order agreed on 10 Nov: performance first (the fixed sleeps and PNG compression of item 4, then items 2 and 3), then `-N none` as the first step of combining `interpolation_nncn` with `movies_encoding`, then hardening the `-S` service. Dropped: see Done item 29, and (12 Nov) event-based waits for the remaining 1–3 s polling sleeps: they are in background monitors, except the 1 s NCNN throttle loop (~0.5 s per chunk on average), so inotify-style waits would add a dependency for under a second per chunk; the main-path waits are done (Done item 31).
 
 State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average per chunk without chunk 001:
 
@@ -760,7 +764,6 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 2. **Predictable deletion of input frames.** Done (Done item 33). Left open: running NCNN without `-v` would need `throttling_ncnn` and the deletion to read the output frames instead of the log; not worth it while the log costs nothing measurable.
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**
-   - replace the remaining fixed sleeps (1–3 s polling intervals in the progress loops) with event-based waits; the `sleep 5` and `sleep 10` on the main path are done (Done item 31);
    - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item);
    - encode-only mode with `-N none` (no interpolation), so `movies_encoding`-style encodes use the same chunked pipeline; compare chunked and whole-file encoding once. The first step of combining `interpolation_nncn` with `movies_encoding`.
 5. **Research: interpolation above 8 bits (keep HDR without tone mapping).** Today an HDR source must be tone mapped to 8-bit SDR before NCNN. The limit is in rife-ncnn-vulkan's input/output, not in the network:

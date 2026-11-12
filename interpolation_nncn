@@ -677,13 +677,15 @@ removing_work_files()
   }
 
 # Start-up: removes the frames and intermediate videos which earlier runs left in their work
-# directories, because they ended without any cleanup (kill -9, a lost machine) or before this
-# cleanup existed for failed runs. Only directories with a run.pid of an ended run (a run writes
-# run.pid unless -k) are touched, so a run still going, or one kept with -k, is never cleaned.
+# directories, and compresses their logs, because they ended without any cleanup (kill -9, a lost
+# machine) or before this cleanup existed for failed runs. Only directories with a run.pid of an
+# ended run (a run writes run.pid unless -k) are touched, so a run still going, or one kept with -k,
+# is never cleaned.
 # A reused PID only makes the cleanup skip the directory.
 cleaning_earlier_runs()
 {
   local EARLIER_DIR
+  local EARLIER_LOG_DIR
   local EARLIER_PID
   local REMOVED_COUNT=0
   for EARLIER_DIR in "${VAR}/tmp-${SCRIPT_NAME}_"* "${VAR_OUT}/tmp-${SCRIPT_NAME}_"*
@@ -699,6 +701,12 @@ cleaning_earlier_runs()
     fi
     # bash keeps these assignments for this one call only
     TMP="${EARLIER_DIR}" TMP_OUT="" removing_work_files "${EARLIER_DIR}"
+    # its logs too (the run had no cleanup to compress them); only VAR has a log directory
+    EARLIER_LOG_DIR="${EARLIER_DIR%/*}/log-${EARLIER_DIR##*/tmp-}"
+    if [[ ${EARLIER_DIR} == "${VAR}/tmp-"* ]] && [ -d "${EARLIER_LOG_DIR}" ]
+    then
+      compressing_logs "${EARLIER_LOG_DIR}"/*
+    fi
     rm -f -- "${EARLIER_DIR}/run.pid"
   done
   if [ "${REMOVED_COUNT}" -gt 0 ]
