@@ -53,10 +53,10 @@ then
   mkdir -p "${LOG_OUT}"
 fi
 
-VAR_DEV_FREE_SPACE=$(df --block-size G ${VAR} | grep -v 'Filesystem' | awk '{print $1"~"$4}')
+VAR_DEV_FREE_SPACE=$(df --block-size G "${VAR}" | grep -v 'Filesystem' | awk '{print $1"~"$4}')
 VAR_DEV=$(echo ${VAR_DEV_FREE_SPACE} | awk -F\~ '{print $1}')
 VAR_FREE_SPACE=$(echo ${VAR_DEV_FREE_SPACE} | awk -F\~ '{print $2}' | sed "s/G//g")
-VAR_OUT_DEV_FREE_SPACE=$(df --block-size G ${VAR_OUT} | grep -v 'Filesystem' | awk '{print $1"~"$4}')
+VAR_OUT_DEV_FREE_SPACE=$(df --block-size G "${VAR_OUT}" | grep -v 'Filesystem' | awk '{print $1"~"$4}')
 VAR_OUT_DEV=$(echo ${VAR_OUT_DEV_FREE_SPACE} | awk -F\~ '{print $1}')
 VAR_OUT_FREE_SPACE=$(echo ${VAR_OUT_DEV_FREE_SPACE} | awk -F\~ '{print $2}' | sed "s/G//g")
 
