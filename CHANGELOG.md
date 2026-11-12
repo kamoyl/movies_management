@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- Predictable deletion of input frames (no fixed 300-frame margin) ([832ea9d](https://github.com/kamoyl/movies_management/commit/832ea9d082de2dd6255f7f999836bd7aabc2122c) by Kamoyl).
 - -S: pass the settings read from the environment to the service ([0b4fbf5](https://github.com/kamoyl/movies_management/commit/0b4fbf5404340f4bbae9091eda51ca21c2eaa85a) by Kamoyl).
 - README: Edge of Tomorrow column and work-time row in the State-over-time table ([a968450](https://github.com/kamoyl/movies_management/commit/a9684508ad4f985f9dfaf5989171f5d51f17e63a) by Kamoyl).
 - Chunk loop: configurable summary pause, extraction wait off the main path ([f89f817](https://github.com/kamoyl/movies_management/commit/f89f8176fac26d1016bbe18bc57136f9f4573b6d) by Kamoyl).
