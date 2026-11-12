@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- README: Edge of Tomorrow column and work-time row in the State-over-time table ([a968450](https://github.com/kamoyl/movies_management/commit/a9684508ad4f985f9dfaf5989171f5d51f17e63a) by Kamoyl).
 - Chunk loop: configurable summary pause, extraction wait off the main path ([f89f817](https://github.com/kamoyl/movies_management/commit/f89f8176fac26d1016bbe18bc57136f9f4573b6d) by Kamoyl).
 - README: real-run measurement of PNG level 1 + overlays off ([af2fc4e](https://github.com/kamoyl/movies_management/commit/af2fc4ea4eb6df4734162ddb8ee86e1ac10076fa) by Kamoyl).
 - Quote VAR/VAR_OUT for df: free space was empty for paths with spaces ([4cd7dc3](https://github.com/kamoyl/movies_management/commit/4cd7dc3090f8a1c6235af766da59f10a45989499) by Kamoyl).
