@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- .config synced from get-auditing: github_release_downloading takes a pinned sha256 ([36249d1](https://github.com/kamoyl/movies_management/commit/36249d1695e865fdd103d8cc54fb5f01681a5e50) by Kamoyl).
 - Start-up compresses logs of ended runs; -v messages; polling sleeps dropped ([542fec7](https://github.com/kamoyl/movies_management/commit/542fec7ec88ce7a86707f3e287ebb6d6b2a46900) by Kamoyl).
 - Predictable deletion of input frames (no fixed 300-frame margin) ([832ea9d](https://github.com/kamoyl/movies_management/commit/832ea9d082de2dd6255f7f999836bd7aabc2122c) by Kamoyl).
 - -S: pass the settings read from the environment to the service ([0b4fbf5](https://github.com/kamoyl/movies_management/commit/0b4fbf5404340f4bbae9091eda51ca21c2eaa85a) by Kamoyl).
