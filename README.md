@@ -724,16 +724,21 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 - **≤ 29 Oct:** `statistics.txt` rows of chunks 002–041, before Done item 11. The encode was probably without `-g` (the profile was not recorded yet), which explains the faster encode.
 - **3–5 Nov:** `timeline.csv` of the runs of 3 and 5 Nov (34–36 chunks), after Done item 20, with `-g`.
 
-| Step | Baseline | ≤ 29 Oct | 3–5 Nov |
-|---|---|---|---|
-| Preparation (probes, frame analysis, frame count, recovery) | — | — | ~59 s |
-| Extracting frames (including tone mapping) | ~350 s (tone mapping 250 + extraction 100) | ~101 s | ~114 s |
-| NCNN interpolation | ~290 s | ~304 s | ~379 s |
-| Merging frames | ~117 s | ~35 s | ~35 s |
-| Merging streams | — | ~29 s | ~35 s |
-| Final encode (`-E`, background) | — | ~145 s | ~293 s (`-g`) |
-| VMAF (background) | ~700 s | ~62 s | ~96 s |
-| **Chunk total** | **~1400 s** | **~568 s** | **~515 s** |
+| Step | Baseline | ≤ 29 Oct | 3–5 Nov | 10 Nov, Edge of Tomorrow† |
+|---|---|---|---|---|
+| Preparation (probes, frame analysis, frame count, recovery) | — | — | ~59 s | ~23 s |
+| Extracting frames (including tone mapping) | ~350 s (tone mapping 250 + extraction 100) | ~101 s | ~114 s | ~63 s |
+| NCNN interpolation | ~290 s | ~304 s | ~379 s | ~319 s |
+| Merging frames | ~117 s | ~35 s | ~35 s | ~31 s |
+| Merging streams | — | ~29 s | ~35 s | ~15 s |
+| Final encode (`-E`, background) | — | ~145 s | ~293 s (`-g`) | ~208 s |
+| VMAF (background) | ~700 s | ~62 s | ~96 s | ~92 s |
+| **Chunk total** | **~1400 s** | **~568 s** | **~515 s** | **~397 s** |
+| My work time (changes since the previous column)‡ | — | — | — | ≥ ~50 min |
+
+† A different film (4K HDR, same options), so not directly comparable with the Smokin' Aces columns: `timeline.csv` steps started 10 Nov 12:37–20:00, with PNG level 1 and HandBrake overlays off; the same film before these changes is in Done item 30 (chunk ~474 s).
+
+‡ Recorded from 9 Nov on (`Work-time` commit trailers on big commits, no backfill); the commits without a trailer are not counted, hence "≥".
 
 - In the ≤ 29 Oct runs, chunk 001, with nothing in the background yet, took 297 s; the gap to 568 s was mostly the serialized encode and VMAF (Done item 11).
 - Between them, the runs of 1–2 Nov averaged ~851 s per chunk: frame recovery at open-GOP splits stalled (preparation ~441 s, up to 700 s), fixed in Done item 20.
