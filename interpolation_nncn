@@ -348,6 +348,12 @@ done
 
 # codec of the intermediate video (INTERMEDIATE_CODEC in .config_video), checked before any work
 intermediate_codec_options
+if [[ ! ${CHUNK_SUMMARY_PAUSE_SEC} =~ ^[0-9]+$ ]]
+then
+  error "  CHUNK_SUMMARY_PAUSE_SEC must be a whole number of seconds, not '${YELLOW}${CHUNK_SUMMARY_PAUSE_SEC}${RED}'"
+  ERROR_CODE="2"
+  failed
+fi
 
 # -S: the same command again as a transient systemd service in the system slice, run as the
 # calling user. Only with root or sudo, by the user's choice: then the service has what the
@@ -1229,7 +1235,10 @@ do
   # after the last chunk the screen stays as it is, so the summary remains visible
   if [[ ${VIDEO_FRAGMENT_ID} != "${LAST_VIDEO_FRAGMENT_ID}" ]]
   then
-    sleep 10
+    if [[ ${SILENT} != yes ]] && [ "${CHUNK_SUMMARY_PAUSE_SEC}" -gt 0 ]
+    then
+      sleep "${CHUNK_SUMMARY_PAUSE_SEC}"
+    fi
     # -x clears only the visible screen and keeps the scrollback
     clear -x
   fi

@@ -108,6 +108,10 @@ safe_remove_dir()
 # again (3.7x the size, the disk becomes the limit). Reading them back takes the same time.
 PNG_COMPRESSION_LEVEL="${PNG_COMPRESSION_LEVEL:-1}"
 
+# seconds the chunk summary stays on screen before the next chunk clears it (0 = no pause); a -S
+# service has no screen, so it never pauses there
+CHUNK_SUMMARY_PAUSE_SEC="${CHUNK_SUMMARY_PAUSE_SEC:-10}"
+
 # remove_numbered_frames DIR FROM TO - deletes DIR/<FROM>.png ... DIR/<TO>.png (8-digit names);
 # replaces "eval rm {N..1}.png": no code execution from file names, no "argument list too long"
 remove_numbered_frames()
@@ -623,8 +627,10 @@ extracting_mkv_frames()
   then
     debug "    ffmpeg isolation PID=${MAGENTA}${FFMPEG_EX_BACKGROUND_PROCESS_PID}"
   fi
-  sleep 5
+  # the pause gives ffmpeg time to write its first progress lines; in the monitor it no longer
+  # holds up the chunk (NCNN is held back by throttling_ncnn, not by this pause)
   (
+    sleep 5
     while ps -p ${FFMPEG_EX_BACKGROUND_PROCESS_PID} > /dev/null 2>&1
     do
       CURRENT_EXTRACTED_FRAME=$(tail -n$((TARGET_FRAME_COUNT*6)) "${LOG}/${VIDEO_FILE_NAME}_inter_inframes.log" | grep "frame=" | tail -n1 | sed "s/frame=//g")
