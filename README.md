@@ -275,7 +275,7 @@ Each step of each chunk also gets a row in `TMP/timeline.csv` (`~`-separated), s
 ./interpolation_nncn -i "Movie.mkv" -E -g -S -M 24G
 ```
 
-The launcher checks the options, the input and the tools as an interactive run does, so such errors show at once. Then it starts the same command with `sudo systemd-run` and prints:
+The launcher checks the options, the input and the tools as an interactive run does, so such errors show at once. Then it starts the same command with `sudo systemd-run` and prints the lines below. The service starts with a clean environment, so the launcher passes on the settings read from it: `INTERMEDIATE_CODEC`, `PNG_COMPRESSION_LEVEL`, `NCNN_EXTRACTION_MARGIN`, `NCNN_GPUS`, `NCNN_THREADS`, `RUN_MEMORY_PEAK_DEFAULT_GB`, `METRICS_INTERVAL_SEC` and, when set, `DESTINATION_DIR` (`CHUNK_SUMMARY_PAUSE_SEC` does not apply to a service). The launcher prints:
 
 - the unit name, e.g. `interpolation-Smokin_Aces_2006_-2026.11.02-16.50.33` (the movie name with characters systemd does not allow replaced by `_`, and the run's timestamp, the same as in its log directory);
 - the log, and how to follow it: `tail -f '<log>'`;
@@ -682,6 +682,10 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - The 5 s wait after the frame extraction starts held up every chunk. It now runs inside the background progress monitor. NCNN no longer gets a 5 s head start; `throttling_ncnn` pauses it until the extraction is `2 × NCNN_EXTRACTION_MARGIN` frames ahead, so a `_throttle.log` with one pause at the start of each chunk is now expected.
     - Saved per chunk: ~15 s (~4 % of ~400 s) under `-S` or with `CHUNK_SUMMARY_PAUSE_SEC=0`, ~5 s on the screen with the default pause.
 
+32. **`-S` passes the settings to the service** (found 12 Nov).
+    - The service got only `PATH`, `HOME`, `USER`, `LANG` and `TERM`, so `INTERMEDIATE_CODEC=x264_crf10 ./interpolation_nncn … -S` ran with the default codec, without any message; the same for `PNG_COMPRESSION_LEVEL`, the NCNN settings and `DESTINATION_DIR`.
+    - Now each of them goes to `systemd-run` as `--setenv` with the launcher's value (its own or the default), `DESTINATION_DIR` only when set. Tested with the fake `systemd-run` (codec, a destination with a space, no destination).
+
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
 | Codec / settings | Time (Mac) | Size | VMAF |
@@ -751,7 +755,6 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**
    - replace the remaining fixed sleeps (1–3 s polling intervals in the progress loops) with event-based waits; the `sleep 5` and `sleep 10` on the main path are done (Done item 31);
-   - `-S` passes only `PATH`, `HOME`, `USER`, `LANG` and `TERM` to the service, so `INTERMEDIATE_CODEC`, `PNG_COMPRESSION_LEVEL` and the other variables are ignored there (found 12 Nov; part of hardening the `-S` service);
    - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item);
    - encode-only mode with `-N none` (no interpolation), so `movies_encoding`-style encodes use the same chunked pipeline; compare chunked and whole-file encoding once. The first step of combining `interpolation_nncn` with `movies_encoding`.
 5. **Research: interpolation above 8 bits (keep HDR without tone mapping).** Today an HDR source must be tone mapped to 8-bit SDR before NCNN. The limit is in rife-ncnn-vulkan's input/output, not in the network:

@@ -407,12 +407,28 @@ starting_as_service()
   then
     SERVICE_PROPERTIES+=(-p "MemoryHigh=${MEMORY_HIGH}")
   fi
+  # the service starts with a clean environment, so the settings read from it (set by the caller or
+  # defaulted by .config_video) are passed on; without them they would silently fall back to defaults
+  local SERVICE_ENVIRONMENT=(
+    --setenv=INTERMEDIATE_CODEC="${INTERMEDIATE_CODEC}"
+    --setenv=PNG_COMPRESSION_LEVEL="${PNG_COMPRESSION_LEVEL}"
+    --setenv=NCNN_EXTRACTION_MARGIN="${NCNN_EXTRACTION_MARGIN}"
+    --setenv=NCNN_GPUS="${NCNN_GPUS}"
+    --setenv=NCNN_THREADS="${NCNN_THREADS}"
+    --setenv=RUN_MEMORY_PEAK_DEFAULT_GB="${RUN_MEMORY_PEAK_DEFAULT_GB}"
+    --setenv=METRICS_INTERVAL_SEC="${METRICS_INTERVAL_SEC}"
+  )
+  if [ -n "${DESTINATION_DIR}" ]
+  then
+    SERVICE_ENVIRONMENT+=(--setenv=DESTINATION_DIR="${DESTINATION_DIR}")
+  fi
   if ! "${SUDO_COMMAND[@]}" systemd-run --quiet --collect --unit="${UNIT_NAME}" \
     --description="interpolation_nncn: ${FILE_NAME}" \
     --uid="$(id -u)" --gid="$(id -g)" --working-directory="${PWD}" \
     "${SERVICE_PROPERTIES[@]}" \
     --setenv=PATH="${PATH}" --setenv=HOME="${HOME}" --setenv=USER="${USER}" \
     --setenv=LANG="${LANG:-C.UTF-8}" --setenv=TERM="${TERM:-xterm-256color}" \
+    "${SERVICE_ENVIRONMENT[@]}" \
     --setenv=INTERPOLATION_NNCN_SERVICE=yes --setenv=SERVICE_RUN_TIMESTAMP="${CURRENT_TIMESTAMP}" \
     /usr/bin/env bash "${SCRIPT}" "${ORIGINAL_ARGUMENTS[@]}"
   then
