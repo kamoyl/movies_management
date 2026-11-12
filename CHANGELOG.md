@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Removed
 
+- Remove dead commented-out code from .config (shared) ([7a92934](https://github.com/kamoyl/movies_management/commit/7a9293408c19b4d309b2a281c1db8bb3d761ffdc) by Kamoyl).
 - Remove the tone_mapping_runtime statistics column ([fe3bc96](https://github.com/kamoyl/movies_management/commit/fe3bc96fc68ad85f91ab95cc6033d826fcb4338e) by Kamoyl).
 
 ### Misc
