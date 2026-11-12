@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- README: real-run measurement of PNG level 1 + overlays off ([af2fc4e](https://github.com/kamoyl/movies_management/commit/af2fc4ea4eb6df4734162ddb8ee86e1ac10076fa) by Kamoyl).
 - Quote VAR/VAR_OUT for df: free space was empty for paths with spaces ([4cd7dc3](https://github.com/kamoyl/movies_management/commit/4cd7dc3090f8a1c6235af766da59f10a45989499) by Kamoyl).
 - Frame extraction: PNG compression level 1 (~35 % faster) ([3ddc003](https://github.com/kamoyl/movies_management/commit/3ddc003d6fc943618f017dc4b8b0f41bf457a644) by Kamoyl).
 - Cleanup after a failed run, and of frames left by earlier runs ([cc6e768](https://github.com/kamoyl/movies_management/commit/cc6e76891be3a7c5ef9787aa03500ce4151a24e6) by Kamoyl).
