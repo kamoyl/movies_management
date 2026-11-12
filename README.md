@@ -662,6 +662,18 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - The extracted frames were written with ffmpeg's default zlib level (6). `PNG_COMPRESSION_LEVEL` (`.config_video`, default 1) is now passed to the extraction and to the frame recovery at open-GOP splits; PNG is lossless at every level, so the frames are the same.
     - Measured on 240 4K HDR frames of Edge of Tomorrow with the tone-mapping filter, levels alternated, on the NVMe drive of `VAR`: level 1 took 8.4–9.2 s for 1509 MB, level 6 13.5 s for 1314 MB, so ~35 % faster for ~15 % more space. For a 60 s chunk (~1440 frames) that is ~28 s less extraction and ~1.2 GB more peak space. Level 0 (no compression) was slower than level 1, as its 3.7× larger files made the disk the limit. Reading the frames back took the same time at every level.
     - NCNN's output PNGs are written by rife-ncnn-vulkan itself and cannot be changed without rebuilding it.
+    - **Measured in a real run** (Edge of Tomorrow, 4K HDR, same options; the user's estimate was ~25 %). `timeline.csv` steps that started 9 Nov 11:11 – 10 Nov 11:41 (before overlays off, Done item 28) against 10 Nov 12:37–20:00 (with overlays off and PNG level 1), the run with the end credits left out. Averages per chunk, ~50 chunks each:
+
+      | Step | Before | After |
+      |---|---|---|
+      | Preparation | 59 s | 23 s |
+      | Extracting frames | 115 s | 63 s |
+      | Interpolating (NCNN) | 349 s | 319 s |
+      | Encoding (background) | 292 s (median 285 s) | 208 s (median 212 s) |
+      | **Chunk** | **474 s** | **397 s (−16 %)** |
+
+      Time between finished parts (the throughput, background work included): median 518 s → 398 s, **~23 % faster**.
+    - The gain is larger than the idle measurements predicted (~28 s for extraction, ~2 % for overlays). Probable reason, not proven: the background encode runs alongside the next chunk's extraction, and zlib level 6 took CPU from HandBrake and NCNN. Freeing it shortened the encode, which also took less memory away from the next chunk's preparation (see Done item 26). Three "before" encodes (686–832 s) were the hang of Done item 28. Before and after cover different parts of the film, so scene content may account for part of the difference.
 
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
