@@ -14,8 +14,16 @@
 # -g stops after generating (no LaTeX needed; the tests use it) and keeps the work directory.
 # Exit codes: 0 built, 1 the build failed, 2 usage, 127 missing tool or LaTeX package.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_DIR="${SCRIPT_DIR}/docs/interpolation"
+# standard header (identical in every script; tests/run_tests.sh compares it): $0, not BASH_SOURCE,
+# so a script sourced by another one keeps the caller's SCRIPTS_HOME (where .config is)
+SCRIPT=$(readlink -f "$0")
+SCRIPTS_HOME=$(dirname "${SCRIPT}")
+export SCRIPT
+export SCRIPTS_HOME
+PARAMETERS=$(echo "$@" | sed 's/\-l .//g')
+export EXECUTE_COMMAND="$0 ${PARAMETERS}"
+# end of the standard header
+SOURCE_DIR="${SCRIPTS_HOME}/docs/interpolation"
 DOCUMENT="interpolation_process"
 TOOLS=(latexmk pdflatex kpsewhich awk sed git)
 PACKAGES=(tikz pgfplots pgfplotstable longtable booktabs array geometry tabularx hyperref xcolor lmodern newunicodechar)
@@ -30,7 +38,7 @@ $0 -h
 
     Description: builds ${DOCUMENT}.pdf from docs/interpolation/ with the facts generated from
                  the repository (options, methods, settings, measurements, version)
-    -o  where the PDF is written (default: ${SCRIPT_DIR}/tmp)
+    -o  where the PDF is written (default: ${SCRIPTS_HOME}/tmp)
     -k  keeps the work directory (generated .tex/.csv files, LaTeX logs)
     -g  only generates the facts (no LaTeX needed) and prints the kept work directory
     -h  usage/help" 1>&2
@@ -55,7 +63,7 @@ function trim(s)
 }
 '
 
-OUTPUT_DIR="${SCRIPT_DIR}/tmp"
+OUTPUT_DIR="${SCRIPTS_HOME}/tmp"
 KEEP=no
 GENERATE_ONLY=no
 while getopts ":o:kgh" ARG
@@ -112,7 +120,7 @@ then
   exit 1
 fi
 
-WORK_DIR="${SCRIPT_DIR}/tmp/tmp-documenting_$(date +%Y.%m.%d-%H.%M.%S)"
+WORK_DIR="${SCRIPTS_HOME}/tmp/tmp-documenting_$(date +%Y.%m.%d-%H.%M.%S)"
 cleaning()
 {
   if [[ ${KEEP} == yes ]]
@@ -132,7 +140,7 @@ cp -R "${SOURCE_DIR}/." "${WORK_DIR}/"
 GENERATED="${WORK_DIR}/generated"
 
 # options and methods: the help of the script (plain text, as it is not printed on a terminal)
-if ! "${SCRIPT_DIR}/interpolation_nncn" -h > "${GENERATED}/help.txt" 2>&1 < /dev/null
+if ! "${SCRIPTS_HOME}/interpolation_nncn" -h > "${GENERATED}/help.txt" 2>&1 < /dev/null
 then
   echo "ERROR: interpolation_nncn -h failed" 1>&2
   exit 1
@@ -167,7 +175,7 @@ END { flush() }
 
 # settings: NAME="${NAME:-default}" (also indented, inside a function) with the comment block above
 # it; code lines between them (an if/else choosing NAME_DEFAULT, a sibling setting) are skipped
-sed -n 's/.*--setenv=\([A-Z_][A-Z0-9_]*\)=.*/\1/p' "${SCRIPT_DIR}/interpolation_nncn" > "${GENERATED}/service_settings.txt"
+sed -n 's/.*--setenv=\([A-Z_][A-Z0-9_]*\)=.*/\1/p' "${SCRIPTS_HOME}/interpolation_nncn" > "${GENERATED}/service_settings.txt"
 if ! awk "${TEX_ESCAPING}"'
 FILENAME == SERVICE_LIST { service[$1]; next }
 FNR == 1 { file = FILENAME; sub(/^.*\//, "", file); delete lines; delete defaults }
@@ -208,7 +216,7 @@ FNR == 1 { file = FILENAME; sub(/^.*\//, "", file); delete lines; delete default
 }
 END { exit missing }
 ' SERVICE_LIST="${GENERATED}/service_settings.txt" SETTINGS="${GENERATED}/settings.tex" \
-  "${GENERATED}/service_settings.txt" "${SCRIPT_DIR}/.config_video" "${SCRIPT_DIR}/.config"
+  "${GENERATED}/service_settings.txt" "${SCRIPTS_HOME}/.config_video" "${SCRIPTS_HOME}/.config"
 then
   echo "ERROR: every setting needs a comment above it (the document takes it as the description)" 1>&2
   exit 1
@@ -250,15 +258,15 @@ table && /[0-9]+ s/ {
   rows++
 }
 END { if (rows == 0) exit 1 }
-' CSV="${GENERATED}/state_over_time.csv" LEGEND="${GENERATED}/state_over_time_legend.tex" "${SCRIPT_DIR}/README.md"
+' CSV="${GENERATED}/state_over_time.csv" LEGEND="${GENERATED}/state_over_time_legend.tex" "${SCRIPTS_HOME}/README.md"
 then
   echo "ERROR: the \"State over time\" table was not found in README.md" 1>&2
   exit 1
 fi
 
 # version: the commit (and whether the working tree had changes) - the PDF says what it describes
-VERSION="$(git -C "${SCRIPT_DIR}" log -1 --format='%h, %cd' --date=format:'%Y-%m-%d %H:%M' 2> /dev/null)"
-if [ -n "$(git -C "${SCRIPT_DIR}" status --porcelain -- . ':!tmp' 2> /dev/null)" ]
+VERSION="$(git -C "${SCRIPTS_HOME}" log -1 --format='%h, %cd' --date=format:'%Y-%m-%d %H:%M' 2> /dev/null)"
+if [ -n "$(git -C "${SCRIPTS_HOME}" status --porcelain -- . ':!tmp' 2> /dev/null)" ]
 then
   VERSION="${VERSION} + changes"
 fi

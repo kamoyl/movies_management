@@ -10,7 +10,16 @@
 #   - load helper functions from .config_video with stubbed logging (error/warn/inf/debug);
 #   - replace external tools such as ffmpeg with tiny fake scripts put first on PATH.
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# standard header (identical in every script; tests/run_tests.sh compares it): $0, not BASH_SOURCE,
+# so a script sourced by another one keeps the caller's SCRIPTS_HOME (where .config is)
+SCRIPT=$(readlink -f "$0")
+SCRIPTS_HOME=$(dirname "${SCRIPT}")
+export SCRIPT
+export SCRIPTS_HOME
+PARAMETERS=$(echo "$@" | sed 's/\-l .//g')
+export EXECUTE_COMMAND="$0 ${PARAMETERS}"
+# end of the standard header
+REPO_ROOT=$(dirname "${SCRIPTS_HOME}")
 # work files stay inside the repository (tmp/ is gitignored), named like the scripts' log directories
 mkdir -p "${REPO_ROOT}/tmp"
 WORK_DIR="$(mktemp -d "${REPO_ROOT}/tmp/tmp-run_tests_$(date "+%Y.%m.%d-%H.%M.%S")_XXXX")"
@@ -856,6 +865,18 @@ printf '\nUNDOCUMENTED_SETTING="${UNDOCUMENTED_SETTING:-1}"\n' >> "${DOC_DIR}/.c
 OUTPUT="$("${DOC_DIR}/documenting" -g 2>&1)"
 assert_status "a setting without a comment stops the build" 1 $?
 assert_contains "and the error says why" "${OUTPUT}" "every setting needs a comment above it"
+
+echo "standard header (identical in every script)"
+HEADER_REFERENCE="$(sed -n '/^# standard header/,/^# end of the standard header/p' "${REPO_ROOT}/interpolation_nncn")"
+for HEADER_FILE in movies_encoding documenting tests/run_tests.sh tests/shellcheck.sh
+do
+  if [ -n "${HEADER_REFERENCE}" ] && [[ "$(sed -n '/^# standard header/,/^# end of the standard header/p' "${REPO_ROOT}/${HEADER_FILE}")" == "${HEADER_REFERENCE}" ]]
+  then
+    pass "${HEADER_FILE} has the header of interpolation_nncn"
+  else
+    fail "${HEADER_FILE} has the header of interpolation_nncn"
+  fi
+done
 
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"

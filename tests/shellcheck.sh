@@ -12,7 +12,16 @@
 # Finally a non-blocking summary of the remaining findings, mostly unquoted
 # variables (SC2086) that are harmless for the values these scripts use.
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# standard header (identical in every script; tests/run_tests.sh compares it): $0, not BASH_SOURCE,
+# so a script sourced by another one keeps the caller's SCRIPTS_HOME (where .config is)
+SCRIPT=$(readlink -f "$0")
+SCRIPTS_HOME=$(dirname "${SCRIPT}")
+export SCRIPT
+export SCRIPTS_HOME
+PARAMETERS=$(echo "$@" | sed 's/\-l .//g')
+export EXECUTE_COMMAND="$0 ${PARAMETERS}"
+# end of the standard header
+REPO_ROOT=$(dirname "${SCRIPTS_HOME}")
 cd "${REPO_ROOT}" || exit 1
 FILES=(.config .config_video interpolation_nncn movies_encoding documenting)
 GATED_CODES="SC2078,SC2164,SC2128,SC2140,SC2048,SC2288,SC2054"

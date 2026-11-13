@@ -7,20 +7,15 @@
 # made bash continue mid-line ("syntax error near unexpected token"). Inside { ... exit; } the whole
 # script is read before anything runs, so it can be edited safely. The body is deliberately not indented.
 {
-if [[ "${OSTYPE}" =~ "linux" ]]
-then
-  SCRIPT=$(readlink -f "$0")
-elif [[ "${OSTYPE}" =~ "darwin" ]]
-then
-  SCRIPT=$(greadlink -f "$0")
-else
-  SCRIPT=$(readlink -f "$0")
-fi
-
+# standard header (identical in every script; tests/run_tests.sh compares it): $0, not BASH_SOURCE,
+# so a script sourced by another one keeps the caller's SCRIPTS_HOME (where .config is)
+SCRIPT=$(readlink -f "$0")
 SCRIPTS_HOME=$(dirname "${SCRIPT}")
+export SCRIPT
 export SCRIPTS_HOME
-
 PARAMETERS=$(echo "$@" | sed 's/\-l .//g')
+export EXECUTE_COMMAND="$0 ${PARAMETERS}"
+# end of the standard header
 # -S starts the same command again as a systemd service
 ORIGINAL_ARGUMENTS=("$@")
 OWN_PID=${BASHPID}
@@ -41,8 +36,6 @@ else
   fi
 fi
 
-export EXECUTE_COMMAND="$0 ${PARAMETERS}"
-export EXECUTE_COMMAND
 
 usage()
 {

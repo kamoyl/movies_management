@@ -21,18 +21,15 @@ LIGHT_MAGENTA=$(echo -e "\x1b[38;2;240;200;240m")
 DARK_MAGENTA=$(echo -e "\x1b[38;2;75;66;144m")
 DARK_CYAN=$(echo -e "\x1b[38;2;0;139;139m")
 
-if [[ "${OSTYPE}" =~ "linux" ]]
-then
-  SCRIPT=$(readlink -f "$0")
-elif [[ "${OSTYPE}" =~ "darwin" ]]
-then
-  SCRIPT=$(greadlink -f "$0")
-else
-  SCRIPT=$(readlink -f "$0")
-fi
-
+# standard header (identical in every script; tests/run_tests.sh compares it): $0, not BASH_SOURCE,
+# so a script sourced by another one keeps the caller's SCRIPTS_HOME (where .config is)
+SCRIPT=$(readlink -f "$0")
 SCRIPTS_HOME=$(dirname "${SCRIPT}")
+export SCRIPT
+export SCRIPTS_HOME
 PARAMETERS=$(echo "$@" | sed 's/\-l .//g')
+export EXECUTE_COMMAND="$0 ${PARAMETERS}"
+# end of the standard header
 
 usage()
 {
