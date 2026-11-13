@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Add documenting: a LaTeX process document with generated facts (PoC) ([c8d77a6](https://github.com/kamoyl/movies_management/commit/c8d77a6894c584fbcfa45c09b0a12630020f49f8) by Kamoyl).
 - Added forgotten script ([fc629f0](https://github.com/kamoyl/movies_management/commit/fc629f03ce12cb7128a694322fae35012c7af3b7) by Kamoyl).
 
 ### Fixed
