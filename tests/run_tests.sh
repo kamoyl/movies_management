@@ -842,6 +842,21 @@ if grep -A3 '^appending_mkvs()' "${REPO_ROOT}/.config_video" | grep -q -- "mkvme
 echo "short chunks"
 if grep -q 'frame_analysis/output0002' "${REPO_ROOT}/.config_video"; then fail "frame analysis reads the first sample (a chunk of up to 100 frames has only one)"; else pass "frame analysis reads the first sample (a chunk of up to 100 frames has only one)"; fi
 
+echo "documenting (the facts of the PDF, generated without LaTeX)"
+DOC_DIR="${WORK_DIR}/documenting"
+mkdir -p "${DOC_DIR}"
+cp -R "${REPO_ROOT}/documenting" "${REPO_ROOT}/.config" "${REPO_ROOT}/.config_video" "${REPO_ROOT}/interpolation_nncn" "${REPO_ROOT}/README.md" "${REPO_ROOT}/docs" "${DOC_DIR}/"
+GENERATED="$("${DOC_DIR}/documenting" -g 2> /dev/null)"
+assert_status "generating the facts succeeds" 0 $?
+if [ "$(grep -c '^\\texttt{-' "${GENERATED}/options.tex" 2> /dev/null)" -ge 10 ]; then pass "every option of -h is a table row"; else fail "every option of -h is a table row"; fi
+assert_contains "a method name with digits is a method, not option text" "$(cat "${GENERATED}/methods.tex" 2> /dev/null)" '\texttt{waifu2x} & no'
+assert_contains "-S tells which settings reach the service" "$(cat "${GENERATED}/settings.tex" 2> /dev/null)" 'PNG\_COMPRESSION\_LEVEL}\newline{\scriptsize .config\_video} & \texttt{1} & yes'
+if grep -q ';nan;' "${GENERATED}/state_over_time.csv" 2> /dev/null && [ "$(wc -l < "${GENERATED}/state_over_time.csv")" -ge 8 ]; then pass "the README table becomes chart data, empty cells as nan"; else fail "the README table becomes chart data, empty cells as nan"; fi
+printf '\nUNDOCUMENTED_SETTING="${UNDOCUMENTED_SETTING:-1}"\n' >> "${DOC_DIR}/.config_video"
+OUTPUT="$("${DOC_DIR}/documenting" -g 2>&1)"
+assert_status "a setting without a comment stops the build" 1 $?
+assert_contains "and the error says why" "${OUTPUT}" "every setting needs a comment above it"
+
 echo
 echo "passed: ${PASSED}, failed: ${FAILED}"
 [ "${FAILED}" -eq 0 ]

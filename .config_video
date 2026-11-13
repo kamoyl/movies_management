@@ -2220,6 +2220,7 @@ finishing_split()
 # compared with what the run can get: what its tools hold now plus MemAvailable.
 # The default follows measured 4K HDR peaks: Kindred 16.1 and 19.2 GB, Carnival Row 19.5 GB.
 RUN_MEMORY_PEAK_DEFAULT_GB="${RUN_MEMORY_PEAK_DEFAULT_GB:-20}"
+# where the available memory is read from; the tests point it to a fake file
 MEMINFO_FILE="${MEMINFO_FILE:-/proc/meminfo}"
 checking_memory_headroom()
 {

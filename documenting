@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+
+# Builds the PDF "interpolation_nncn - the process" from docs/interpolation/ (LaTeX, TikZ, pgfplots).
+# Only the explanations are written by hand; every fact is generated from the repository at build
+# time, so the document cannot drift away from the scripts:
+#   options and methods - from "interpolation_nncn -h"
+#   settings            - the NAME="${NAME:-default}" lines of .config_video and .config, with the
+#                         comment block above each (a setting without one stops the build), and
+#                         whether -S passes it to the service (its --setenv list)
+#   measurements        - the "State over time" table of README.md
+#   version             - the commit the PDF was built from (marked "+ changes" when not clean)
+# Prerequisites are checked before anything is written; the build runs in its own work directory
+# (tmp/tmp-documenting_<timestamp>), removed at the end unless -k.
+# -g stops after generating (no LaTeX needed; the tests use it) and keeps the work directory.
+# Exit codes: 0 built, 1 the build failed, 2 usage, 127 missing tool or LaTeX package.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_DIR="${SCRIPT_DIR}/docs/interpolation"
+DOCUMENT="interpolation_process"
+TOOLS=(latexmk pdflatex kpsewhich awk sed git)
+PACKAGES=(tikz pgfplots pgfplotstable longtable booktabs array geometry tabularx hyperref xcolor lmodern newunicodechar)
+
+usage()
+{
+echo "
+Usage:
+$0 [ -o DIRECTORY ] [ -k ]
+$0 -g
+$0 -h
+
+    Description: builds ${DOCUMENT}.pdf from docs/interpolation/ with the facts generated from
+                 the repository (options, methods, settings, measurements, version)
+    -o  where the PDF is written (default: ${SCRIPT_DIR}/tmp)
+    -k  keeps the work directory (generated .tex/.csv files, LaTeX logs)
+    -g  only generates the facts (no LaTeX needed) and prints the kept work directory
+    -h  usage/help" 1>&2
+  }
+
+# tex TEXT... - the text escaped for LaTeX (the characters with a meaning of their own)
+TEX_ESCAPING='
+function tex(s)
+{
+  gsub(/\\/, "\001", s)
+  gsub(/[&%$#_{}]/, "\\\\&", s)
+  gsub(/~/, "\\textasciitilde{}", s)
+  gsub(/\^/, "\\textasciicircum{}", s)
+  gsub(/\001/, "\\textbackslash{}", s)
+  return s
+}
+function trim(s)
+{
+  sub(/^[ \t]+/, "", s)
+  sub(/[ \t]+$/, "", s)
+  return s
+}
+'
+
+OUTPUT_DIR="${SCRIPT_DIR}/tmp"
+KEEP=no
+GENERATE_ONLY=no
+while getopts ":o:kgh" ARG
+do
+  case "${ARG}" in
+    o)
+      OUTPUT_DIR="${OPTARG}"
+      ;;
+    k)
+      KEEP=yes
+      ;;
+    g)
+      GENERATE_ONLY=yes
+      KEEP=yes
+      TOOLS=(awk sed git)
+      PACKAGES=()
+      ;;
+    h)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+done
+shift $((OPTIND-1))
+if [ $# -ne 0 ]
+then
+  usage
+  exit 2
+fi
+
+for TOOL in "${TOOLS[@]}"
+do
+  if ! type "${TOOL}" > /dev/null 2>&1
+  then
+    echo "ERROR: ${TOOL} is missing (a TeX distribution: TeX Live, MacTeX)" 1>&2
+    exit 127
+  fi
+done
+for PACKAGE in "${PACKAGES[@]}"
+do
+  if ! kpsewhich "${PACKAGE}.sty" > /dev/null 2>&1
+  then
+    echo "ERROR: the LaTeX package ${PACKAGE} is missing" 1>&2
+    exit 127
+  fi
+done
+if ! mkdir -p "${OUTPUT_DIR}"
+then
+  echo "ERROR: cannot create: ${OUTPUT_DIR}" 1>&2
+  exit 1
+fi
+
+WORK_DIR="${SCRIPT_DIR}/tmp/tmp-documenting_$(date +%Y.%m.%d-%H.%M.%S)"
+cleaning()
+{
+  if [[ ${KEEP} == yes ]]
+  then
+    echo "work directory kept: ${WORK_DIR}" 1>&2
+  else
+    rm -rf "${WORK_DIR:?}"
+  fi
+  }
+if ! mkdir -p "${WORK_DIR}/generated"
+then
+  echo "ERROR: cannot create: ${WORK_DIR}" 1>&2
+  exit 1
+fi
+trap cleaning EXIT
+cp -R "${SOURCE_DIR}/." "${WORK_DIR}/"
+GENERATED="${WORK_DIR}/generated"
+
+# options and methods: the help of the script (plain text, as it is not printed on a terminal)
+if ! "${SCRIPT_DIR}/interpolation_nncn" -h > "${GENERATED}/help.txt" 2>&1 < /dev/null
+then
+  echo "ERROR: interpolation_nncn -h failed" 1>&2
+  exit 1
+fi
+awk "${TEX_ESCAPING}"'
+function flush()
+{
+  if (option != "")
+  {
+    printf "\\texttt{%s} & %s \\\\\n", tex(option), tex(text) > OPTIONS
+  }
+  option = ""
+  text = ""
+}
+/^    -[A-Za-z]  / { flush(); option = substr($1, 1); sub(/^    -[A-Za-z]  /, ""); text = trim($0); sub(/; supported by this script:$/, "", text); next }
+option == "" { next }
+/not supported yet/ { supported = "no"; next }
+/^ {21}[A-Za-z][A-Za-z0-9-]* +- / {
+  name = $1
+  line = $0
+  sub(/^ +[^ ]+ +- /, "", line)
+  url = line
+  sub(/^.*\(/, "", url)
+  sub(/\).*$/, "", url)
+  sub(/ +\(https?:.*$/, "", line)
+  printf "\\texttt{%s} & %s & %s & \\url{%s} \\\\\n", tex(name), (supported == "no" ? "no" : "yes"), tex(trim(line)), url > METHODS
+  next
+}
+{ text = text " " trim($0) }
+END { flush() }
+' supported=yes OPTIONS="${GENERATED}/options.tex" METHODS="${GENERATED}/methods.tex" "${GENERATED}/help.txt"
+
+# settings: NAME="${NAME:-default}" (also indented, inside a function) with the comment block above
+# it; code lines between them (an if/else choosing NAME_DEFAULT, a sibling setting) are skipped
+sed -n 's/.*--setenv=\([A-Z_][A-Z0-9_]*\)=.*/\1/p' "${SCRIPT_DIR}/interpolation_nncn" > "${GENERATED}/service_settings.txt"
+if ! awk "${TEX_ESCAPING}"'
+FILENAME == SERVICE_LIST { service[$1]; next }
+FNR == 1 { file = FILENAME; sub(/^.*\//, "", file); delete lines; delete defaults }
+{ lines[FNR] = $0 }
+/^[ \t]*[A-Z_][A-Z0-9_]*_DEFAULT="[^"]*"$/ {
+  name = $0; sub(/^[ \t]*/, "", name); sub(/=.*/, "", name)
+  value = $0; sub(/^[^"]*"/, "", value); sub(/"$/, "", value)
+  defaults[name] = (name in defaults) ? defaults[name] " or " value : value
+}
+/^[ \t]*[A-Z_][A-Z0-9_]*="\$\{[A-Z_][A-Z0-9_]*:-.*\}"$/ {
+  name = $0; sub(/^[ \t]*/, "", name); sub(/=.*/, "", name)
+  if (index($0, "${" name ":-") == 0) next
+  value = $0; sub(/^[^:]*:-/, "", value); sub(/\}"$/, "", value)
+  if (value ~ /^\$\{[A-Z_][A-Z0-9_]*\}$/)
+  {
+    reference = substr(value, 3, length(value) - 3)
+    if (reference in defaults) value = defaults[reference] " (by the OS)"
+  }
+  comment = ""
+  for (n = FNR - 1; n > 0; n--)
+  {
+    line = lines[n]
+    if (line ~ /^[ \t]*#/)
+    {
+      sub(/^[ \t]*# ?/, "", line)
+      comment = (comment == "") ? line : line " " comment
+      continue
+    }
+    if (comment != "" || line ~ /^[ \t]*$/) break
+  }
+  if (comment == "")
+  {
+    printf "ERROR: %s (%s, line %d) has no comment above it\n", name, file, FNR > "/dev/stderr"
+    missing = 1
+    next
+  }
+  printf "\\texttt{%s}\\newline{\\scriptsize %s} & \\texttt{%s} & %s & %s \\tabularnewline\n", tex(name), tex(file), tex(value), ((name in service) ? "yes" : "no"), tex(comment) > SETTINGS
+}
+END { exit missing }
+' SERVICE_LIST="${GENERATED}/service_settings.txt" SETTINGS="${GENERATED}/settings.tex" \
+  "${GENERATED}/service_settings.txt" "${SCRIPT_DIR}/.config_video" "${SCRIPT_DIR}/.config"
+then
+  echo "ERROR: every setting needs a comment above it (the document takes it as the description)" 1>&2
+  exit 1
+fi
+
+# measurements: the "State over time" table of README.md (the first number of a cell, "-" = none);
+# rows without a time in seconds (e.g. the work time) are left out
+if ! awk "${TEX_ESCAPING}"'
+/^\| Step \| Baseline/ {
+  table = 1
+  columns = split($0, header, "|")
+  printf "step" > CSV
+  for (c = 3; c < columns; c++)
+  {
+    printf ";c%d", c - 2 > CSV
+    legend = trim(header[c])
+    gsub(/[*`]/, "", legend)
+    printf "\\addlegendentry{%s}\n", tex(legend) > LEGEND
+  }
+  printf "\n" > CSV
+  next
+}
+table && !/^\|/ { exit }
+table && /^\|-/ { next }
+table && /[0-9]+ s/ {
+  split($0, cell, "|")
+  step = trim(cell[2])
+  gsub(/[*`]/, "", step)
+  sub(/ \(.*$/, "", step)
+  gsub(/;/, ",", step)
+  printf "%s", step > CSV
+  for (c = 3; c < columns; c++)
+  {
+    value = cell[c]
+    if (match(value, /[0-9]+ s/)) value = substr(value, RSTART, RLENGTH - 2); else value = "nan"
+    printf ";%s", value > CSV
+  }
+  printf "\n" > CSV
+  rows++
+}
+END { if (rows == 0) exit 1 }
+' CSV="${GENERATED}/state_over_time.csv" LEGEND="${GENERATED}/state_over_time_legend.tex" "${SCRIPT_DIR}/README.md"
+then
+  echo "ERROR: the \"State over time\" table was not found in README.md" 1>&2
+  exit 1
+fi
+
+# version: the commit (and whether the working tree had changes) - the PDF says what it describes
+VERSION="$(git -C "${SCRIPT_DIR}" log -1 --format='%h, %cd' --date=format:'%Y-%m-%d %H:%M' 2> /dev/null)"
+if [ -n "$(git -C "${SCRIPT_DIR}" status --porcelain -- . ':!tmp' 2> /dev/null)" ]
+then
+  VERSION="${VERSION} + changes"
+fi
+printf '\\newcommand{\\documentversion}{%s}\n' "${VERSION:-unknown}" > "${GENERATED}/version.tex"
+if [[ ${GENERATE_ONLY} == yes ]]
+then
+  echo "${GENERATED}"
+  exit 0
+fi
+
+# two passes (contents, references), halted at the first error; the log stays in WORK_DIR
+if ! (cd "${WORK_DIR}" && latexmk -pdf -interaction=nonstopmode -halt-on-error -quiet "${DOCUMENT}.tex" > "${WORK_DIR}/latexmk.log" 2>&1)
+then
+  echo "ERROR: LaTeX failed; the end of its log (whole: -k, ${WORK_DIR}/${DOCUMENT}.log):" 1>&2
+  grep -A3 '^!' "${WORK_DIR}/${DOCUMENT}.log" 1>&2
+  exit 1
+fi
+cp "${WORK_DIR}/${DOCUMENT}.pdf" "${OUTPUT_DIR}/${DOCUMENT}.pdf"
+echo "${OUTPUT_DIR}/${DOCUMENT}.pdf"

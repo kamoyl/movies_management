@@ -814,6 +814,31 @@ Next to `timeline.csv`, `TMP` of `interpolation_nncn` holds `metrics.csv` (machi
 
 For `interpolation_nncn`, `-O` is where the large extracted and processed frame files are stored, so a fast volume with ample free space is useful. `-o` holds the script's workspace and logs. With the default settings, both roots point to `$HOME/var`. The script reports the resolved paths and available space in verbose mode. The scripts may also create chunk and merged video files in the current working directory; the `-O` option does not relocate all video outputs. Choose both the current directory and configured roots with enough free space. The helper checks that requested roots can be created, but the scripts' use of `df --block-size G` is GNU/Linux-oriented.
 
+## Process document (`documenting`)
+
+`./documenting` builds `interpolation_process.pdf`, "interpolation_nncn – the process": an explanation of the whole process, with a TikZ diagram of the pipeline and a pgfplots chart. The explanations are written by hand in `docs/interpolation/interpolation_process.tex`. The facts are generated from the repository at build time, so they cannot drift away from the scripts:
+
+| Fact | Source |
+|---|---|
+| options and methods | `interpolation_nncn -h` |
+| settings, default, description | the `NAME="${NAME:-default}"` lines of `.config_video` and `.config`, with the comment above each; **a setting without a comment stops the build** |
+| `-S` column (does a service run receive it) | the `--setenv=` list in `interpolation_nncn` |
+| time-per-chunk chart | the "State over time" table in [Performance optimization](#performance-optimization) |
+| version on the title | the commit, plus "+ changes" when the working tree is not clean |
+
+```
+./documenting [ -o DIRECTORY ] [ -k ]
+./documenting -g
+./documenting -h
+```
+
+- `-o DIRECTORY`: where the PDF is written (default: `tmp/` of the repository).
+- `-k`: keeps the work directory `tmp/tmp-documenting_<timestamp>` (generated `.tex`/`.csv` files, LaTeX logs); without it, the directory is removed at the end.
+- `-g`: only generates the facts, without LaTeX, and prints the directory they are in (used by the tests).
+- Exit codes: 0 built, 1 the build failed (the LaTeX error is shown), 2 usage, 127 a missing tool or LaTeX package.
+
+Requirements: a TeX distribution (TeX Live or MacTeX: `latexmk`, `pdflatex`, `kpsewhich`) with the packages tikz, pgfplots, longtable, booktabs, array, geometry, tabularx, hyperref, xcolor, lmodern, newunicodechar. They are all checked before anything is written. The PDF is not committed (`*.pdf` is gitignored); it can always be built again from its commit.
+
 ## Notes on option/help mismatches
 
 The help output (`-h`) and the option parsers of both scripts list the same options; unknown options exit with code 2. `interpolation_nncn -h` separates the methods it supports (`rife`, `dain`, `cain`, `realsr`) from those that are listed but not supported yet.

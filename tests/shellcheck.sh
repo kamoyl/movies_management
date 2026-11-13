@@ -14,7 +14,7 @@
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
-FILES=(.config .config_video interpolation_nncn movies_encoding)
+FILES=(.config .config_video interpolation_nncn movies_encoding documenting)
 GATED_CODES="SC2078,SC2164,SC2128,SC2140,SC2048,SC2288,SC2054"
 STATUS=0
 
