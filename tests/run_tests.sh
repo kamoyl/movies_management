@@ -368,15 +368,71 @@ OUTPUT="$(run_with_helpers "${FRESH_SETUP}"'; eval "$(sed -n "/^statistics_row_f
 if [[ ${OUTPUT} == *"ROW KEPT"* ]]; then fail "-F removes the saved statistics row of a removed chunk"; else pass "-F removes the saved statistics row of a removed chunk"; fi
 
 echo "statistics row of a chunk finished by a stopped run (saved, written by the next run)"
-ROW_SETUP='for FUNC in statistics_row_file saving_statistics_row loading_statistics_row writing_saved_statistics_row finishing_previous_chunk stopping_after_failed_encode; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; compressing_logs() { :; }; WHOLE_MOVIE_NAME_ARRAY=(S2E1); NCNN_METHOD=rife; FINAL_ENCODING=no; QUALITY_CHECK=no; rm -rf rows; mkdir rows; cd rows || exit 99; TMP=.; LOG=.; : > statistics.txt; PENDING_CHUNK_ID=020; PENDING_STATISTICS_BEFORE_VMAF="020~1~2~3~4~5"; PENDING_STATISTICS_SPACE="9~10"; PENDING_PART_RUNTIME=400; saving_statistics_row; PENDING_CHUNK_ID=""; PENDING_STATISTICS_ROW=no'
-OUTPUT="$(run_with_helpers "${ROW_SETUP}"'; PENDING_CHUNK_ID=019; PENDING_STATISTICS_BEFORE_VMAF="019~1~1~1~1~1"; PENDING_STATISTICS_SPACE="8~8"; PENDING_PART_RUNTIME=300; PENDING_STATISTICS_ROW=yes; writing_saved_statistics_row 020; echo "ROWS: $(tr "\n" " " < statistics.txt)"; echo "LEFT: $(ls | tr "\n" " ")"' 2>&1)"
-assert_contains "a skipped chunk's saved row is written after the pending row before it, both intact" "${OUTPUT}" "ROWS: 019~1~1~1~1~1~0~0~8~8~~300 020~1~2~3~4~5~0~0~9~10~~400 "
+ROW_SETUP='for FUNC in statistics_row_file saving_statistics_row loading_statistics_row writing_saved_statistics_row finishing_previous_chunk stopping_after_failed_encode; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; compressing_logs() { :; }; WHOLE_MOVIE_NAME_ARRAY=(S2E1); NCNN_METHOD=rife; FINAL_ENCODING=no; QUALITY_CHECK=no; rm -rf rows; mkdir rows; cd rows || exit 99; TMP=.; LOG=.; : > statistics.txt; PENDING_CHUNK_ID=020; PENDING_STATISTICS_BEFORE_VMAF="020~1~2~3~4~5"; PENDING_STATISTICS_SPACE="9~10"; PENDING_PART_RUNTIME=400; PENDING_STATISTICS_GPUS="2 (redone 1x)"; saving_statistics_row; PENDING_CHUNK_ID=""; PENDING_STATISTICS_ROW=no'
+OUTPUT="$(run_with_helpers "${ROW_SETUP}"'; PENDING_CHUNK_ID=019; PENDING_STATISTICS_BEFORE_VMAF="019~1~1~1~1~1"; PENDING_STATISTICS_SPACE="8~8"; PENDING_PART_RUNTIME=300; PENDING_STATISTICS_GPUS="1,2"; PENDING_STATISTICS_ROW=yes; writing_saved_statistics_row 020; echo "ROWS: $(tr "\n" " " < statistics.txt)"; echo "LEFT: $(ls | tr "\n" " ")"' 2>&1)"
+assert_contains "a skipped chunk's saved row is written after the pending row before it, both intact (with the GPUs)" "${OUTPUT}" "ROWS: 019~1~1~1~1~1~0~0~8~8~~300~1,2 020~1~2~3~4~5~0~0~9~10~~400~2 (redone 1x) "
 assert_contains "the saved row is removed once written" "${OUTPUT}" "LEFT: statistics.txt "
 OUTPUT="$(run_with_helpers "${ROW_SETUP}"'; FINAL_ENCODING=yes; finishing_part_encoding() { ENCODING_RUNTIME=77; }; PENDING_CHUNK_ID=020; PENDING_STATISTICS_ROW=no; loading_statistics_row 020; finishing_previous_chunk; echo "ROWS: $(tr "\n" " " < statistics.txt)"' 2>&1)"
-assert_contains "-E: a resumed chunk's saved row gets the new encode time" "${OUTPUT}" "ROWS: 020~1~2~3~4~5~77~0~9~10~~400 "
+assert_contains "-E: a resumed chunk's saved row gets the new encode time" "${OUTPUT}" "ROWS: 020~1~2~3~4~5~77~0~9~10~~400~2 (redone 1x) "
+OUTPUT="$(run_with_helpers "${ROW_SETUP}"'; printf "S2E1\n021~1~2~3~4~5\n9~10\n500\n" > video_part_minute_021_rife.statistics; PENDING_STATISTICS_GPUS="1,2"; PENDING_CHUNK_ID=021; loading_statistics_row 021; finishing_previous_chunk; echo "ROWS: $(tr "\n" " " < statistics.txt)"' 2>&1)"
+assert_contains "a row saved before the gpus column gets an empty gpus cell" "${OUTPUT}" "ROWS: 021~1~2~3~4~5~0~0~9~10~~500~ "
 OUTPUT="$(run_with_helpers "${ROW_SETUP}"'; WHOLE_MOVIE_NAME_ARRAY=(Other); writing_saved_statistics_row 020; echo "ROWS: [$(cat statistics.txt)]"; echo "LEFT: $(ls | tr "\n" " ")"' 2>&1)"
 assert_contains "a saved row of another movie is not written" "${OUTPUT}" "ROWS: []"
 assert_contains "a saved row of another movie is kept" "${OUTPUT}" "LEFT: statistics.txt video_part_minute_020_rife.statistics "
+
+echo "lost GPU: detection, card identification, probing, continuing on the cards which work"
+OUTPUT="$(run_with_helpers 'printf "0.png 1.png -> 2.png done\nvkQueueSubmit failed -4\n" > lost.log; printf "decode image x.png failed\n" > other.log; ncnn_gpu_lost lost.log && echo "LOST: yes"; ncnn_gpu_lost other.log || echo "OTHER: no"; ncnn_gpu_lost missing.log || echo "MISSING: no"' 2>&1)"
+assert_contains "vk... failed -4 in the NCNN log is a lost GPU" "${OUTPUT}" "LOST: yes"
+assert_contains "another NCNN failure is not a lost GPU" "${OUTPUT}" "OTHER: no"
+assert_contains "no NCNN log is not a lost GPU" "${OUTPUT}" "MISSING: no"
+OUTPUT="$(run_with_helpers 'NCNN_GPUS_CONFIGURED=1,2; NCNN_THREADS_CONFIGURED=6:2,3:8; echo "A=$(ncnn_threads_for 1,2) B=$(ncnn_threads_for 2) C=$(ncnn_threads_for 1)"; NCNN_THREADS_CONFIGURED=4:2:4; echo "D=$(ncnn_threads_for 2)"' 2>&1)"
+assert_contains "-j keeps the proc value of each GPU left (one value per GPU)" "${OUTPUT}" "A=6:2,3:8 B=6:3:8 C=6:2:8"
+assert_contains "-j with a single proc value is kept as it is" "${OUTPUT}" "D=4:2:4"
+mkdir -p "${WORK_DIR}/gpubin"
+cat > "${WORK_DIR}/gpubin/vulkaninfo" <<'EOF'
+#!/usr/bin/env bash
+printf 'GPU0:\n\tdeviceUUID         = 00000000-0400-0000-0000-000000000000\nGPU1:\n\tdeviceUUID         = 00000000-0400-0000-0000-000000000000\nGPU2:\n\tdeviceUUID         = 00000000-0600-0000-0000-000000000000\n'
+EOF
+cat > "${WORK_DIR}/gpubin/journalctl" <<'EOF'
+#!/usr/bin/env bash
+printf 'Nov 15 10:13:50 rig2 kernel: amdgpu 0000:04:00.0: ring comp_1.0.1 timeout, signaled seq=503253, emitted seq=503254\nNov 15 10:13:51 rig2 kernel: amdgpu 0000:04:00.0: GPU reset begin!\n'
+EOF
+# fake NCNN: FAKE_NCNN=ok makes a frame, fail logs a lost device, hang sleeps past the probe timeout
+cat > "${WORK_DIR}/gpubin/rife-ncnn-vulkan" <<'EOF'
+#!/usr/bin/env bash
+while [ $# -gt 0 ]; do if [ "$1" = -o ]; then OUT="$2"; fi; shift; done
+case "${FAKE_NCNN}" in
+  ok) touch "${OUT}/00000001.png" ;;
+  fail) echo "vkQueueSubmit failed -4"; touch "${OUT}/00000001.png" ;;
+  hang) sleep 10 ;;
+esac
+EOF
+chmod +x "${WORK_DIR}/gpubin/"*
+OUTPUT="$(PATH="${WORK_DIR}/gpubin:${PATH}" run_with_helpers 'NCNN_GPUS=1,2; echo "PCI: $(gpu_pci_addresses | tr "\n" " ")"; echo "HUNG: [$(hung_gpus_from_kernel "2026-11-15 10:00" | tr "\n" " ")]"; NCNN_GPUS=2; echo "HUNG2: [$(hung_gpus_from_kernel "2026-11-15 10:00" | tr "\n" " ")]"' 2>&1)"
+assert_contains "the PCI bus of each Vulkan device comes from its UUID" "${OUTPUT}" "PCI: 0 04 1 04 2 06 "
+assert_contains "a ring timeout in the kernel log names the GPU NCNN used on that card" "${OUTPUT}" "HUNG: [1 ]"
+assert_contains "a hung card NCNN does not use is not named" "${OUTPUT}" "HUNG2: []"
+PROBE_SETUP='NCNN_METHOD=rife; rm -rf probe; mkdir -p probe/gpu_probe/in; cd probe || exit 99; TMP=$PWD; LOG=$PWD; touch gpu_probe/in/00000001.png gpu_probe/in/00000002.png'
+OUTPUT="$(PATH="${WORK_DIR}/gpubin:${PATH}" run_with_helpers "${PROBE_SETUP}"'; FAKE_NCNN=ok probing_gpu 2 && echo "OK: pass"; FAKE_NCNN=fail probing_gpu 2 || echo "FAIL: fail"; START=$SECONDS; GPU_PROBE_TIMEOUT_SEC=1 FAKE_NCNN=hang probing_gpu 2 || echo "HANG: fail after $((SECONDS - START))s"' 2>&1)"
+assert_contains "a GPU making the test frames passes its probe" "${OUTPUT}" "OK: pass"
+assert_contains "a GPU reporting a failure fails its probe" "${OUTPUT}" "FAIL: fail"
+assert_contains "a hanging GPU fails its probe after the timeout" "${OUTPUT}" "HANG: fail after 1s"
+LOSS_SETUP='for FUNC in using_working_gpus losing_gpu handling_lost_gpu retrying_lost_gpus; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; LOST_GPUS=(); declare -A GPU_LOST_AT_CHUNK; declare -A GPU_LOSS_COUNT; NCNN_GPUS_CONFIGURED=1,2; NCNN_THREADS_CONFIGURED=6:2,3:8; NCNN_GPUS=1,2; NCNN_THREADS=6:2,3:8; GPU_RETRY_AFTER_CHUNKS=2; GPU_MAX_LOSSES=2; LOG=.; hung_gpus_from_kernel() { echo 1; }; probing_gpu() { [[ " ${PROBE_FAILS} " != *" $1 "* ]]; }'
+OUTPUT="$(run_with_helpers "${LOSS_SETUP}"'; handling_lost_gpu 003 "2026-11-15 10:00"; echo "NOW: ${NCNN_GPUS} -j ${NCNN_THREADS} LOST: ${LOST_GPUS[*]}"' 2>&1)"
+assert_contains "the GPU the kernel named is left out, the chunk goes on on the other" "${OUTPUT}" "NOW: 2 -j 6:3:8 LOST: 1"
+OUTPUT="$(run_with_helpers "${LOSS_SETUP}"'; hung_gpus_from_kernel() { :; }; PROBE_FAILS=2; handling_lost_gpu 003 x; echo "NOW: ${NCNN_GPUS} LOST: ${LOST_GPUS[*]}"' 2>&1)"
+assert_contains "without a kernel report, the GPU failing its probe is left out" "${OUTPUT}" "NOW: 1 LOST: 2"
+OUTPUT="$(run_with_helpers "${LOSS_SETUP}"'; hung_gpus_from_kernel() { :; }; handling_lost_gpu 003 x; echo "NOW: ${NCNN_GPUS} LOST: [${LOST_GPUS[*]}]"' 2>&1)"
+assert_contains "when no GPU can be named, the chunk is done again on all of them" "${OUTPUT}" "NOW: 1,2 LOST: []"
+OUTPUT="$(run_with_helpers "${LOSS_SETUP}"'; PROBE_FAILS=2; handling_lost_gpu 003 x; echo "NOT REACHED"' 2>&1)"; STATUS=$?
+assert_status "no GPU left which works stops the run" 1 "${STATUS}"
+assert_contains "no GPU left which works says so" "${OUTPUT}" "no GPU left which works"
+OUTPUT="$(run_with_helpers "${LOSS_SETUP}"'; handling_lost_gpu 003 x > /dev/null; PROBE_FAILS=""; retrying_lost_gpus 004; echo "004: ${NCNN_GPUS}"; retrying_lost_gpus 005; echo "005: ${NCNN_GPUS} -j ${NCNN_THREADS} LOST: [${LOST_GPUS[*]}]"' 2>&1)"
+assert_contains "a lost GPU is not probed before GPU_RETRY_AFTER_CHUNKS chunks" "${OUTPUT}" "004: 2"
+assert_contains "a lost GPU passing its probe later is used again, with its -j" "${OUTPUT}" "005: 1,2 -j 6:2,3:8 LOST: []"
+OUTPUT="$(run_with_helpers "${LOSS_SETUP}"'; PROBE_FAILS=1; handling_lost_gpu 003 x > /dev/null; retrying_lost_gpus 005; echo "005: ${NCNN_GPUS} AT: ${GPU_LOST_AT_CHUNK[1]}"; GPU_LOSS_COUNT[1]=2; PROBE_FAILS=""; retrying_lost_gpus 009; echo "009: ${NCNN_GPUS}"' 2>&1)"
+assert_contains "a lost GPU still failing its probe waits another GPU_RETRY_AFTER_CHUNKS chunks" "${OUTPUT}" "005: 2 AT: 005"
+assert_contains "a GPU lost GPU_MAX_LOSSES times stays out" "${OUTPUT}" "009: 2"
 
 echo "-S starts a systemd service (sudo, systemd-run and id replaced by fakes)"
 mkdir -p "${WORK_DIR}/servicebin"

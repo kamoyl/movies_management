@@ -717,6 +717,144 @@ fi
 NCNN_GPUS="${NCNN_GPUS:-${NCNN_GPUS_DEFAULT}}"
 NCNN_THREADS="${NCNN_THREADS:-${NCNN_THREADS_DEFAULT}}"
 
+# A lost GPU (on rig2 an RX 580 hung twice: "ring comp_1.0.1 timeout", 14 and 15 Nov) made NCNN
+# fail every frame sent to that card (VK_ERROR_DEVICE_LOST, -4) while the other card went on, so
+# the chunk had holes and the run stopped. Now NCNN is stopped at once, the chunk is done again on
+# the cards which still work, and a lost card is probed back every GPU_RETRY_AFTER_CHUNKS chunks;
+# a card lost GPU_MAX_LOSSES times stays out for the rest of the run. The kernel resets the hung
+# ring itself ("device wedged, but no recovery needed"), and later runs used both cards again.
+GPU_PROBE_TIMEOUT_SEC="${GPU_PROBE_TIMEOUT_SEC:-60}"
+GPU_RETRY_AFTER_CHUNKS="${GPU_RETRY_AFTER_CHUNKS:-2}"
+GPU_MAX_LOSSES="${GPU_MAX_LOSSES:-2}"
+# NCNN_GPUS and NCNN_THREADS change when a GPU is lost; these keep what was set
+NCNN_GPUS_CONFIGURED="${NCNN_GPUS}"
+NCNN_THREADS_CONFIGURED="${NCNN_THREADS}"
+
+# ncnn_gpu_lost NCNN_LOG - true when NCNN reported a lost GPU (-4 is VK_ERROR_DEVICE_LOST: the
+# GPU or its driver gave up, the frames themselves are fine)
+ncnn_gpu_lost()
+{
+  grep -qaE 'vk[A-Za-z]+ failed -4' "${1}" 2>/dev/null
+  }
+
+# ncnn_threads_for GPUS - NCNN_THREADS (-j load:proc:save) for a subset of the configured GPUs:
+# proc has one value per GPU of NCNN_GPUS_CONFIGURED, in the same order (a single value is kept)
+ncnn_threads_for()
+{
+  local LOAD_THREADS="${NCNN_THREADS_CONFIGURED%%:*}"
+  local SAVE_THREADS="${NCNN_THREADS_CONFIGURED##*:}"
+  local PROC_THREADS="${NCNN_THREADS_CONFIGURED#*:}"
+  PROC_THREADS="${PROC_THREADS%:*}"
+  if [[ ${PROC_THREADS} != *,* ]]
+  then
+    echo "${NCNN_THREADS_CONFIGURED}"
+    return
+  fi
+  local CONFIGURED_GPUS=()
+  local CONFIGURED_PROC=()
+  local SELECTED_PROC=()
+  local GPU
+  local POSITION
+  IFS=, read -r -a CONFIGURED_GPUS <<< "${NCNN_GPUS_CONFIGURED}"
+  IFS=, read -r -a CONFIGURED_PROC <<< "${PROC_THREADS}"
+  for GPU in ${1//,/ }
+  do
+    for POSITION in "${!CONFIGURED_GPUS[@]}"
+    do
+      if [[ ${CONFIGURED_GPUS[${POSITION}]} == "${GPU}" ]]
+      then
+        SELECTED_PROC+=("${CONFIGURED_PROC[${POSITION}]:-${CONFIGURED_PROC[0]}}")
+      fi
+    done
+  done
+  local IFS=,
+  echo "${LOAD_THREADS}:${SELECTED_PROC[*]}:${SAVE_THREADS}"
+  }
+
+# gpu_pci_addresses - "<Vulkan index> <PCI bus>" per GPU (e.g. "2 06"), from the device UUID, in
+# which RADV (Mesa) stores the PCI address (00000000-0400-...: bus 04); nothing without vulkaninfo
+gpu_pci_addresses()
+{
+  vulkaninfo --summary 2>/dev/null | awk '
+    /^GPU[0-9]+:/ { index_number = substr($1, 4); sub(/:$/, "", index_number) }
+    /deviceUUID/ { print index_number, substr($3, 10, 2) }'
+  }
+
+# hung_gpus_from_kernel SINCE - Vulkan indices of the GPUs NCNN uses which the kernel reported as
+# hung since SINCE (journalctl -k: "amdgpu 0000:04:00.0: ring ... timeout"); nothing when the
+# journal cannot be read, then probing alone decides
+hung_gpus_from_kernel()
+{
+  local HUNG_BUS
+  local GPU
+  local BUS
+  for HUNG_BUS in $(journalctl -k --since "${1}" --no-pager 2>/dev/null | sed -n 's/.* [0-9a-f]\{4\}:\([0-9a-f]\{2\}\):[0-9a-f]\{2\}\.[0-9]: ring .* timeout.*/\1/p' | sort -u)
+  do
+    while read -r GPU BUS
+    do
+      if [[ ${BUS} == "${HUNG_BUS}" ]] && [[ ,${NCNN_GPUS}, == *",${GPU},"* ]]
+      then
+        echo "${GPU}"
+      fi
+    done < <(gpu_pci_addresses)
+  done
+  }
+
+# probing_gpu GPU - interpolates two small test frames on one GPU (Vulkan index), with a timeout;
+# true when NCNN made frames without any failure
+probing_gpu()
+{
+  local PROBE_DIR="${TMP}/gpu_probe"
+  local PROBE_OUT="${PROBE_DIR}/out_${1}"
+  local PROBE_LOG="${LOG}/gpu_probe_${1}.log"
+  local PROBE_PARAMETERS=()
+  mkdir -p "${PROBE_DIR}/in"
+  rm -rf -- "${PROBE_OUT}"
+  mkdir -p "${PROBE_OUT}"
+  if [ ! -s "${PROBE_DIR}/in/00000002.png" ]
+  then
+    if ! ffmpeg -y -hide_banner -loglevel error -f lavfi -i testsrc=size=128x128:rate=1 -frames:v 2 "${PROBE_DIR}/in/%08d.png" > "${PROBE_LOG}" 2>&1
+    then
+      return 1
+    fi
+  fi
+  if [[ ${NCNN_METHOD} == rife ]]
+  then
+    PROBE_PARAMETERS=(-m rife-v4.6)
+  elif [[ ${NCNN_METHOD} == realsr ]]
+  then
+    PROBE_PARAMETERS=(-m models-DF2K)
+  fi
+  local NCNN_BINARY
+  NCNN_BINARY="$(readlink -f "$(command -v "${NCNN_METHOD}-ncnn-vulkan")")"
+  if ! timeout "${GPU_PROBE_TIMEOUT_SEC}" "${NCNN_BINARY}" -g "${1}" "${PROBE_PARAMETERS[@]}" -i "${PROBE_DIR}/in" -o "${PROBE_OUT}" >> "${PROBE_LOG}" 2>&1
+  then
+    return 1
+  fi
+  if grep -qa fail "${PROBE_LOG}" || [ -z "$(ls -A "${PROBE_OUT}")" ]
+  then
+    return 1
+  fi
+  rm -rf -- "${PROBE_OUT}"
+  return 0
+  }
+
+# Stops NCNN after a lost GPU (CHUNK_GPU_LOST=yes); a process stuck in the driver may ignore
+# SIGTERM, so it gets SIGKILL after 10 s
+stopping_ncnn_after_gpu_loss()
+{
+  local WAITED_SEC=0
+  CHUNK_GPU_LOST="yes"
+  kill "${NCNN_BACKGROUND_PROCESS_PID}" 2>/dev/null
+  resuming_ncnn "${NCNN_BACKGROUND_PROCESS_PID}"
+  while [ "${WAITED_SEC}" -lt 10 ] && kill -0 "${NCNN_BACKGROUND_PROCESS_PID}" 2>/dev/null
+  do
+    sleep 1
+    WAITED_SEC=$((WAITED_SEC + 1))
+  done
+  kill -KILL "${NCNN_BACKGROUND_PROCESS_PID}" 2>/dev/null
+  }
+
 # highest_unneeded_input_frame NCNN_LOG - prints the highest input frame no unfinished output needs
 # (0: none yet). NCNN (-v) logs "<in0>.png [<in1>.png <time>] -> <out>.png done" per saved output,
 # out of order with several threads. If outputs 1..m are all done, every unfinished output is later
@@ -1326,33 +1464,57 @@ interpolation_video_file()
     checking_space_background       "${NCNN_BACKGROUND_PROCESS_PID}"    "${TMP_OUT}"    "${TMP}"
   fi
   # NCNN that stops early (e.g. invalid GPU) is reported at once, not only after the extraction;
-  # meanwhile NCNN is kept behind the extraction (throttling_ncnn)
+  # meanwhile NCNN is kept behind the extraction (throttling_ncnn); a lost GPU stops NCNN at once
   NCNN_PAUSED="no"
+  CHUNK_GPU_LOST="no"
+  local NCNN_LOG_FILE="${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
   while ps -p "${FFMPEG_EX_BACKGROUND_PROCESS_PID}" > /dev/null 2>&1
   do
-    if ! ps -p "${NCNN_BACKGROUND_PROCESS_PID}" > /dev/null 2>&1
+    if ncnn_gpu_lost "${NCNN_LOG_FILE}"
     then
-      wait_for_step "${NCNN_BACKGROUND_PROCESS_PID}" "interpolation (${NCNN_METHOD}-ncnn-vulkan)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
+      stopping_ncnn_after_gpu_loss
       break
     fi
-    throttling_ncnn "${NCNN_BACKGROUND_PROCESS_PID}" "${LOG}/${MOVIE_NAME_ARRAY[*]}_inter_inframes.log" "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
+    if ! ps -p "${NCNN_BACKGROUND_PROCESS_PID}" > /dev/null 2>&1
+    then
+      if ! ncnn_gpu_lost "${NCNN_LOG_FILE}"
+      then
+        wait_for_step "${NCNN_BACKGROUND_PROCESS_PID}" "interpolation (${NCNN_METHOD}-ncnn-vulkan)" "${NCNN_LOG_FILE}"
+      fi
+      break
+    fi
+    throttling_ncnn "${NCNN_BACKGROUND_PROCESS_PID}" "${LOG}/${MOVIE_NAME_ARRAY[*]}_inter_inframes.log" "${NCNN_LOG_FILE}"
     sleep 1
   done
   resuming_ncnn "${NCNN_BACKGROUND_PROCESS_PID}"
   wait_for_step "${FFMPEG_EX_BACKGROUND_PROCESS_PID}" "frames extraction (ffmpeg)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_inter_inframes.log"
-  wait_for_step "${NCNN_BACKGROUND_PROCESS_PID}" "interpolation (${NCNN_METHOD}-ncnn-vulkan)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
+  while [[ ${CHUNK_GPU_LOST} == no ]] && ps -p "${NCNN_BACKGROUND_PROCESS_PID}" > /dev/null 2>&1
+  do
+    if ncnn_gpu_lost "${NCNN_LOG_FILE}"
+    then
+      stopping_ncnn_after_gpu_loss
+    else
+      sleep 2
+    fi
+  done
+  # also a loss found only after NCNN ended: the chunk is done again (by the caller)
+  if [[ ${CHUNK_GPU_LOST} == yes ]] || ncnn_gpu_lost "${NCNN_LOG_FILE}"
+  then
+    CHUNK_GPU_LOST="yes"
+    wait "${NCNN_BACKGROUND_PROCESS_PID}" 2>/dev/null
+    WAITED_PIDS="${WAITED_PIDS} ${NCNN_BACKGROUND_PROCESS_PID}"
+    waiting_for_chunk_steps
+    warn "  a GPU was lost (Vulkan device lost) during ${YELLOW}${MOVIE_NAME_ARRAY[*]}${WINE}, NCNN stopped; the chunk is done again on the GPUs which still work (log: ${NCNN_LOG_FILE})"
+    return
+  fi
+  wait_for_step "${NCNN_BACKGROUND_PROCESS_PID}" "interpolation (${NCNN_METHOD}-ncnn-vulkan)" "${NCNN_LOG_FILE}"
   waiting_for_chunk_steps
   # NCNN may exit 0 while single frames failed, so its log is checked as the result
   local INTERPOLATING_ERRORS
-  INTERPOLATING_ERRORS="$(grep -c fail "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log")"
+  INTERPOLATING_ERRORS="$(grep -c fail "${NCNN_LOG_FILE}")"
   if [ "${INTERPOLATING_ERRORS}" -ne 0 ]
   then
-    error "  NCNN reported ${INTERPOLATING_ERRORS} failure(s), log: ${BLUE}${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
-    # -4 is VK_ERROR_DEVICE_LOST: the GPU or its driver gave up, the frames themselves are fine
-    if grep -qE 'vk[A-Za-z]+ failed -4' "${LOG}/${MOVIE_NAME_ARRAY[*]}_ncnn_${NCNN_METHOD}.log"
-    then
-      error "  the GPU was lost (Vulkan device lost): check ${BLUE}journalctl -k${RED}, a reboot may be needed before -r"
-    fi
+    error "  NCNN reported ${INTERPOLATING_ERRORS} failure(s), log: ${BLUE}${NCNN_LOG_FILE}"
     ERROR_CODE="1"
     failed
   fi

@@ -410,6 +410,9 @@ starting_as_service()
     --setenv=NCNN_EXTRACTION_MARGIN="${NCNN_EXTRACTION_MARGIN}"
     --setenv=NCNN_GPUS="${NCNN_GPUS}"
     --setenv=NCNN_THREADS="${NCNN_THREADS}"
+    --setenv=GPU_PROBE_TIMEOUT_SEC="${GPU_PROBE_TIMEOUT_SEC}"
+    --setenv=GPU_RETRY_AFTER_CHUNKS="${GPU_RETRY_AFTER_CHUNKS}"
+    --setenv=GPU_MAX_LOSSES="${GPU_MAX_LOSSES}"
     --setenv=RUN_MEMORY_PEAK_DEFAULT_GB="${RUN_MEMORY_PEAK_DEFAULT_GB}"
     --setenv=METRICS_INTERVAL_SEC="${METRICS_INTERVAL_SEC}"
   )
@@ -651,7 +654,7 @@ removing_work_files()
     then
       continue
     fi
-    for WORK_ITEM in "${WORK_DIR_ROOT}"/in_[0-9][0-9][0-9] "${WORK_DIR_ROOT}"/out_[0-9][0-9][0-9] "${WORK_DIR_ROOT}"/frame_analysis
+    for WORK_ITEM in "${WORK_DIR_ROOT}"/in_[0-9][0-9][0-9] "${WORK_DIR_ROOT}"/out_[0-9][0-9][0-9] "${WORK_DIR_ROOT}"/frame_analysis "${WORK_DIR_ROOT}"/gpu_probe
     do
       if [ -d "${WORK_ITEM}" ]
       then
@@ -751,6 +754,103 @@ cleaning_after_interrupt()
 trap "exit_function" INT
 trap "exiting_function" EXIT
 
+# GPUs lost during this run (Vulkan indices), with the chunk each was lost in and how often
+LOST_GPUS=()
+declare -A GPU_LOST_AT_CHUNK
+declare -A GPU_LOSS_COUNT
+
+# Sets NCNN_GPUS (in the configured order) and NCNN_THREADS to the configured GPUs not lost
+using_working_gpus()
+{
+  local WORKING_GPUS=()
+  local GPU
+  for GPU in ${NCNN_GPUS_CONFIGURED//,/ }
+  do
+    if [[ " ${LOST_GPUS[*]} " != *" ${GPU} "* ]]
+    then
+      WORKING_GPUS+=("${GPU}")
+    fi
+  done
+  NCNN_GPUS="$(IFS=,; echo "${WORKING_GPUS[*]}")"
+  NCNN_THREADS="$(ncnn_threads_for "${NCNN_GPUS}")"
+  }
+
+# losing_gpu GPU CHUNK_ID - leaves a GPU out from this chunk on
+losing_gpu()
+{
+  if [[ " ${LOST_GPUS[*]} " != *" ${1} "* ]]
+  then
+    LOST_GPUS+=("${1}")
+  fi
+  GPU_LOST_AT_CHUNK[${1}]="${2}"
+  GPU_LOSS_COUNT[${1}]=$((${GPU_LOSS_COUNT[${1}]:-0} + 1))
+  }
+
+# handling_lost_gpu CHUNK_ID SINCE - after a GPU was lost during a chunk: the GPUs the kernel
+# reported as hung since SINCE, and those failing a probe, are left out; stops the run when none
+# is left. When no GPU can be named (all probes pass), the chunk is done again on all of them.
+handling_lost_gpu()
+{
+  local HUNG_GPUS
+  local GPU
+  HUNG_GPUS=" $(hung_gpus_from_kernel "${2}" | tr '\n' ' ') "
+  for GPU in ${NCNN_GPUS//,/ }
+  do
+    if [[ ${HUNG_GPUS} == *" ${GPU} "* ]]
+    then
+      warn "  GPU ${YELLOW}${GPU}${WINE} hung (kernel log: ring timeout), it is left out"
+      losing_gpu "${GPU}" "${1}"
+    elif ! probing_gpu "${GPU}"
+    then
+      warn "  GPU ${YELLOW}${GPU}${WINE} failed its probe (log: ${LOG}/gpu_probe_${GPU}.log), it is left out"
+      losing_gpu "${GPU}" "${1}"
+    fi
+  done
+  using_working_gpus
+  if [ -z "${NCNN_GPUS}" ]
+  then
+    error "  no GPU left which works (check ${BLUE}journalctl -k${RED}; a reboot may be needed), stopping; finished chunks are kept"
+    ERROR_CODE="1"
+    failed
+  fi
+  inf "  chunk ${YELLOW}${1}${CYAN} is done again on GPU(s) ${YELLOW}${NCNN_GPUS}${CYAN} (-j ${NCNN_THREADS})"
+  }
+
+# retrying_lost_gpus CHUNK_ID - before a chunk: a GPU lost GPU_RETRY_AFTER_CHUNKS or more chunks
+# ago is probed and, when it works, used again; one lost GPU_MAX_LOSSES times stays out
+retrying_lost_gpus()
+{
+  local GPU
+  local CHANGED="no"
+  for GPU in "${LOST_GPUS[@]}"
+  do
+    if [ "${GPU_LOSS_COUNT[${GPU}]}" -ge "${GPU_MAX_LOSSES}" ] || [ $((10#${1} - 10#${GPU_LOST_AT_CHUNK[${GPU}]})) -lt "${GPU_RETRY_AFTER_CHUNKS}" ]
+    then
+      continue
+    fi
+    if probing_gpu "${GPU}"
+    then
+      inf "  GPU ${YELLOW}${GPU}${CYAN} works again (probe passed), it is used from chunk ${YELLOW}${1}${CYAN} on"
+      mapfile -t LOST_GPUS < <(printf '%s\n' "${LOST_GPUS[@]}" | grep -vx "${GPU}")
+      CHANGED="yes"
+    else
+      warn "  GPU ${YELLOW}${GPU}${WINE} still fails its probe, it is probed again in ${GPU_RETRY_AFTER_CHUNKS} chunk(s)"
+      GPU_LOST_AT_CHUNK[${GPU}]="${1}"
+    fi
+  done
+  if [[ ${CHANGED} == yes ]]
+  then
+    using_working_gpus
+  fi
+  }
+
+# Leaves of a chunk whose NCNN was stopped (frames, extracts), so it can be done again
+removing_chunk_work_files()
+{
+  rm -rf -- "${TMP_OUT:?}/${IN_DIR:?}" "${TMP_OUT:?}/${OUT_DIR:?}" "${TMP:?}/${IN_DIR:?}" "${TMP:?}/${OUT_DIR:?}"
+  rm -f -- "${TMP_OUT}/${MOVIE_NAME_ARRAY[*]}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}.mkv" "${TMP}/${MOVIE_NAME_ARRAY[*]}.mka" "${TMP}/${MOVIE_NAME_ARRAY[*]}_subtitles.mkv"
+  }
+
 # statistics_row_file CHUNK_ID - the saved statistics row of a finished chunk, next to its .done
 # marker. The row is written only once the chunk's encode and VMAF end, alongside the next chunk,
 # so a run stopped meanwhile (e.g. a dropped SSH session without -S) lost it; the next run only
@@ -763,7 +863,7 @@ statistics_row_file()
 # Saves the pending row parts of the chunk just finished; line 1 is the movie, as in the markers
 saving_statistics_row()
 {
-  printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" "${PENDING_STATISTICS_BEFORE_VMAF}" "${PENDING_STATISTICS_SPACE}" "${PENDING_PART_RUNTIME}" > "$(statistics_row_file "${PENDING_CHUNK_ID}")"
+  printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" "${PENDING_STATISTICS_BEFORE_VMAF}" "${PENDING_STATISTICS_SPACE}" "${PENDING_PART_RUNTIME}" "${PENDING_STATISTICS_GPUS}" > "$(statistics_row_file "${PENDING_CHUNK_ID}")"
   }
 
 # loading_statistics_row CHUNK_ID - makes the saved row of a chunk finished by an earlier run
@@ -779,6 +879,8 @@ loading_statistics_row()
   PENDING_STATISTICS_BEFORE_VMAF="$(sed -n 2p "${ROW_FILE}")"
   PENDING_STATISTICS_SPACE="$(sed -n 3p "${ROW_FILE}")"
   PENDING_PART_RUNTIME="$(sed -n 4p "${ROW_FILE}")"
+  # empty in files saved before the gpus column
+  PENDING_STATISTICS_GPUS="$(sed -n 5p "${ROW_FILE}")"
   PENDING_STATISTICS_ROW="yes"
   inf "  chunk ${YELLOW}${1}${CYAN}: its statistics row, lost when the earlier run stopped, is written from ${YELLOW}${ROW_FILE}"
   }
@@ -827,7 +929,7 @@ finishing_previous_chunk()
   # a resumed chunk which is only encoded gets a row only from its saved row (its processing times)
   if [[ ${PENDING_STATISTICS_ROW} == "yes" ]]
   then
-    echo "${PENDING_STATISTICS_BEFORE_VMAF}~${ENCODING_RUNTIME}~${QUALITY_METRIC_RUNTIME}~${PENDING_STATISTICS_SPACE}~${VMAF_MEAN}~${PENDING_PART_RUNTIME}" >> "${TMP}/statistics.txt"
+    echo "${PENDING_STATISTICS_BEFORE_VMAF}~${ENCODING_RUNTIME}~${QUALITY_METRIC_RUNTIME}~${PENDING_STATISTICS_SPACE}~${VMAF_MEAN}~${PENDING_PART_RUNTIME}~${PENDING_STATISTICS_GPUS}" >> "${TMP}/statistics.txt"
   fi
   rm -f -- "$(statistics_row_file "${PENDING_CHUNK_ID}")"
   PENDING_STATISTICS_ROW="no"
@@ -1125,7 +1227,7 @@ then
   starting_split "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log"
 fi
 
-echo "video_id~extracting_streams_runtime~extracting_frames_runtime~interpolating_runtime~merging_frames_runtime~merging_streams_runtime~encoding_runtime~quality_check_runtime~max_space [GB]~max_space [%]~VMAF [mean]~runtime" > "${TMP}/statistics.txt"
+echo "video_id~extracting_streams_runtime~extracting_frames_runtime~interpolating_runtime~merging_frames_runtime~merging_streams_runtime~encoding_runtime~quality_check_runtime~max_space [GB]~max_space [%]~VMAF [mean]~runtime~gpus" > "${TMP}/statistics.txt"
 echo "video_id~step~start~end~start_epoch~end_epoch~duration [s]~chunk [%]" > "${TMP}/timeline.csv"
 for VIDEO_FRAGMENT_ID in $(seq -w ${SPLIT_PART_START} ${LAST_VIDEO_FRAGMENT_ID})
 do
@@ -1217,8 +1319,29 @@ do
     LAST_VIDEO_PART="${CURRENTLY_MANAGED_VIDEO_PART_PATH}"
     NEXT_MANAGED_VIDEO_PART_PATH=""
   fi 
-  # checks every step itself (including NCNN failures) and stops the run on error
-  interpolation_video_file "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}"
+  # checks every step itself (including NCNN failures) and stops the run on error; after a lost
+  # GPU the chunk is done again on the GPUs which still work (at most GPU_MAX_LOSSES times)
+  retrying_lost_gpus "${VIDEO_FRAGMENT_ID}"
+  CHUNK_GPU_RETRIES=0
+  while true
+  do
+    CHUNK_GPU_LOST="no"
+    CHUNK_ATTEMPT_START="$(date '+%Y-%m-%d %H:%M:%S')"
+    interpolation_video_file "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}"
+    if [[ ${CHUNK_GPU_LOST} != yes ]]
+    then
+      break
+    fi
+    CHUNK_GPU_RETRIES=$((CHUNK_GPU_RETRIES + 1))
+    if [ "${CHUNK_GPU_RETRIES}" -gt "${GPU_MAX_LOSSES}" ]
+    then
+      error "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${RED} lost a GPU ${CHUNK_GPU_RETRIES} times, stopping; finished chunks are kept"
+      ERROR_CODE="1"
+      failed
+    fi
+    removing_chunk_work_files
+    handling_lost_gpu "${VIDEO_FRAGMENT_ID}" "${CHUNK_ATTEMPT_START}"
+  done
 
   printf "\033[%d;0H\033[2K ${WHITE}finishing: %s\n" "$((TERMINAL_HEIGHT - 12))" "                       DONE: ${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}" 2>/dev/null
   # reaching this line means interpolation_video_file already required the _merged.mkv, so the
@@ -1297,6 +1420,12 @@ do
   MAX_SPACE_TAKEN_OUTPUT_DIR=""
   MAX_SPACE_TAKEN_OVERALL=""
   PENDING_PART_RUNTIME="${PART_VIDEO_RUNTIME}"
+  # the GPUs which did the chunk; a chunk done again after a lost GPU says how often
+  PENDING_STATISTICS_GPUS="${NCNN_GPUS}"
+  if [ "${CHUNK_GPU_RETRIES:-0}" -gt 0 ]
+  then
+    PENDING_STATISTICS_GPUS+=" (redone ${CHUNK_GPU_RETRIES}x)"
+  fi
   PENDING_STATISTICS_ROW="yes"
   saving_statistics_row
   if [[ ${FINAL_ENCODING} == "yes" ]]
