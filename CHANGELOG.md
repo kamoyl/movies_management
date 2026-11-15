@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- A lost GPU no longer stops the run: continue on the cards which work ([6aeaf56](https://github.com/kamoyl/movies_management/commit/6aeaf563b8f10841ba18a1876aa7be88a08fb1b3) by Kamoyl).
 - interpolation_nncn: a chunk's statistics row survives a stopped run ([69ca311](https://github.com/kamoyl/movies_management/commit/69ca3115f75bb1d1c5d79a42eca430c720c7c9e1) by Kamoyl).
 - One standard header in every script: SCRIPTS_HOME from readlink -f "$0" ([b088670](https://github.com/kamoyl/movies_management/commit/b0886706d9f8d7f05d560e2c696b3ede4b373bd6) by Kamoyl).
 - .config synced from get-auditing: github_release_downloading takes a pinned sha256 ([36249d1](https://github.com/kamoyl/movies_management/commit/36249d1695e865fdd103d8cc54fb5f01681a5e50) by Kamoyl).
