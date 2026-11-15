@@ -364,6 +364,19 @@ assert_contains "-F keeps markers of other movies and methods, and their parts" 
 if [[ ${OUTPUT} == *"split_points.txt "* ]]; then fail "-F from chunk 001 removes the split points"; else pass "-F from chunk 001 removes the split points"; fi
 OUTPUT="$(run_with_helpers "${FRESH_SETUP}"'; SPLIT_PART_START=002; removing_earlier_results; echo "LEFT: $(ls | tr "\n" " ")"' 2>&1)"
 assert_contains "-F -s 002 keeps the chunks before 002 and the split points" "${OUTPUT}" "LEFT: My Film_rife_48_merged.mkv My Film_rife_48_merged.mkv.done My Film_split_points.txt video_part_minute_001_rife_48_encoded.mkv video_part_minute_001_rife_48_encoded.mkv.done video_part_minute_001_rife_48_merged.mkv video_part_minute_001_rife_48_merged.mkv.done video_part_minute_002_dain"
+OUTPUT="$(run_with_helpers "${FRESH_SETUP}"'; eval "$(sed -n "/^statistics_row_file()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; echo "My Film" > video_part_minute_002_rife.statistics; SPLIT_PART_START=002; removing_earlier_results; if [ -e video_part_minute_002_rife.statistics ]; then echo "ROW KEPT"; fi' 2>&1)"
+if [[ ${OUTPUT} == *"ROW KEPT"* ]]; then fail "-F removes the saved statistics row of a removed chunk"; else pass "-F removes the saved statistics row of a removed chunk"; fi
+
+echo "statistics row of a chunk finished by a stopped run (saved, written by the next run)"
+ROW_SETUP='for FUNC in statistics_row_file saving_statistics_row loading_statistics_row writing_saved_statistics_row finishing_previous_chunk stopping_after_failed_encode; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; compressing_logs() { :; }; WHOLE_MOVIE_NAME_ARRAY=(S2E1); NCNN_METHOD=rife; FINAL_ENCODING=no; QUALITY_CHECK=no; rm -rf rows; mkdir rows; cd rows || exit 99; TMP=.; LOG=.; : > statistics.txt; PENDING_CHUNK_ID=020; PENDING_STATISTICS_BEFORE_VMAF="020~1~2~3~4~5"; PENDING_STATISTICS_SPACE="9~10"; PENDING_PART_RUNTIME=400; saving_statistics_row; PENDING_CHUNK_ID=""; PENDING_STATISTICS_ROW=no'
+OUTPUT="$(run_with_helpers "${ROW_SETUP}"'; PENDING_CHUNK_ID=019; PENDING_STATISTICS_BEFORE_VMAF="019~1~1~1~1~1"; PENDING_STATISTICS_SPACE="8~8"; PENDING_PART_RUNTIME=300; PENDING_STATISTICS_ROW=yes; writing_saved_statistics_row 020; echo "ROWS: $(tr "\n" " " < statistics.txt)"; echo "LEFT: $(ls | tr "\n" " ")"' 2>&1)"
+assert_contains "a skipped chunk's saved row is written after the pending row before it, both intact" "${OUTPUT}" "ROWS: 019~1~1~1~1~1~0~0~8~8~~300 020~1~2~3~4~5~0~0~9~10~~400 "
+assert_contains "the saved row is removed once written" "${OUTPUT}" "LEFT: statistics.txt "
+OUTPUT="$(run_with_helpers "${ROW_SETUP}"'; FINAL_ENCODING=yes; finishing_part_encoding() { ENCODING_RUNTIME=77; }; PENDING_CHUNK_ID=020; PENDING_STATISTICS_ROW=no; loading_statistics_row 020; finishing_previous_chunk; echo "ROWS: $(tr "\n" " " < statistics.txt)"' 2>&1)"
+assert_contains "-E: a resumed chunk's saved row gets the new encode time" "${OUTPUT}" "ROWS: 020~1~2~3~4~5~77~0~9~10~~400 "
+OUTPUT="$(run_with_helpers "${ROW_SETUP}"'; WHOLE_MOVIE_NAME_ARRAY=(Other); writing_saved_statistics_row 020; echo "ROWS: [$(cat statistics.txt)]"; echo "LEFT: $(ls | tr "\n" " ")"' 2>&1)"
+assert_contains "a saved row of another movie is not written" "${OUTPUT}" "ROWS: []"
+assert_contains "a saved row of another movie is kept" "${OUTPUT}" "LEFT: statistics.txt video_part_minute_020_rife.statistics "
 
 echo "-S starts a systemd service (sudo, systemd-run and id replaced by fakes)"
 mkdir -p "${WORK_DIR}/servicebin"

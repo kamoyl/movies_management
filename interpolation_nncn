@@ -68,6 +68,8 @@ $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ]
             7. marks the chunk as finished:
                  video_part_minute_NNN_<method>_<fps>_merged.mkv.done
                  video_part_minute_NNN_<method>_<fps>_encoded.mkv.done (with -E)
+               until its statistics row is written, it is also saved in
+                 video_part_minute_NNN_<method>.statistics (a stopped run's next run writes it)
           Without -E it produces per-chunk merged files and does not join them; with -E it joins
           the encoded parts into DESTINATION_DIR/<input name>.mkv (default: /media/ready).
           Ctrl+C or an error also stops the background tools (NCNN, ffmpeg) started by this run.
@@ -749,6 +751,56 @@ cleaning_after_interrupt()
 trap "exit_function" INT
 trap "exiting_function" EXIT
 
+# statistics_row_file CHUNK_ID - the saved statistics row of a finished chunk, next to its .done
+# marker. The row is written only once the chunk's encode and VMAF end, alongside the next chunk,
+# so a run stopped meanwhile (e.g. a dropped SSH session without -S) lost it; the next run only
+# encodes the chunk again and completes the saved row with that encode.
+statistics_row_file()
+{
+  echo "video_part_minute_${1}_${NCNN_METHOD}.statistics"
+  }
+
+# Saves the pending row parts of the chunk just finished; line 1 is the movie, as in the markers
+saving_statistics_row()
+{
+  printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" "${PENDING_STATISTICS_BEFORE_VMAF}" "${PENDING_STATISTICS_SPACE}" "${PENDING_PART_RUNTIME}" > "$(statistics_row_file "${PENDING_CHUNK_ID}")"
+  }
+
+# loading_statistics_row CHUNK_ID - makes the saved row of a chunk finished by an earlier run
+# pending again; returns 1 when there is none for this movie
+loading_statistics_row()
+{
+  local ROW_FILE
+  ROW_FILE="$(statistics_row_file "${1}")"
+  if [ ! -s "${ROW_FILE}" ] || [[ "$(head -n1 "${ROW_FILE}")" != "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
+  then
+    return 1
+  fi
+  PENDING_STATISTICS_BEFORE_VMAF="$(sed -n 2p "${ROW_FILE}")"
+  PENDING_STATISTICS_SPACE="$(sed -n 3p "${ROW_FILE}")"
+  PENDING_PART_RUNTIME="$(sed -n 4p "${ROW_FILE}")"
+  PENDING_STATISTICS_ROW="yes"
+  inf "  chunk ${YELLOW}${1}${CYAN}: its statistics row, lost when the earlier run stopped, is written from ${YELLOW}${ROW_FILE}"
+  }
+
+# writing_saved_statistics_row CHUNK_ID - a chunk skipped as finished, whose row was lost: its
+# saved row is written at once, after the row of the chunk before it
+writing_saved_statistics_row()
+{
+  if [ ! -e "$(statistics_row_file "${1}")" ]
+  then
+    return
+  fi
+  # loading first would overwrite the pending row of the chunk before
+  finishing_previous_chunk
+  stopping_after_failed_encode
+  if loading_statistics_row "${1}"
+  then
+    PENDING_CHUNK_ID="${1}"
+    finishing_previous_chunk
+  fi
+  }
+
 # Writes the statistics row of the last finished chunk and removes its source chunk. With -E
 # and -Q it first waits for that chunk's final encode and VMAF, which ran in the background
 # alongside the next chunk (VMAF needed the source chunk as its reference).
@@ -772,11 +824,13 @@ finishing_previous_chunk()
     # when no VMAF was started (a failed encode, or a resumed chunk which is only encoded)
     finishing_quality_metric
   fi
-  # a resumed chunk which is only encoded has no processing times, so it gets no row
+  # a resumed chunk which is only encoded gets a row only from its saved row (its processing times)
   if [[ ${PENDING_STATISTICS_ROW} == "yes" ]]
   then
     echo "${PENDING_STATISTICS_BEFORE_VMAF}~${ENCODING_RUNTIME}~${QUALITY_METRIC_RUNTIME}~${PENDING_STATISTICS_SPACE}~${VMAF_MEAN}~${PENDING_PART_RUNTIME}" >> "${TMP}/statistics.txt"
   fi
+  rm -f -- "$(statistics_row_file "${PENDING_CHUNK_ID}")"
+  PENDING_STATISTICS_ROW="no"
   rm -f -- "video_part_minute_${PENDING_CHUNK_ID}.mkv"
   # all steps of this chunk (also its encode and VMAF) are done, so nothing writes its logs anymore
   compressing_logs "${LOG}/video_part_minute_${PENDING_CHUNK_ID}_"*
@@ -824,7 +878,7 @@ removing_earlier_results()
       continue
     fi
     inf "  -F: removing ${YELLOW}${MARKER%.done}${CYAN} and its marker"
-    rm -f -- "${MARKER%.done}" "${MARKER}"
+    rm -f -- "${MARKER%.done}" "${MARKER}" "$(statistics_row_file "${CHUNK_ID}")"
     REMOVED_COUNT=$((REMOVED_COUNT + 1))
   done
   if [[ ${SPLIT_PART_START} == 001 ]] && [ -e "${SPLIT_POINTS_FILE}" ]
@@ -937,6 +991,15 @@ joining_encoded_parts()
       if [ -e "${MERGED_MARKER}" ] && [ ! -e "${MERGED_MARKER%.done}" ]
       then
         rm -f -- "${MERGED_MARKER}"
+      fi
+    done
+    # every row was written before the join; a saved row of this movie would only be stale
+    local ROW_FILE
+    for ROW_FILE in video_part_minute_[0-9][0-9][0-9]_"${NCNN_METHOD}".statistics
+    do
+      if [ -e "${ROW_FILE}" ] && [[ "$(head -n1 "${ROW_FILE}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
+      then
+        rm -f -- "${ROW_FILE}"
       fi
     done
     rm -f -- "${WHOLE_MOVIE_NAME_ARRAY[*]}_split_points.txt"
@@ -1102,6 +1165,8 @@ do
           # chunks are split again on every run, so without the marker the chunk is processed again
           warn "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${WINE} was encoded with profile ${YELLOW}${ENCODED_PROFILE}${WINE}, this run uses ${YELLOW}${OPTIMIZATION}${WINE}; to encode it with ${OPTIMIZATION}, remove ${FINISHED_ENCODED_MARKERS[0]} and run again with -E"
         fi
+        # stopped after its encode, before its row: the encode and VMAF times are not known
+        writing_saved_statistics_row "${VIDEO_FRAGMENT_ID}"
         rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
         continue
       fi
@@ -1121,8 +1186,11 @@ do
         starting_part_encoding "${RESUMED_MERGED_FILE}" "video_part_minute_${VIDEO_FRAGMENT_ID}_${NCNN_METHOD}_${RESUMED_MERGED_SUFFIX%_merged.mkv}_encoded.mkv" ""
         PENDING_CHUNK_ID="${VIDEO_FRAGMENT_ID}"
         PENDING_STATISTICS_ROW="no"
+        loading_statistics_row "${VIDEO_FRAGMENT_ID}"
       else
         inf "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${CYAN} already finished (${FINISHED_CHUNK_MARKERS[0]%.done}), skipping"
+        # its VMAF ended with the earlier run, so a saved row is written at once, without a score
+        writing_saved_statistics_row "${VIDEO_FRAGMENT_ID}"
         rm -f -- "video_part_minute_${VIDEO_FRAGMENT_ID}.mkv"
       fi
       continue
@@ -1230,6 +1298,7 @@ do
   MAX_SPACE_TAKEN_OVERALL=""
   PENDING_PART_RUNTIME="${PART_VIDEO_RUNTIME}"
   PENDING_STATISTICS_ROW="yes"
+  saving_statistics_row
   if [[ ${FINAL_ENCODING} == "yes" ]]
   then
     # with -Q the final encode is compared with the original chunk, right after the encode
