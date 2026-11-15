@@ -744,8 +744,10 @@ assert_contains "interpolation_nncn -h documents -E (final encode)" "${OUTPUT}" 
 LINE_JOIN="$(grep -n '^  joining_encoded_parts$' "${REPO_ROOT}/interpolation_nncn" | cut -d: -f1)"
 if [ -n "${LINE_FINISH}" ] && [ -n "${LINE_JOIN}" ] && [ "${LINE_FINISH}" -lt "${LINE_JOIN}" ]; then pass "the last encode is waited for before the parts are joined"; else fail "the last encode is waited for before the parts are joined"; fi
 
-OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo kill > fail_hb; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi' 2>&1)"
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo kill > fail_hb; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; grep -c "Killed" log/p_encoded.mkv_handbrake.log | sed "s/^/KILLED_IN_LOG=/"' 2>&1)"
 assert_contains "an encode killed with SIGKILL is reported with 137" "${OUTPUT}" "failed with exit code 137"
+assert_contains "bash's \"Killed\" notice goes to the encode's log" "${OUTPUT}" "KILLED_IN_LOG=1"
+if grep -q "Killed  *nice" <<< "${OUTPUT}"; then fail "bash's \"Killed\" notice is not on the screen" "$(grep "Killed  *nice" <<< "${OUTPUT}")"; else pass "bash's \"Killed\" notice is not on the screen"; fi
 assert_contains "an encode killed with SIGKILL points at the out-of-memory killer" "${OUTPUT}" "most likely by the out-of-memory killer"
 assert_contains "a killed encode keeps its merged part" "${OUTPUT}" "MERGED_KEPT"
 for HANG_MODE in hang hang_noterm

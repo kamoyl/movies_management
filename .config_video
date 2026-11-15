@@ -52,7 +52,14 @@ wait_for_step()
   then
     return 0
   fi
-  wait "${STEP_PID}"
+  # bash reports a job ended by a signal ("Killed" by the OOM killer) on wait's stderr: into the
+  # step's log, next to the tool's own output, not on the screen
+  if [ -n "${STEP_LOG}" ]
+  then
+    wait "${STEP_PID}" 2>> "${STEP_LOG}"
+  else
+    wait "${STEP_PID}"
+  fi
   STEP_STATUS=$?
   WAITED_PIDS="${WAITED_PIDS} ${STEP_PID}"
   if [ "${STEP_STATUS}" -ne 0 ]
@@ -1266,14 +1273,14 @@ interpolation_video_file()
   wait_for_step "${FRAME_ANALYSIS_PID}" "frame analysis (ffmpeg)" "${LOG}/frame_analysis.log"
   if [[ -n ${AUDIO_EXTRACT_PID} ]]
   then
-    wait "${AUDIO_EXTRACT_PID}"
+    wait "${AUDIO_EXTRACT_PID}" 2>> "${LOG}/${MOVIE_NAME_ARRAY[*]}_extract_sound.log"
     # mkvmerge: 1 = warnings (continue), 2 = error (stop)
     mkvtoolnix_status "$?" "audio extraction (mkvmerge)" "${LOG}/${MOVIE_NAME_ARRAY[*]}_extract_sound.log"
   fi
   # subtitles are optional: a failure only drops them from the result
   if [[ -n ${SUBS_EXTRACT_PID} ]]
   then
-    wait "${SUBS_EXTRACT_PID}"
+    wait "${SUBS_EXTRACT_PID}" 2>> "${LOG}/${MOVIE_NAME_ARRAY[*]}_extract_subtitles.log"
     local SUBS_EXTRACT_STATUS=$?
     # mkvmerge exit code 1 means "finished with warnings"
     if [ "${SUBS_EXTRACT_STATUS}" -gt 1 ]
@@ -1977,7 +1984,7 @@ encoding_process()
   sleep 3
   if ! kill -0 "${ENCODING_PID}" 2>/dev/null
   then
-    wait "${ENCODING_PID}"
+    wait "${ENCODING_PID}" 2>> "${ENCODING_LOG}"
     local ENCODING_STATUS=$?
     if [ "${ENCODING_STATUS}" -ne 0 ]
     then
@@ -2051,7 +2058,7 @@ starting_quality_metric()
     start_time_collecting
     nice -n 10 ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${ENCODED_VIDEO_FILE}" -i "${REFERENCE_VIDEO_FILE}" -lavfi "${VMAF_GRAPH}" -f null - > "${LOG}/${VMAF_FILES}_quality_metric.log" 2>&1 &
     VMAF_FFMPEG_PID=$!
-    wait "${VMAF_FFMPEG_PID}"
+    wait "${VMAF_FFMPEG_PID}" 2>> "${LOG}/${VMAF_FILES}_quality_metric.log"
     VMAF_FFMPEG_STATUS=$?
     end_time_collecting
     echo "${RUNTIME}" > "${TMP}/${VMAF_FILES}_quality_metric.runtime"
@@ -2365,7 +2372,7 @@ finishing_split()
 {
   local STATUS
   local LAST_WRITTEN
-  wait "${SPLITTING_PID}"
+  wait "${SPLITTING_PID}" 2>> "${SPLITTING_LOG}"
   STATUS=$?
   SPLITTING_DONE="yes"
   mkvtoolnix_status "${STATUS}" "splitting video into chunks of about ${SPLIT_TIME_SEC}s" "${SPLITTING_LOG}"
@@ -2527,41 +2534,46 @@ starting_part_encoding()
     # appending (empty log first): the watchdog line must not be overwritten by a HandBrake
     # that ignores SIGTERM and keeps writing at its own file offset
     : > "${PART_ENCODING_LOG}"
-    nice -n 10 HandBrakeCLI -i "${PART_MERGED_FILE}" -o "${PART_VIDEO_FILE}" --encoder "${VIDEO_ENCODER[@]}" --crop "${PART_CROP}" --no-markers -a none -s none >> "${PART_ENCODING_LOG}" 2>&1 &
-    PART_HANDBRAKE_PID=$!
-    # watchdog: a hung encoder may keep printing the same percentage for hours (chunk 097 of
-    # Smokin' Aces: 99.96 % from 10:58 on, 52395 progress lines), so progress means a changed
-    # percentage or output size, not a growing log; HANDBRAKE_STALL_SEC (600) without progress
-    # stops HandBrake (SIGTERM, SIGKILL after 10 s) and reports exit code 124, like timeout
-    PART_PROGRESS_LAST=""
-    PART_PROGRESS_SINCE="${SECONDS}"
-    PART_HANDBRAKE_STALLED="no"
-    while kill -0 "${PART_HANDBRAKE_PID}" 2>/dev/null
-    do
-      sleep "${HANDBRAKE_WATCH_INTERVAL_SEC:-5}"
-      PART_PROGRESS="$(tail -c 400 "${PART_ENCODING_LOG}" 2>/dev/null | tr '\r' '\n' | grep -a "Encoding:" | tail -n1 | sed -n 's/^.*, \([0-9.]*\) %.*$/\1/p')~$(wc -c 2>/dev/null < "${PART_VIDEO_FILE}")"
-      if [[ ${PART_PROGRESS} != "${PART_PROGRESS_LAST}" ]]
-      then
-        PART_PROGRESS_LAST="${PART_PROGRESS}"
-        PART_PROGRESS_SINCE="${SECONDS}"
-      elif [ $((SECONDS - PART_PROGRESS_SINCE)) -ge "${HANDBRAKE_STALL_SEC:-600}" ]
-      then
-        # HandBrake ends progress lines with \r only, so the watchdog line starts on a new line
-        printf '\n%s\n' "watchdog: no progress for $((SECONDS - PART_PROGRESS_SINCE)) s (percent~bytes: ${PART_PROGRESS_LAST}), HandBrake is stopped" >> "${PART_ENCODING_LOG}"
-        PART_HANDBRAKE_STALLED="yes"
-        kill "${PART_HANDBRAKE_PID}" 2>/dev/null
-        PART_STOP_WAITED_SEC=0
-        while kill -0 "${PART_HANDBRAKE_PID}" 2>/dev/null && [ "${PART_STOP_WAITED_SEC}" -lt 10 ]
-        do
-          sleep 1
-          PART_STOP_WAITED_SEC=$((PART_STOP_WAITED_SEC + 1))
-        done
-        kill -KILL "${PART_HANDBRAKE_PID}" 2>/dev/null
-        break
-      fi
-    done
-    wait "${PART_HANDBRAKE_PID}"
-    PART_HANDBRAKE_STATUS=$?
+    # bash reports a job ended by a signal ("Killed": OOM killer, or the watchdog's SIGKILL) on its
+    # stderr when it reaps it, which may happen during the watchdog's sleep, before the wait: the
+    # whole block's stderr goes to the encode's log, so the notice is next to HandBrake's output
+    {
+      nice -n 10 HandBrakeCLI -i "${PART_MERGED_FILE}" -o "${PART_VIDEO_FILE}" --encoder "${VIDEO_ENCODER[@]}" --crop "${PART_CROP}" --no-markers -a none -s none >> "${PART_ENCODING_LOG}" 2>&1 &
+      PART_HANDBRAKE_PID=$!
+      # watchdog: a hung encoder may keep printing the same percentage for hours (chunk 097 of
+      # Smokin' Aces: 99.96 % from 10:58 on, 52395 progress lines), so progress means a changed
+      # percentage or output size, not a growing log; HANDBRAKE_STALL_SEC (600) without progress
+      # stops HandBrake (SIGTERM, SIGKILL after 10 s) and reports exit code 124, like timeout
+      PART_PROGRESS_LAST=""
+      PART_PROGRESS_SINCE="${SECONDS}"
+      PART_HANDBRAKE_STALLED="no"
+      while kill -0 "${PART_HANDBRAKE_PID}" 2>/dev/null
+      do
+        sleep "${HANDBRAKE_WATCH_INTERVAL_SEC:-5}"
+        PART_PROGRESS="$(tail -c 400 "${PART_ENCODING_LOG}" 2>/dev/null | tr '\r' '\n' | grep -a "Encoding:" | tail -n1 | sed -n 's/^.*, \([0-9.]*\) %.*$/\1/p')~$(wc -c 2>/dev/null < "${PART_VIDEO_FILE}")"
+        if [[ ${PART_PROGRESS} != "${PART_PROGRESS_LAST}" ]]
+        then
+          PART_PROGRESS_LAST="${PART_PROGRESS}"
+          PART_PROGRESS_SINCE="${SECONDS}"
+        elif [ $((SECONDS - PART_PROGRESS_SINCE)) -ge "${HANDBRAKE_STALL_SEC:-600}" ]
+        then
+          # HandBrake ends progress lines with \r only, so the watchdog line starts on a new line
+          printf '\n%s\n' "watchdog: no progress for $((SECONDS - PART_PROGRESS_SINCE)) s (percent~bytes: ${PART_PROGRESS_LAST}), HandBrake is stopped" >> "${PART_ENCODING_LOG}"
+          PART_HANDBRAKE_STALLED="yes"
+          kill "${PART_HANDBRAKE_PID}" 2>/dev/null
+          PART_STOP_WAITED_SEC=0
+          while kill -0 "${PART_HANDBRAKE_PID}" 2>/dev/null && [ "${PART_STOP_WAITED_SEC}" -lt 10 ]
+          do
+            sleep 1
+            PART_STOP_WAITED_SEC=$((PART_STOP_WAITED_SEC + 1))
+          done
+          kill -KILL "${PART_HANDBRAKE_PID}" 2>/dev/null
+          break
+        fi
+      done
+      wait "${PART_HANDBRAKE_PID}"
+      PART_HANDBRAKE_STATUS=$?
+    } 2>> "${PART_ENCODING_LOG}"
     if [[ ${PART_HANDBRAKE_STALLED} == yes ]]
     then
       PART_HANDBRAKE_STATUS="124"
