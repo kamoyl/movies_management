@@ -513,13 +513,13 @@ if [ "$(grep -c '~137~' <<< "${OUTPUT}")" -eq 1 ] && [[ ${OUTPUT} != *"~0~"* ]];
 if [ -x "${REPO_ROOT}/.venv/bin/python3" ] && "${REPO_ROOT}/.venv/bin/python3" -c "import xlsxwriter" 2>/dev/null
 then
   mkdir -p "${WORK_DIR}/report"
-  printf 'time~epoch~cpu_busy [%%]~mem_used [GB]~card0_busy [%%]~ffmpeg_rss [GB]~tools_rss [GB]\n2026-11-05 10:00:00~1.0~50.0~10.00~~1.00~1.00\n2026-11-05 10:00:05~6.0~60.0~11.00~90~2.00~2.00\n' > "${WORK_DIR}/report/metrics.csv"
+  printf 'time~epoch~cpu_busy [%%]~mem_used [GB]~card0_busy [%%]~card0_power [W]~ffmpeg_rss [GB]~tools_rss [GB]\n2026-11-05 10:00:00~1.0~50.0~10.00~~~1.00~1.00\n2026-11-05 10:00:05~6.0~60.0~11.00~90~97.8~2.00~2.00\n' > "${WORK_DIR}/report/metrics.csv"
   printf 'video_id~step~start~end~start_epoch~end_epoch~duration [s]~chunk [%%]\n021~interpolating~a~b~1~2~300.0~60\n021~encoding~a~b~1~2~290.0~\nall~whole_run~a~b~1~2~900.0~\n' > "${WORK_DIR}/report/timeline.csv"
   printf 'video_id~runtime\n021~500.1[s]\n' > "${WORK_DIR}/report/statistics.txt"
   printf 'video_id~checked~epoch~available [GB]~held [GB]~can get [GB]~peak [GB]~peak source~needed [GB]~warned~encode status~min available [GB]~max swap [GB]~max tools_rss [GB]~max HandBrakeCLI [GB]\n021~a~1~12.0~0.1~12.1~19.5~measured~21.5~yes~0~0.90~8.00~19.53~16.15\n' > "${WORK_DIR}/report/memory.csv"
   OUTPUT="$("${REPO_ROOT}/.venv/bin/python3" "${REPO_ROOT}/metrics_to_excel.py" "${WORK_DIR}/report" "${WORK_DIR}/report/r.xlsx" 2>&1; echo "STATUS=$?"; "${REPO_ROOT}/.venv/bin/python3" -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); n=z.namelist(); print('SHEETS=%d CHARTS=%d' % (sum(x.startswith('xl/worksheets/sheet') for x in n), sum(x.startswith('xl/charts/chart') for x in n))); print('CHUNK=' + str('<t>021</t>' in z.read('xl/sharedStrings.xml').decode()))" "${WORK_DIR}/report/r.xlsx")"
   assert_contains "metrics_to_excel.py writes the workbook" "${OUTPUT}" "STATUS=0"
-  assert_contains "metrics_to_excel.py: charts, metrics, timeline, steps per chunk, memory, statistics; 7 charts" "${OUTPUT}" "SHEETS=6 CHARTS=7"
+  assert_contains "metrics_to_excel.py: charts, metrics, timeline, steps per chunk, memory, statistics; 8 charts (with GPU power)" "${OUTPUT}" "SHEETS=6 CHARTS=8"
   assert_contains "metrics_to_excel.py keeps chunk numbers as text" "${OUTPUT}" "CHUNK=True"
 else
   echo "  skipped: metrics_to_excel.py (no .venv with xlsxwriter; a run prepares it)"

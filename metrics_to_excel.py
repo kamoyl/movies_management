@@ -27,6 +27,9 @@ METRIC_CHARTS = [
     ("Memory per tool", "GB", re.compile(r"_rss \[GB\]$")),
     ("GPU busy", "%", re.compile(r"^card\d+_busy")),
     ("GPU memory (VRAM)", "GB", re.compile(r"^card\d+_vram")),
+    ("GPU power", "W", re.compile(r"^card\d+_power")),
+    ("GPU temperature", "°C", re.compile(r"^card\d+_temp")),
+    ("GPU shader clock", "MHz", re.compile(r"^card\d+_sclk")),
     ("Disks", "MB/s", re.compile(r"^disk_")),
 ]
 
