@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- metrics.csv: per-card power, temperature and shader clock, with charts ([9681400](https://github.com/kamoyl/movies_management/commit/96814000493654bad44ee2d5830c004c3956c3b6) by Kamoyl).
 - Probe a lost GPU again before the next chunk (GPU_RETRY_AFTER_CHUNKS 2 -> 1) ([65df581](https://github.com/kamoyl/movies_management/commit/65df581ce000b4c8b6ace955823e1c84efc68122) by Kamoyl).
 - A lost GPU no longer stops the run: continue on the cards which work ([6aeaf56](https://github.com/kamoyl/movies_management/commit/6aeaf563b8f10841ba18a1876aa7be88a08fb1b3) by Kamoyl).
 - interpolation_nncn: a chunk's statistics row survives a stopped run ([69ca311](https://github.com/kamoyl/movies_management/commit/69ca3115f75bb1d1c5d79a42eca430c720c7c9e1) by Kamoyl).
