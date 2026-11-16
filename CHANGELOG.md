@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- Keep the part encode and VMAF off NCNN's cores ([afd02bb](https://github.com/kamoyl/movies_management/commit/afd02bb12b1034ffe26264d388680a4996d193ac) by Kamoyl).
 - Explain the slower NCNN: the encode shares cores, not CPU time ([0b1854f](https://github.com/kamoyl/movies_management/commit/0b1854fefa754e222e63ef000caa95306fd59d4c) by Kamoyl).
 - Name a mediainfo crash in its log ([bb78548](https://github.com/kamoyl/movies_management/commit/bb78548eaa8f213b9d07643c14287f4170efe3ec) by Kamoyl).
 - .config: check for GNU tools first, stop clearly when BSD tools answer ([0d4cecb](https://github.com/kamoyl/movies_management/commit/0d4cecbacc8d075563b7aeacd7201b61d766413a) by Kamoyl).
