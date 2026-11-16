@@ -781,11 +781,24 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 
 - In the ≤ 29 Oct runs, chunk 001, with nothing in the background yet, took 297 s; the gap to 568 s was mostly the serialized encode and VMAF (Done item 11).
 - Between them, the runs of 1–2 Nov averaged ~851 s per chunk: frame recovery at open-GOP splits stalled (preparation ~441 s, up to 700 s), fixed in Done item 20.
-- 3–5 Nov: NCNN is ~75 s slower than before, probably because the slower `-g` encode now overlaps it; the metrics (item 1) should show it.
+- 3–5 Nov: NCNN is ~75 s slower than before, because the slower `-g` encode now overlaps it (explained in item 1).
 - Carnival Row (4K HDR, same options) spent ~120–135 s per chunk in preparation, against ~59 s for Smokin' Aces. Explained in Done item 26: the host was out of memory while the previous chunk's encode ran, not the code; with free memory it took 16–20 s.
 
-1. **Metrics, before further optimization.** The sampling, the memory warning and the Excel report are done (Done item 21). Still open, once a real run has collected metrics:
-   - explain the slower NCNN (Carnival Row's preparation and `RUN_MEMORY_PEAK_DEFAULT_GB` are done, see Done item 26);
+1. **Metrics, before further optimization.** The sampling, the memory warning and the Excel report are done (Done item 21), and so are Carnival Row's preparation and `RUN_MEMORY_PEAK_DEFAULT_GB` (Done item 26). The slower NCNN is explained (16 Nov), but not fixed yet:
+   - In the 18 runs of 6–16 Nov with metrics, NCNN overlapped the previous chunk's encode for 40–75 % of its time. In the 5 s samples taken while NCNN ran, the CPU was 92–95 % busy with the encode next to it and 25–53 % without it. GPU use fell from 84–97 % to 60–78 %, in every run, so the cards were waiting for NCNN's CPU threads, which load and save the PNGs. Chunk 001, with nothing in the background, was always the fastest.
+   - The encode (and VMAF) already run at `nice -n 10`. A benchmark on rig2 measured the alternatives: 300 4K frames of Good Omens S3E1 → 600 frames with the run's NCNN command (`-j 6:2,2:8`, both cards), next to the run's AV1 encode (`svt_av1_10bit`, preset 5) in a loop:
+
+     | Encode next to NCNN | NCNN | Encode speed |
+     |---|---|---|
+     | none | 69.0 s, 68.6 s | — |
+     | `nice -n 10` (now) | 81.8 s, 82.5 s | 17.4 fps |
+     | `chrt -i 0` (`SCHED_IDLE`, the lowest CPU class) | 81.3 s | 17.1 fps |
+     | `nice -n 10`, kept off 2 cores (`taskset`) | 79.5 s | 16.3 fps |
+     | `nice -n 10`, kept off 4 cores | 74.0 s, 77.1 s | 15.4, 15.0 fps |
+     | `nice -n 10`, kept off 6 cores | 74.7 s | 13.8 fps |
+
+   - So the lowest CPU priority changes nothing: the loss comes from sharing physical cores (the 5900X has two threads per core), cache and memory bandwidth, not from scheduling. Keeping the encode off 4 of the 12 cores (both threads of each) removes about two thirds of the loss, and the encode gets ~12 % slower. It still fits: an encode took ~185–250 s of a ~450 s chunk. Estimated gain: ~15–20 s per chunk (~4 %).
+   - Proposed fix: run the part encode and VMAF under `taskset`, leaving 4 cores to NCNN (Linux only; macOS has no `taskset`).
 2. **Predictable deletion of input frames.** Done (Done item 33). Left open: running NCNN without `-v` would need `throttling_ncnn` and the deletion to read the output frames instead of the log; not worth it while the log costs nothing measurable.
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**
