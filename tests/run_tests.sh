@@ -75,6 +75,20 @@ cd '${WORK_DIR}' || exit 99
 $1"
 }
 
+echo "GNU tools check (.config)"
+mkdir -p "${WORK_DIR}/bsdbin" "${WORK_DIR}/uubin"
+printf '#!/usr/bin/env bash\necho "sed: illegal option -- -" >&2\nexit 1\n' > "${WORK_DIR}/bsdbin/sed"
+printf '#!/usr/bin/env bash\nif [ "$1" = --version ]; then echo "date (uutils coreutils) 0.2.2"; exit 0; fi\nexec /usr/bin/date "$@"\n' > "${WORK_DIR}/uubin/date"
+chmod +x "${WORK_DIR}/bsdbin/sed" "${WORK_DIR}/uubin/date"
+OUTPUT="$(PATH="${WORK_DIR}/bsdbin:${PATH}" SCRIPTS_HOME="${REPO_ROOT}" bash -c 'source "${SCRIPTS_HOME}/.config"; echo REACHED' 2>&1)"; STATUS=$?
+assert_status "a script with a non-GNU sed first in PATH stops" 1 "${STATUS}"
+assert_contains "the non-GNU tool is named with its path" "${OUTPUT}" "not GNU: sed (${WORK_DIR}/bsdbin/sed)"
+if [[ ${OUTPUT} == *REACHED* ]]; then fail "nothing after the check runs"; else pass "nothing after the check runs"; fi
+OUTPUT="$(PATH="${WORK_DIR}/bsdbin:${PATH}" SCRIPTS_HOME="${REPO_ROOT}" bash -ic 'source "${SCRIPTS_HOME}/.config" 2>/dev/null; echo "SHELL_LEFT_OPEN"' 2>/dev/null)"
+assert_contains "an interactive shell sourcing .config is only warned, not closed" "${OUTPUT}" "SHELL_LEFT_OPEN"
+OUTPUT="$(PATH="${WORK_DIR}/uubin:${PATH}" SCRIPTS_HOME="${REPO_ROOT}" bash -c 'source "${SCRIPTS_HOME}/.config"; echo REACHED' 2>&1)"
+assert_contains "uutils coreutils (Ubuntu 25.10+) are accepted" "${OUTPUT}" "REACHED"
+
 echo "command-line options"
 for SCRIPT_NAME in interpolation_nncn movies_encoding
 do
