@@ -717,6 +717,10 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - `statistics.txt` gets a `gpus` column (step 2 of this idea).
     - `metrics.csv` gets per card power [W], temperature [°C] and shader clock [MHz] from the amdgpu hwmon and `pp_dpm_sclk` files, with charts in the report (step 3). A runtime-suspended card answers these files with EBUSY; its cells stay empty, so charts show a gap, not 0. Checked on rig2 with RIFE on both cards: ~98 W and ~92 W at 1179 MHz (the top level of these cards' clock table, so no throttling), 8.4 W and 300 MHz idle.
 
+37. **A mediainfo crash is named in its log** (16 Nov).
+    - `movies_encoding` stopped on "The Phoenician Scheme" with only "reading local metadata (mediainfo) did not produce" and an empty log. mediainfo segfaulted: `/lib64/libmediainfo.so.0` had been linked by hand to an older library (2404, not owned by any package) instead of the installed 26.05. The link was restored and the old file deleted, and `rpm -V libmediainfo` is clean again.
+    - Bash prints no notice for a crash of a command that is not the last in a pipeline, so `movie_data_collecting` now writes mediainfo's exit code or signal (e.g. `killed by signal 11 (SIGSEGV)`) to the mediainfo log.
+
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
 | Codec / settings | Time (Mac) | Size | VMAF |

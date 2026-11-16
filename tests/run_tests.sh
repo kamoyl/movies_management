@@ -89,6 +89,16 @@ assert_contains "an interactive shell sourcing .config is only warned, not close
 OUTPUT="$(PATH="${WORK_DIR}/uubin:${PATH}" SCRIPTS_HOME="${REPO_ROOT}" bash -c 'source "${SCRIPTS_HOME}/.config"; echo REACHED' 2>&1)"
 assert_contains "uutils coreutils (Ubuntu 25.10+) are accepted" "${OUTPUT}" "REACHED"
 
+echo "mediainfo crash logged (.config_video)"
+mkdir -p "${WORK_DIR}/segvbin" "${WORK_DIR}/mediainfo_log"
+printf '#!/usr/bin/env bash\nkill -SEGV $$\n' > "${WORK_DIR}/segvbin/mediainfo"
+chmod +x "${WORK_DIR}/segvbin/mediainfo"
+MEDIAINFO_LINES="$(sed -n '/^  mediainfo --Output=JSON "\${MOVIE_NAME_ARRAY/,/^  fi$/p' "${REPO_ROOT}/.config_video")"
+PATH="${WORK_DIR}/segvbin:${PATH}" bash -c "f() { LOG=\"\$1\"; TMP=\"\$1\"; MOVIE_NAME_ARRAY=(x); MOVIE_METADATA_FILENAME_LOCAL=m
+${MEDIAINFO_LINES}
+}; f \"\$1\"" _ "${WORK_DIR}/mediainfo_log" 2>/dev/null
+assert_contains "a mediainfo segfault is named in its log" "$(cat "${WORK_DIR}/mediainfo_log/m_mediainfo.log" 2>/dev/null)" "killed by signal 11 (SIGSEGV)"
+
 echo "command-line options"
 for SCRIPT_NAME in interpolation_nncn movies_encoding
 do

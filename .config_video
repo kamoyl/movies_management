@@ -1561,7 +1561,18 @@ movie_data_collecting()
   MOVIE_METADATA_FILENAME_OMDB="${MOVIE_METADATA_FILENAME}_omdb_api"
   MOVIE_METADATA_FILENAME_OMDB_SERIES="${MOVIE_METADATA_FILENAME}_omdb_api_series"
   MOVIE_METADATA_FILENAME_THEMOVIEDB="${MOVIE_METADATA_FILENAME}_themoviedb_api"
-  mediainfo --Output=JSON "${MOVIE_NAME_ARRAY[*]}.mkv" | jq -r > "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mediainfo.json" 2>"${LOG}/${MOVIE_METADATA_FILENAME_LOCAL}_mediainfo.log"
+  # mediainfo's own exit code goes to the log: bash prints no notice for a crash of a command which
+  # is not the last one in a pipeline, so a segfault (Phoenician Scheme, 10-15 Nov: a by-hand link
+  # to an older libmediainfo) left only "did not produce" and an empty log
+  mediainfo --Output=JSON "${MOVIE_NAME_ARRAY[*]}.mkv" 2>"${LOG}/${MOVIE_METADATA_FILENAME_LOCAL}_mediainfo.log" | jq -r > "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mediainfo.json" 2>>"${LOG}/${MOVIE_METADATA_FILENAME_LOCAL}_mediainfo.log"
+  local MEDIAINFO_STATUS="${PIPESTATUS[0]}"
+  if [ "${MEDIAINFO_STATUS}" -gt 128 ]
+  then
+    echo "mediainfo killed by signal $((MEDIAINFO_STATUS - 128)) (SIG$(kill -l $((MEDIAINFO_STATUS - 128))))" >> "${LOG}/${MOVIE_METADATA_FILENAME_LOCAL}_mediainfo.log"
+  elif [ "${MEDIAINFO_STATUS}" -ne 0 ]
+  then
+    echo "mediainfo ended with exit code ${MEDIAINFO_STATUS}" >> "${LOG}/${MOVIE_METADATA_FILENAME_LOCAL}_mediainfo.log"
+  fi
   require_output "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_mediainfo.json" "reading local metadata (mediainfo)" "${LOG}/${MOVIE_METADATA_FILENAME_LOCAL}_mediainfo.log"
   ffprobe -v quiet -print_format json -show_format -show_streams "${MOVIE_NAME_ARRAY[*]}.mkv" > "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_ffprobe.json" 2>"${LOG}/${MOVIE_METADATA_FILENAME_LOCAL}_ffprobe.log"
   require_output "${TMP}/${MOVIE_METADATA_FILENAME_LOCAL}_ffprobe.json" "reading local metadata (ffprobe)" "${LOG}/${MOVIE_METADATA_FILENAME_LOCAL}_ffprobe.log"
