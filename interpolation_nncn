@@ -360,6 +360,10 @@ fi
 # to the terminal's process group, so exit_function runs the Ctrl+C cleanup. Not to the script
 # only (KillMode=mixed): bash runs the trap only after its foreground tool (NCNN, ffmpeg) ends,
 # which may take longer than TimeoutStopSec; whatever is left after it is killed.
+# IgnoreSIGPIPE=no: systemd starts a service with SIGPIPE ignored, and bash cannot restore it, so
+# every process of the run inherited it: "ffprobe -show_entries frame=... | head -n1" (the first
+# frame's time) then got only write errors after head ended and decoded the whole chunk, ~85 s of
+# each chunk's preparation alongside the encode (4K, 60 s; 0.3 s with SIGPIPE, as interactively).
 # SELinux: systemd (init_t) may execute only files of executable types; a script in a repository
 # has its directory's label (e.g. httpd_sys_content_t) and was refused ("Permission denied" at
 # step EXEC). /usr/bin/env is bin_t, so the service runs as unconfined_service_t, the domain of
@@ -397,7 +401,7 @@ starting_as_service()
   local UNIT_MOVIE_NAME="${FILE_NAME%.*}"
   UNIT_MOVIE_NAME="$(printf '%s' "${UNIT_MOVIE_NAME}" | tr -c 'A-Za-z0-9_.-' '_' | tr -s '_')"
   local UNIT_NAME="interpolation-${UNIT_MOVIE_NAME:0:80}-${CURRENT_TIMESTAMP}"
-  local SERVICE_PROPERTIES=(-p KillSignal=SIGINT -p TimeoutStopSec=120)
+  local SERVICE_PROPERTIES=(-p KillSignal=SIGINT -p TimeoutStopSec=120 -p IgnoreSIGPIPE=no)
   if [ -n "${MEMORY_HIGH}" ]
   then
     SERVICE_PROPERTIES+=(-p "MemoryHigh=${MEMORY_HIGH}")

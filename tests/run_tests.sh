@@ -505,7 +505,7 @@ SERVICE_SETUP='eval "$(sed -n "/^starting_as_service()/,/^  }/p" "'"${REPO_ROOT}
 OUTPUT="$(PATH="${WORK_DIR}/servicebin:${PATH}" run_with_helpers "${SERVICE_SETUP}"'; MEMORY_HIGH=20G; INTERMEDIATE_CODEC=x264_crf10; DESTINATION_DIR="/media/my ready"; trap '"'"'echo "STATUS=$?"; echo "ARGS: $(tr "\n" "|" < service_args.txt)"'"'"' EXIT; starting_as_service' 2>&1)"
 assert_contains "-S exits 0 once the service is started" "${OUTPUT}" "STATUS=0"
 assert_contains "-S starts it through sudo, as the calling user, in the current directory" "${OUTPUT}" "ARGS: sudo|--quiet|--collect|--unit=interpolation-Smokin_Aces_2006_-2026.11.02-16.50.33|--description=interpolation_nncn: Smokin' Aces (2006).mkv|--uid=1000|--gid=1000|--working-directory=${WORK_DIR}/svc|"
-assert_contains "-S: systemctl stop sends SIGINT, as Ctrl+C (the cleanup runs)" "${OUTPUT}" "|-p|KillSignal=SIGINT|-p|TimeoutStopSec=120|-p|MemoryHigh=20G|"
+assert_contains "-S: systemctl stop sends SIGINT, as Ctrl+C (the cleanup runs)" "${OUTPUT}" "|-p|KillSignal=SIGINT|-p|TimeoutStopSec=120|-p|IgnoreSIGPIPE=no|-p|MemoryHigh=20G|"
 assert_contains "-S: the service gets the launcher's timestamp and the same arguments" "${OUTPUT}" "|--setenv=INTERPOLATION_NNCN_SERVICE=yes|--setenv=SERVICE_RUN_TIMESTAMP=2026.11.02-16.50.33|/usr/bin/env|bash|/repo/interpolation_nncn|-i|Smokin' Aces (2006).mkv|-E|-g|-S|"
 assert_contains "-S passes the settings read from the environment to the service" "${OUTPUT}" "|--setenv=INTERMEDIATE_CODEC=x264_crf10|"
 assert_contains "-S passes DESTINATION_DIR when it is set (spaces kept)" "${OUTPUT}" "|--setenv=DESTINATION_DIR=/media/my ready|"

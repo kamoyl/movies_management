@@ -291,6 +291,7 @@ Details:
 
 - Root or `sudo` is required, by choice: then the service has what an interactive run has (your user and groups, so the GPU, and `PATH`, `HOME`, `LANG`, `TERM`), and no fallbacks are needed. Run as root, it runs as root.
 - `systemctl stop` sends SIGINT to every process of the service, as Ctrl+C does in a terminal, so the Ctrl+C cleanup runs (Done item 18) and finished chunks are kept; the run exits 130. Not to the script alone: bash runs its trap only after its current tool (NCNN, ffmpeg) ends. Whatever still runs after 120 s is killed.
+- `IgnoreSIGPIPE=no`: systemd starts services with SIGPIPE ignored, which made every `tool | head -n1` run its tool to the end (Done item 39).
 - `--collect`: the unit disappears when it ends, also after a failure; its exit code is in the log.
 - To resume, run the same command again (with or without `-S`).
 - SELinux (enforcing) works without a policy change or `setenforce`: the service starts `/usr/bin/env bash <script>`, not the script itself. systemd (`init_t`) may not execute a script with a label such as `httpd_sys_content_t` (Smokin' Aces: `Permission denied` at step EXEC), but `/usr/bin/env` is `bin_t`, so the policy's transition `init_t → unconfined_service_t` applies, and that domain may read the script.
@@ -725,7 +726,14 @@ Peak space use per chunk was 30–37 GB of PNG frames.
 
 38. **The encode and VMAF are kept off NCNN's cores** (16 Nov, backlog item 1).
     - NCNN was ~75 s per chunk slower while the previous chunk's encode ran next to it, at `nice -n 10`. The metrics and a benchmark showed that CPU priority does not help (even `SCHED_IDLE`): the encode shares NCNN's physical cores, cache and memory bandwidth.
-    - The part encode and VMAF now run under `taskset`, off the first `NCNN_FREE_CORES` cores (default 4, both threads of each). In the benchmark NCNN took 74–77 s instead of 82 s (69 s alone), and the encode got ~12 % slower, which still fits in a chunk. Expected: ~15–20 s per chunk; to be confirmed by the next run's `statistics.txt`.
+    - The part encode and VMAF now run under `taskset`, off the first `NCNN_FREE_CORES` cores (default 4, both threads of each). In the benchmark NCNN took 74–77 s instead of 82 s (69 s alone), and the encode got ~12 % slower, which still fits in a chunk.
+    - Measured in the real run (Good Omens S3E1, 16 Nov): NCNN ~402 s per chunk (chunks 075–089) against ~405 s before (065–074), so ~3 s instead of the expected 15–20 s. The pinning is active (CPU 93 → 85–88 % while NCNN and the encode overlap, GPU use 71/78 → 74/79 %). The benchmark looped a small encode; in the run HandBrake uses ~12.6 GB and NCNN reads its frames from disk, so memory bandwidth, which pinning does not split, probably dominates. Kept: the encodes still fit in a chunk and it costs nothing; `NCNN_FREE_CORES=0` turns it off.
+
+39. **The `-S` service no longer ignores SIGPIPE** (16 Nov).
+    - The user saw preparation take several times longer from chunk 093 of Good Omens S3E1: ~85 s instead of 13–16 s, exactly from the restart with `-S`. The metrics showed only the encode running after the first ~15 s of preparation.
+    - Cause: systemd starts a service with SIGPIPE ignored (`IgnoreSIGPIPE=yes` is the default), and bash cannot undo it for its children. `ffprobe -show_entries frame=… | head -n1`, which reads the first frame's time, normally dies of SIGPIPE when `head` ends; in the service it only got write errors and decoded the whole chunk, single-threaded. Measured on a 60 s 4K chunk: 0.26 s with SIGPIPE, 55.6 s without (idle machine; ~85 s next to the encode).
+    - Fix: the service is started with `-p IgnoreSIGPIPE=no`, so every `tool | head` pipeline behaves as in a terminal. Checked with a real `sudo systemd-run`: `SigIgn` of the service's bash no longer has SIGPIPE.
+    - Not the cause, but seen in the same run: from chunk 090 the content is heavier (frames 45–49 GB instead of ~33 GB, extraction ~41 s instead of ~33 s, NCNN 410–490 s, encode 300–360 s), and merging streams took 35–47 s instead of ~4 s, with the larger intermediate file.
 
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
@@ -790,7 +798,7 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 - 3–5 Nov: NCNN is ~75 s slower than before, because the slower `-g` encode now overlaps it (explained in item 1).
 - Carnival Row (4K HDR, same options) spent ~120–135 s per chunk in preparation, against ~59 s for Smokin' Aces. Explained in Done item 26: the host was out of memory while the previous chunk's encode ran, not the code; with free memory it took 16–20 s.
 
-1. **Metrics, before further optimization.** The sampling, the memory warning and the Excel report are done (Done item 21), and so are Carnival Row's preparation and `RUN_MEMORY_PEAK_DEFAULT_GB` (Done item 26). The slower NCNN is explained and fixed (16 Nov, Done item 38):
+1. **Metrics, before further optimization.** The sampling, the memory warning and the Excel report are done (Done item 21), and so are Carnival Row's preparation and `RUN_MEMORY_PEAK_DEFAULT_GB` (Done item 26). The slower NCNN is explained; the fix gained less than expected (16 Nov, Done item 38):
    - In the 18 runs of 6–16 Nov with metrics, NCNN overlapped the previous chunk's encode for 40–75 % of its time. In the 5 s samples taken while NCNN ran, the CPU was 92–95 % busy with the encode next to it and 25–53 % without it. GPU use fell from 84–97 % to 60–78 %, in every run, so the cards were waiting for NCNN's CPU threads, which load and save the PNGs. Chunk 001, with nothing in the background, was always the fastest.
    - The encode (and VMAF) already run at `nice -n 10`. A benchmark on rig2 measured the alternatives: 300 4K frames of Good Omens S3E1 → 600 frames with the run's NCNN command (`-j 6:2,2:8`, both cards), next to the run's AV1 encode (`svt_av1_10bit`, preset 5) in a loop:
 
@@ -805,6 +813,7 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 
    - So the lowest CPU priority changes nothing: the loss comes from sharing physical cores (the 5900X has two threads per core), cache and memory bandwidth, not from scheduling. Keeping the encode off 4 of the 12 cores (both threads of each) removes about two thirds of the loss, and the encode gets ~12 % slower. It still fits: an encode took ~185–250 s of a ~450 s chunk. Estimated gain: ~15–20 s per chunk (~4 %).
    - Fix: the part encode and VMAF run under `taskset`, leaving `NCNN_FREE_CORES` (4) cores to NCNN (Linux only; macOS has no `taskset`).
+   - Result in the real run: ~3 s per chunk, not 15–20 s (Done item 38). Left open: a clean A/B test on the same chunks (`NCNN_FREE_CORES=0` vs 4) to separate the gain from content differences, and memory bandwidth as the probable remaining cause.
 2. **Predictable deletion of input frames.** Done (Done item 33). Left open: running NCNN without `-v` would need `throttling_ncnn` and the deletion to read the output frames instead of the log; not worth it while the log costs nothing measurable.
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**
