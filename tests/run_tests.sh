@@ -412,6 +412,20 @@ assert_contains "no NCNN log is not a lost GPU" "${OUTPUT}" "MISSING: no"
 OUTPUT="$(run_with_helpers 'NCNN_GPUS_CONFIGURED=1,2; NCNN_THREADS_CONFIGURED=6:2,3:8; echo "A=$(ncnn_threads_for 1,2) B=$(ncnn_threads_for 2) C=$(ncnn_threads_for 1)"; NCNN_THREADS_CONFIGURED=4:2:4; echo "D=$(ncnn_threads_for 2)"' 2>&1)"
 assert_contains "-j keeps the proc value of each GPU left (one value per GPU)" "${OUTPUT}" "A=6:2,3:8 B=6:3:8 C=6:2:8"
 assert_contains "-j with a single proc value is kept as it is" "${OUTPUT}" "D=4:2:4"
+
+echo "encode and VMAF kept off NCNN's cores"
+mkdir -p "${WORK_DIR}/cpubin"
+# 6 cores with SMT and core numbers with gaps (core 2 is numbered 8): CPU n and n+6 share a core
+printf '#!/usr/bin/env bash\nprintf "# CPU,Core\\n0,0\\n1,1\\n2,8\\n3,9\\n4,10\\n5,11\\n6,0\\n7,1\\n8,8\\n9,9\\n10,10\\n11,11\\n"\n' > "${WORK_DIR}/cpubin/lscpu"
+printf '#!/usr/bin/env bash\n:\n' > "${WORK_DIR}/cpubin/taskset"
+chmod +x "${WORK_DIR}/cpubin/lscpu" "${WORK_DIR}/cpubin/taskset"
+OUTPUT="$(PATH="${WORK_DIR}/cpubin:${PATH}" run_with_helpers 'echo "DEFAULT=[${ENCODE_PINNING[*]}]"; NCNN_FREE_CORES=2; echo "TWO=[$(encode_cpus_listing)]"; NCNN_FREE_CORES=3; echo "THREE=[$(encode_cpus_listing)]"; NCNN_FREE_CORES=0; echo "OFF=[$(encode_cpus_listing)]"' 2>&1)"
+assert_contains "too few cores for the default 4 (6 < 2 x 4): no pinning" "${OUTPUT}" "DEFAULT=[]"
+assert_contains "both threads of the first cores are left to NCNN, core numbers with gaps" "${OUTPUT}" "TWO=[2,3,4,5,8,9,10,11]"
+assert_contains "exactly twice as many cores still pins" "${OUTPUT}" "THREE=[3,4,5,9,10,11]"
+assert_contains "NCNN_FREE_CORES=0 turns pinning off" "${OUTPUT}" "OFF=[]"
+OUTPUT="$(PATH="${WORK_DIR}/cpubin:${PATH}" NCNN_FREE_CORES=2 run_with_helpers 'echo "PIN=[${ENCODE_PINNING[*]}]"' 2>&1)"
+assert_contains "NCNN_FREE_CORES from the environment sets taskset for the encode" "${OUTPUT}" "PIN=[taskset -c 2,3,4,5,8,9,10,11]"
 mkdir -p "${WORK_DIR}/gpubin"
 cat > "${WORK_DIR}/gpubin/vulkaninfo" <<'EOF'
 #!/usr/bin/env bash

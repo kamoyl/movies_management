@@ -724,6 +724,35 @@ fi
 NCNN_GPUS="${NCNN_GPUS:-${NCNN_GPUS_DEFAULT}}"
 NCNN_THREADS="${NCNN_THREADS:-${NCNN_THREADS_DEFAULT}}"
 
+# The part encode and VMAF run next to the next chunk's NCNN, which then waited for its CPU
+# threads (PNG load and save): GPU use fell from 84-97 % to 60-78 % (runs of 6-16 Nov). nice did
+# not help, nor did SCHED_IDLE: the encode shares NCNN's physical cores (SMT), cache and memory
+# bandwidth. So both are kept off the first NCNN_FREE_CORES cores (both threads of each). On the
+# 5900X (README, backlog item 1) 4 cores took NCNN from 82 s to 74-77 s (69 s alone) and the
+# encode ~12 % slower. 0 turns it off; it is off as well without taskset (macOS) or lscpu, or
+# with fewer than twice as many cores
+NCNN_FREE_CORES="${NCNN_FREE_CORES:-4}"
+
+# encode_cpus_listing - the CPUs (taskset -c list) left to the part encode and VMAF, empty for no
+# pinning; cores are counted in the order lscpu lists their first thread
+encode_cpus_listing()
+{
+  if [[ ${NCNN_FREE_CORES} -gt 0 ]] && command -v taskset > /dev/null 2>&1 && command -v lscpu > /dev/null 2>&1
+  then
+    lscpu -p=CPU,CORE 2>/dev/null | awk -F, -v FREE="${NCNN_FREE_CORES}" '
+      /^#/ {next}
+      !($2 in CORE_RANK) {CORE_RANK[$2] = CORES++}
+      CORE_RANK[$2] >= FREE {LIST = LIST (LIST == "" ? "" : ",") $1}
+      END {if (CORES >= 2 * FREE) print LIST}'
+  fi
+  }
+ENCODE_CPUS="$(encode_cpus_listing)"
+ENCODE_PINNING=()
+if [ -n "${ENCODE_CPUS}" ]
+then
+  ENCODE_PINNING=(taskset -c "${ENCODE_CPUS}")
+fi
+
 # A lost GPU (on rig2 an RX 580 hung twice: "ring comp_1.0.1 timeout", 14 and 15 Nov) made NCNN
 # fail every frame sent to that card (VK_ERROR_DEVICE_LOST, -4) while the other card went on, so
 # the chunk had holes and the run stopped. Now NCNN is stopped at once, the chunk is done again on
@@ -2064,13 +2093,13 @@ starting_quality_metric()
   local VMAF_GRAPH="[0:v]select='not(mod(n\,${VMAF_FRAME_STEP}))',setpts=N/(${INPUT_FPS}*TB)[distorted];[1:v]${REFERENCE_FILTER}setpts=N/(${INPUT_FPS}*TB)[reference];[distorted][reference]libvmaf=n_threads=${VMAF_THREADS}:model=${VMAF_MODEL}:log_path=${LOG}/${VMAF_FILES}_vmaf.json:log_fmt=json:shortest=1"
   rm -f -- "${TMP}/${VMAF_FILES}_quality_metric.status" "${TMP}/${VMAF_FILES}_quality_metric.runtime"
   # the subshell measures VMAF's own runtime and keeps ffmpeg's exit code, both read by
-  # finishing_quality_metric; ffmpeg runs with nice, so the next chunk's frame extraction and
-  # NCNN get the CPU first and VMAF uses what is left; stop_background_jobs stops the subshell
-  # (SIGTERM), which then stops ffmpeg
+  # finishing_quality_metric; ffmpeg runs with nice and off NCNN's cores (ENCODE_PINNING), so the
+  # next chunk's frame extraction and NCNN get the CPU first and VMAF uses what is left;
+  # stop_background_jobs stops the subshell (SIGTERM), which then stops ffmpeg
   (
     trap 'kill "${VMAF_FFMPEG_PID}" 2>/dev/null' TERM
     start_time_collecting
-    nice -n 10 ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${ENCODED_VIDEO_FILE}" -i "${REFERENCE_VIDEO_FILE}" -lavfi "${VMAF_GRAPH}" -f null - > "${LOG}/${VMAF_FILES}_quality_metric.log" 2>&1 &
+    nice -n 10 "${ENCODE_PINNING[@]}" ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${ENCODED_VIDEO_FILE}" -i "${REFERENCE_VIDEO_FILE}" -lavfi "${VMAF_GRAPH}" -f null - > "${LOG}/${VMAF_FILES}_quality_metric.log" 2>&1 &
     VMAF_FFMPEG_PID=$!
     wait "${VMAF_FFMPEG_PID}" 2>> "${LOG}/${VMAF_FILES}_quality_metric.log"
     VMAF_FFMPEG_STATUS=$?
@@ -2539,7 +2568,8 @@ starting_part_encoding()
   else
     PART_MUX_TRACKS+=(--no-subtitles)
   fi
-  # HandBrake runs with nice, so the next chunk's frame extraction and NCNN get the CPU first;
+  # HandBrake runs with nice and off NCNN's cores (ENCODE_PINNING; nice and taskset exec, so $! is
+  # HandBrake's PID), so the next chunk's frame extraction and NCNN get the CPU first;
   # stop_background_jobs stops the subshell (SIGTERM), which then stops HandBrake or the VMAF
   (
     trap 'kill "${PART_HANDBRAKE_PID}" "${QUALITY_METRIC_CHECK_PID}" 2>/dev/null; exit 143' TERM
@@ -2552,7 +2582,7 @@ starting_part_encoding()
     # stderr when it reaps it, which may happen during the watchdog's sleep, before the wait: the
     # whole block's stderr goes to the encode's log, so the notice is next to HandBrake's output
     {
-      nice -n 10 HandBrakeCLI -i "${PART_MERGED_FILE}" -o "${PART_VIDEO_FILE}" --encoder "${VIDEO_ENCODER[@]}" --crop "${PART_CROP}" --no-markers -a none -s none >> "${PART_ENCODING_LOG}" 2>&1 &
+      nice -n 10 "${ENCODE_PINNING[@]}" HandBrakeCLI -i "${PART_MERGED_FILE}" -o "${PART_VIDEO_FILE}" --encoder "${VIDEO_ENCODER[@]}" --crop "${PART_CROP}" --no-markers -a none -s none >> "${PART_ENCODING_LOG}" 2>&1 &
       PART_HANDBRAKE_PID=$!
       # watchdog: a hung encoder may keep printing the same percentage for hours (chunk 097 of
       # Smokin' Aces: 99.96 % from 10:58 on, 52395 progress lines), so progress means a changed

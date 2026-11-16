@@ -275,7 +275,7 @@ Each step of each chunk also gets a row in `TMP/timeline.csv` (`~`-separated), s
 ./interpolation_nncn -i "Movie.mkv" -E -g -S -M 24G
 ```
 
-The launcher checks the options, the input and the tools as an interactive run does, so such errors show at once. Then it starts the same command with `sudo systemd-run` and prints the lines below. The service starts with a clean environment, so the launcher passes on the settings read from it: `INTERMEDIATE_CODEC`, `PNG_COMPRESSION_LEVEL`, `NCNN_EXTRACTION_MARGIN`, `NCNN_GPUS`, `NCNN_THREADS`, `GPU_PROBE_TIMEOUT_SEC`, `GPU_RETRY_AFTER_CHUNKS`, `GPU_RETRY_MAX_CHUNKS`, `GPU_MAX_LOSSES`, `RUN_MEMORY_PEAK_DEFAULT_GB`, `METRICS_INTERVAL_SEC` and, when set, `DESTINATION_DIR` (`CHUNK_SUMMARY_PAUSE_SEC` does not apply to a service). The launcher prints:
+The launcher checks the options, the input and the tools as an interactive run does, so such errors show at once. Then it starts the same command with `sudo systemd-run` and prints the lines below. The service starts with a clean environment, so the launcher passes on the settings read from it: `INTERMEDIATE_CODEC`, `PNG_COMPRESSION_LEVEL`, `NCNN_EXTRACTION_MARGIN`, `NCNN_GPUS`, `NCNN_THREADS`, `NCNN_FREE_CORES`, `GPU_PROBE_TIMEOUT_SEC`, `GPU_RETRY_AFTER_CHUNKS`, `GPU_RETRY_MAX_CHUNKS`, `GPU_MAX_LOSSES`, `RUN_MEMORY_PEAK_DEFAULT_GB`, `METRICS_INTERVAL_SEC` and, when set, `DESTINATION_DIR` (`CHUNK_SUMMARY_PAUSE_SEC` does not apply to a service). The launcher prints:
 
 - the unit name, e.g. `interpolation-Smokin_Aces_2006_-2026.11.02-16.50.33` (the movie name with characters systemd does not allow replaced by `_`, and the run's timestamp, the same as in its log directory);
 - the log, and how to follow it: `tail -f '<log>'`;
@@ -405,6 +405,8 @@ The GPUs and threads depend on the machine, not on a choice per run, so the scri
 ```bash
 NCNN_GPUS=0,1 NCNN_THREADS=4:2,2:6 ./interpolation_nncn -i "Episode.mkv"
 ```
+
+The previous chunk's encode and VMAF run next to NCNN, at `nice -n 10`, and on Linux they are also kept off the first `NCNN_FREE_CORES` physical cores (default 4, both threads of each; `taskset`). The encode slows NCNN's CPU threads, which load and save the PNGs, even at the lowest CPU priority, because it shares their cores, cache and memory bandwidth (measured in backlog item 1). `NCNN_FREE_CORES=0` turns this off; it is off as well without `taskset` (macOS) and on a CPU with fewer than twice as many cores.
 
 With a wrong GPU number, NCNN stops at once (`invalid gpu device` in its log); the script reports it immediately instead of after the frame extraction.
 
@@ -721,6 +723,10 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - `movies_encoding` stopped on "The Phoenician Scheme" with only "reading local metadata (mediainfo) did not produce" and an empty log. mediainfo segfaulted: `/lib64/libmediainfo.so.0` had been linked by hand to an older library (2404, not owned by any package) instead of the installed 26.05. The link was restored and the old file deleted, and `rpm -V libmediainfo` is clean again.
     - Bash prints no notice for a crash of a command that is not the last in a pipeline, so `movie_data_collecting` now writes mediainfo's exit code or signal (e.g. `killed by signal 11 (SIGSEGV)`) to the mediainfo log.
 
+38. **The encode and VMAF are kept off NCNN's cores** (16 Nov, backlog item 1).
+    - NCNN was ~75 s per chunk slower while the previous chunk's encode ran next to it, at `nice -n 10`. The metrics and a benchmark showed that CPU priority does not help (even `SCHED_IDLE`): the encode shares NCNN's physical cores, cache and memory bandwidth.
+    - The part encode and VMAF now run under `taskset`, off the first `NCNN_FREE_CORES` cores (default 4, both threads of each). In the benchmark NCNN took 74–77 s instead of 82 s (69 s alone), and the encode got ~12 % slower, which still fits in a chunk. Expected: ~15–20 s per chunk; to be confirmed by the next run's `statistics.txt`.
+
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
 | Codec / settings | Time (Mac) | Size | VMAF |
@@ -784,7 +790,7 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 - 3–5 Nov: NCNN is ~75 s slower than before, because the slower `-g` encode now overlaps it (explained in item 1).
 - Carnival Row (4K HDR, same options) spent ~120–135 s per chunk in preparation, against ~59 s for Smokin' Aces. Explained in Done item 26: the host was out of memory while the previous chunk's encode ran, not the code; with free memory it took 16–20 s.
 
-1. **Metrics, before further optimization.** The sampling, the memory warning and the Excel report are done (Done item 21), and so are Carnival Row's preparation and `RUN_MEMORY_PEAK_DEFAULT_GB` (Done item 26). The slower NCNN is explained (16 Nov), but not fixed yet:
+1. **Metrics, before further optimization.** The sampling, the memory warning and the Excel report are done (Done item 21), and so are Carnival Row's preparation and `RUN_MEMORY_PEAK_DEFAULT_GB` (Done item 26). The slower NCNN is explained and fixed (16 Nov, Done item 38):
    - In the 18 runs of 6–16 Nov with metrics, NCNN overlapped the previous chunk's encode for 40–75 % of its time. In the 5 s samples taken while NCNN ran, the CPU was 92–95 % busy with the encode next to it and 25–53 % without it. GPU use fell from 84–97 % to 60–78 %, in every run, so the cards were waiting for NCNN's CPU threads, which load and save the PNGs. Chunk 001, with nothing in the background, was always the fastest.
    - The encode (and VMAF) already run at `nice -n 10`. A benchmark on rig2 measured the alternatives: 300 4K frames of Good Omens S3E1 → 600 frames with the run's NCNN command (`-j 6:2,2:8`, both cards), next to the run's AV1 encode (`svt_av1_10bit`, preset 5) in a loop:
 
@@ -798,7 +804,7 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
      | `nice -n 10`, kept off 6 cores | 74.7 s | 13.8 fps |
 
    - So the lowest CPU priority changes nothing: the loss comes from sharing physical cores (the 5900X has two threads per core), cache and memory bandwidth, not from scheduling. Keeping the encode off 4 of the 12 cores (both threads of each) removes about two thirds of the loss, and the encode gets ~12 % slower. It still fits: an encode took ~185–250 s of a ~450 s chunk. Estimated gain: ~15–20 s per chunk (~4 %).
-   - Proposed fix: run the part encode and VMAF under `taskset`, leaving 4 cores to NCNN (Linux only; macOS has no `taskset`).
+   - Fix: the part encode and VMAF run under `taskset`, leaving `NCNN_FREE_CORES` (4) cores to NCNN (Linux only; macOS has no `taskset`).
 2. **Predictable deletion of input frames.** Done (Done item 33). Left open: running NCNN without `-v` would need `throttling_ncnn` and the deletion to read the output frames instead of the log; not worth it while the log costs nothing measurable.
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**
