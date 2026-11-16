@@ -412,6 +412,7 @@ starting_as_service()
     --setenv=NCNN_THREADS="${NCNN_THREADS}"
     --setenv=GPU_PROBE_TIMEOUT_SEC="${GPU_PROBE_TIMEOUT_SEC}"
     --setenv=GPU_RETRY_AFTER_CHUNKS="${GPU_RETRY_AFTER_CHUNKS}"
+    --setenv=GPU_RETRY_MAX_CHUNKS="${GPU_RETRY_MAX_CHUNKS}"
     --setenv=GPU_MAX_LOSSES="${GPU_MAX_LOSSES}"
     --setenv=RUN_MEMORY_PEAK_DEFAULT_GB="${RUN_MEMORY_PEAK_DEFAULT_GB}"
     --setenv=METRICS_INTERVAL_SEC="${METRICS_INTERVAL_SEC}"
@@ -816,15 +817,37 @@ handling_lost_gpu()
   inf "  chunk ${YELLOW}${1}${CYAN} is done again on GPU(s) ${YELLOW}${NCNN_GPUS}${CYAN} (-j ${NCNN_THREADS})"
   }
 
-# retrying_lost_gpus CHUNK_ID - before a chunk: a GPU lost GPU_RETRY_AFTER_CHUNKS or more chunks
-# ago is probed and, when it works, used again; one lost GPU_MAX_LOSSES times stays out
+# gpu_retry_wait GPU - chunks to wait before a lost GPU is probed again: GPU_RETRY_AFTER_CHUNKS,
+# doubled with each further loss or failed probe, at most GPU_RETRY_MAX_CHUNKS
+gpu_retry_wait()
+{
+  local WAIT="${GPU_RETRY_AFTER_CHUNKS}"
+  local STEP
+  for ((STEP = 1; STEP < ${GPU_LOSS_COUNT[${1}]:-1}; STEP++))
+  do
+    WAIT=$((WAIT * 2))
+    if [ "${WAIT}" -ge "${GPU_RETRY_MAX_CHUNKS}" ]
+    then
+      break
+    fi
+  done
+  if [ "${WAIT}" -gt "${GPU_RETRY_MAX_CHUNKS}" ]
+  then
+    WAIT="${GPU_RETRY_MAX_CHUNKS}"
+  fi
+  echo "${WAIT}"
+  }
+
+# retrying_lost_gpus CHUNK_ID - before a chunk: a lost GPU is probed once gpu_retry_wait chunks
+# have passed since it was lost (or last failed its probe) and, when it works, used again; no GPU
+# is left out for good (15 Nov: card0 hung twice within 14 min, then ran the next day's chunks fine)
 retrying_lost_gpus()
 {
   local GPU
   local CHANGED="no"
   for GPU in "${LOST_GPUS[@]}"
   do
-    if [ "${GPU_LOSS_COUNT[${GPU}]}" -ge "${GPU_MAX_LOSSES}" ] || [ $((10#${1} - 10#${GPU_LOST_AT_CHUNK[${GPU}]})) -lt "${GPU_RETRY_AFTER_CHUNKS}" ]
+    if [ $((10#${1} - 10#${GPU_LOST_AT_CHUNK[${GPU}]})) -lt "$(gpu_retry_wait "${GPU}")" ]
     then
       continue
     fi
@@ -834,8 +857,9 @@ retrying_lost_gpus()
       mapfile -t LOST_GPUS < <(printf '%s\n' "${LOST_GPUS[@]}" | grep -vx "${GPU}")
       CHANGED="yes"
     else
-      warn "  GPU ${YELLOW}${GPU}${WINE} still fails its probe, it is probed again in ${GPU_RETRY_AFTER_CHUNKS} chunk(s)"
+      GPU_LOSS_COUNT[${GPU}]=$((${GPU_LOSS_COUNT[${GPU}]} + 1))
       GPU_LOST_AT_CHUNK[${GPU}]="${1}"
+      warn "  GPU ${YELLOW}${GPU}${WINE} still fails its probe, it is probed again in $(gpu_retry_wait "${GPU}") chunk(s)"
     fi
   done
   if [[ ${CHANGED} == yes ]]

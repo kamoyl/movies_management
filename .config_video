@@ -727,14 +727,17 @@ NCNN_THREADS="${NCNN_THREADS:-${NCNN_THREADS_DEFAULT}}"
 # A lost GPU (on rig2 an RX 580 hung twice: "ring comp_1.0.1 timeout", 14 and 15 Nov) made NCNN
 # fail every frame sent to that card (VK_ERROR_DEVICE_LOST, -4) while the other card went on, so
 # the chunk had holes and the run stopped. Now NCNN is stopped at once, the chunk is done again on
-# the cards which still work, and a lost card is probed back every GPU_RETRY_AFTER_CHUNKS chunks;
-# a card lost GPU_MAX_LOSSES times stays out for the rest of the run. The kernel resets the hung
+# the cards which still work, and a lost card is probed back after GPU_RETRY_AFTER_CHUNKS chunks,
+# the wait doubling with each further loss up to GPU_RETRY_MAX_CHUNKS (no card is left out for
+# good: 15 Nov card0 hung twice within 14 min, then worked fine after a rest). The kernel resets the hung
 # ring itself ("device wedged, but no recovery needed"), and later runs used both cards again.
 GPU_PROBE_TIMEOUT_SEC="${GPU_PROBE_TIMEOUT_SEC:-60}"
 # 1 = probed before the next chunk: the kernel's soft reset of the hung card took ~0.1 s both
 # times (journalctl -k, 14 and 15 Nov), so only NCNN's own device was lost, not the card; the
 # chunk which hit the hang is still redone without it
 GPU_RETRY_AFTER_CHUNKS="${GPU_RETRY_AFTER_CHUNKS:-1}"
+GPU_RETRY_MAX_CHUNKS="${GPU_RETRY_MAX_CHUNKS:-8}"
+# a chunk is done again at most this many times after a lost GPU, then the run stops
 GPU_MAX_LOSSES="${GPU_MAX_LOSSES:-2}"
 # NCNN_GPUS and NCNN_THREADS change when a GPU is lost; these keep what was set
 NCNN_GPUS_CONFIGURED="${NCNN_GPUS}"

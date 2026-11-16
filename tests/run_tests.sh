@@ -417,7 +417,7 @@ OUTPUT="$(PATH="${WORK_DIR}/gpubin:${PATH}" run_with_helpers "${PROBE_SETUP}"'; 
 assert_contains "a GPU making the test frames passes its probe" "${OUTPUT}" "OK: pass"
 assert_contains "a GPU reporting a failure fails its probe" "${OUTPUT}" "FAIL: fail"
 assert_contains "a hanging GPU fails its probe after the timeout" "${OUTPUT}" "HANG: fail after 1s"
-LOSS_SETUP='for FUNC in using_working_gpus losing_gpu handling_lost_gpu retrying_lost_gpus; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; LOST_GPUS=(); declare -A GPU_LOST_AT_CHUNK; declare -A GPU_LOSS_COUNT; NCNN_GPUS_CONFIGURED=1,2; NCNN_THREADS_CONFIGURED=6:2,3:8; NCNN_GPUS=1,2; NCNN_THREADS=6:2,3:8; GPU_RETRY_AFTER_CHUNKS=2; GPU_MAX_LOSSES=2; LOG=.; hung_gpus_from_kernel() { echo 1; }; probing_gpu() { [[ " ${PROBE_FAILS} " != *" $1 "* ]]; }'
+LOSS_SETUP='for FUNC in using_working_gpus losing_gpu handling_lost_gpu gpu_retry_wait retrying_lost_gpus; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; LOST_GPUS=(); declare -A GPU_LOST_AT_CHUNK; declare -A GPU_LOSS_COUNT; NCNN_GPUS_CONFIGURED=1,2; NCNN_THREADS_CONFIGURED=6:2,3:8; NCNN_GPUS=1,2; NCNN_THREADS=6:2,3:8; GPU_RETRY_AFTER_CHUNKS=2; GPU_RETRY_MAX_CHUNKS=8; GPU_MAX_LOSSES=2; LOG=.; hung_gpus_from_kernel() { echo 1; }; probing_gpu() { [[ " ${PROBE_FAILS} " != *" $1 "* ]]; }'
 OUTPUT="$(run_with_helpers "${LOSS_SETUP}"'; handling_lost_gpu 003 "2026-11-15 10:00"; echo "NOW: ${NCNN_GPUS} -j ${NCNN_THREADS} LOST: ${LOST_GPUS[*]}"' 2>&1)"
 assert_contains "the GPU the kernel named is left out, the chunk goes on on the other" "${OUTPUT}" "NOW: 2 -j 6:3:8 LOST: 1"
 OUTPUT="$(run_with_helpers "${LOSS_SETUP}"'; hung_gpus_from_kernel() { :; }; PROBE_FAILS=2; handling_lost_gpu 003 x; echo "NOW: ${NCNN_GPUS} LOST: ${LOST_GPUS[*]}"' 2>&1)"
@@ -430,9 +430,12 @@ assert_contains "no GPU left which works says so" "${OUTPUT}" "no GPU left which
 OUTPUT="$(run_with_helpers "${LOSS_SETUP}"'; handling_lost_gpu 003 x > /dev/null; PROBE_FAILS=""; retrying_lost_gpus 004; echo "004: ${NCNN_GPUS}"; retrying_lost_gpus 005; echo "005: ${NCNN_GPUS} -j ${NCNN_THREADS} LOST: [${LOST_GPUS[*]}]"' 2>&1)"
 assert_contains "a lost GPU is not probed before GPU_RETRY_AFTER_CHUNKS chunks" "${OUTPUT}" "004: 2"
 assert_contains "a lost GPU passing its probe later is used again, with its -j" "${OUTPUT}" "005: 1,2 -j 6:2,3:8 LOST: []"
-OUTPUT="$(run_with_helpers "${LOSS_SETUP}"'; PROBE_FAILS=1; handling_lost_gpu 003 x > /dev/null; retrying_lost_gpus 005; echo "005: ${NCNN_GPUS} AT: ${GPU_LOST_AT_CHUNK[1]}"; GPU_LOSS_COUNT[1]=2; PROBE_FAILS=""; retrying_lost_gpus 009; echo "009: ${NCNN_GPUS}"' 2>&1)"
-assert_contains "a lost GPU still failing its probe waits another GPU_RETRY_AFTER_CHUNKS chunks" "${OUTPUT}" "005: 2 AT: 005"
-assert_contains "a GPU lost GPU_MAX_LOSSES times stays out" "${OUTPUT}" "009: 2"
+OUTPUT="$(run_with_helpers "${LOSS_SETUP}"'; PROBE_FAILS=1; handling_lost_gpu 003 x > /dev/null; retrying_lost_gpus 005; echo "005: ${NCNN_GPUS} AT: ${GPU_LOST_AT_CHUNK[1]}"; PROBE_FAILS=""; retrying_lost_gpus 008; echo "008: ${NCNN_GPUS}"; retrying_lost_gpus 009; echo "009: ${NCNN_GPUS}"' 2>&1)"
+assert_contains "a lost GPU still failing its probe waits twice as long" "${OUTPUT}" "005: 2 AT: 005"
+assert_contains "after a failed probe, the GPU is not probed before the doubled wait" "${OUTPUT}" "008: 2"
+assert_contains "a GPU lost again is used again after the doubled wait, not left out for good" "${OUTPUT}" "009: 1,2"
+OUTPUT="$(run_with_helpers "${LOSS_SETUP}"'; for N in 1 2 3 4 9; do GPU_LOSS_COUNT[1]=${N}; echo -n "${N}:$(gpu_retry_wait 1) "; done' 2>&1)"
+assert_contains "the wait doubles with each loss, up to GPU_RETRY_MAX_CHUNKS" "${OUTPUT}" "1:2 2:4 3:8 4:8 9:8"
 
 echo "-S starts a systemd service (sudo, systemd-run and id replaced by fakes)"
 mkdir -p "${WORK_DIR}/servicebin"
