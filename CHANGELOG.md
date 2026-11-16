@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- Name a mediainfo crash in its log ([bb78548](https://github.com/kamoyl/movies_management/commit/bb78548eaa8f213b9d07643c14287f4170efe3ec) by Kamoyl).
 - .config: check for GNU tools first, stop clearly when BSD tools answer ([0d4cecb](https://github.com/kamoyl/movies_management/commit/0d4cecbacc8d075563b7aeacd7201b61d766413a) by Kamoyl).
 - Lost GPU: probe it back at doubling intervals, never leave it out for good ([0165f5f](https://github.com/kamoyl/movies_management/commit/0165f5fc072847967f2a7cd2fd0486f916aaa8b7) by Kamoyl).
 - Send bash's "Killed" job notice to the step's log, not the screen ([0d38309](https://github.com/kamoyl/movies_management/commit/0d3830960f52ba48a1630e97afd96fe328974408) by Kamoyl).
