@@ -368,11 +368,22 @@ fi
 # has its directory's label (e.g. httpd_sys_content_t) and was refused ("Permission denied" at
 # step EXEC). /usr/bin/env is bin_t, so the service runs as unconfined_service_t, the domain of
 # any locally installed service, which may read the script: no policy change, no setenforce.
+# Hardening (systemd-analyze security: 9.2 UNSAFE -> 0.6 SAFE, tested on a real run, 17 Nov): no
+# network, no privileges, a read-only system except the run's directories, only the GPUs as
+# devices. Left open on purpose: @resources (taskset, nice), the GPUs, /proc/stat and /proc/meminfo
+# (metrics), AF_UNIX (user lookups through SSSD) and umask 022 (the movies are shared, as before).
+# MemoryMax (SERVICE_MEMORY_MAX) is always set.
 # Everything is checked before (above), so the launcher reports input errors at once instead of
 # into the log.
 starting_as_service()
 {
   local SUDO_COMMAND=()
+  if ! [[ ${SERVICE_MEMORY_MAX} =~ ^[0-9]+[KMGT]?$|^[0-9]+%$ ]]
+  then
+    error "  SERVICE_MEMORY_MAX expects a size like 40G or a percentage like 75% (got: ${YELLOW}${SERVICE_MEMORY_MAX}${RED})"
+    ERROR_CODE="2"
+    failed
+  fi
   if ! type systemd-run > /dev/null 2>&1
   then
     error "  -S runs the script as a systemd service, but systemd-run was not found; run it interactively (without -S)"
@@ -401,11 +412,54 @@ starting_as_service()
   local UNIT_MOVIE_NAME="${FILE_NAME%.*}"
   UNIT_MOVIE_NAME="$(printf '%s' "${UNIT_MOVIE_NAME}" | tr -c 'A-Za-z0-9_.-' '_' | tr -s '_')"
   local UNIT_NAME="interpolation-${UNIT_MOVIE_NAME:0:80}-${CURRENT_TIMESTAMP}"
-  local SERVICE_PROPERTIES=(-p KillSignal=SIGINT -p TimeoutStopSec=120 -p IgnoreSIGPIPE=no)
+  # the report's Python environment needs the network the first time (pip), which the service has not
+  if ! python_venv_preparing "${SCRIPTS_HOME}/.venv" xlsxwriter
+  then
+    warn "  the Python environment for the run's report could not be prepared, the service will skip the report"
+  fi
+  local SERVICE_PROPERTIES=(-p KillSignal=SIGINT -p TimeoutStopSec=120 -p IgnoreSIGPIPE=no -p "MemoryMax=${SERVICE_MEMORY_MAX}")
   if [ -n "${MEMORY_HIGH}" ]
   then
     SERVICE_PROPERTIES+=(-p "MemoryHigh=${MEMORY_HIGH}")
   fi
+  SERVICE_PROPERTIES+=(
+    -p NoNewPrivileges=yes -p RestrictSUIDSGID=yes -p RemoveIPC=yes
+    -p ProtectSystem=strict -p ProtectHome=read-only -p PrivateTmp=yes
+    -p DevicePolicy=closed -p "DeviceAllow=char-drm rw"
+    -p ProtectClock=yes -p ProtectKernelTunables=yes -p ProtectKernelModules=yes -p ProtectKernelLogs=yes
+    -p ProtectControlGroups=yes -p ProtectHostname=yes -p ProtectProc=invisible
+    -p RestrictNamespaces=yes -p LockPersonality=yes -p RestrictRealtime=yes -p MemoryDenyWriteExecute=yes
+    -p SystemCallArchitectures=native -p SystemCallFilter=@system-service -p "SystemCallFilter=~@privileged"
+    -p SystemCallErrorNumber=EPERM
+    -p PrivateNetwork=yes -p IPAddressDeny=any -p RestrictAddressFamilies=AF_UNIX -p UMask=0022
+  )
+  # root without capabilities, or in its own user namespace, could not write into other users'
+  # directories (e.g. the movie's), as a root run did before
+  if [ "$(id -u)" -ne 0 ]
+  then
+    SERVICE_PROPERTIES+=(-p CapabilityBoundingSet= -p PrivateUsers=yes)
+  fi
+  # the only writable places: the working directory (chunks, parts), -o, -O, the destination of
+  # -E and Mesa's shader cache; "-": a missing one is skipped. Quoted for spaces in names. Resolved:
+  # systemd cannot set up a symlinked one (the default ~/var is a symlink on rig2: the unit failed
+  # with "Failed to set up mount namespacing: Permission denied", exit 226).
+  local WRITABLE_PATHS=("${PWD}" "${VAR}" "${VAR_OUT}" "${HOME}/.cache")
+  if [[ ${FINAL_ENCODING} == yes ]]
+  then
+    # the same default as in handbrake_encode_settings (.config_video)
+    WRITABLE_PATHS+=("${DESTINATION_DIR:-/media/ready}")
+  fi
+  local WRITABLE_PATH
+  for WRITABLE_PATH in "${WRITABLE_PATHS[@]}"
+  do
+    WRITABLE_PATH="$(readlink -f -- "${WRITABLE_PATH}")"
+    if [ -z "${WRITABLE_PATH}" ]
+    then
+      continue
+    fi
+    WRITABLE_PATH="${WRITABLE_PATH//\\/\\\\}"
+    SERVICE_PROPERTIES+=(-p "ReadWritePaths=\"-${WRITABLE_PATH//\"/\\\"}\"")
+  done
   # the service starts with a clean environment, so the settings read from it (set by the caller or
   # defaulted by .config_video) are passed on; without them they would silently fall back to defaults
   local SERVICE_ENVIRONMENT=(

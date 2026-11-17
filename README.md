@@ -153,7 +153,7 @@ bash tests/run_tests.sh    # behavior tests; no extra test framework needed
 
 ## Requirements and configuration
 
-These are Linux-oriented Bash scripts and rely on external command-line tools. The movie script checks for `curl`, `mkvmerge`, `ffprobe`, `jq`, ImageMagick's `convert`, and `wget`. The workflows also use tools including `ffmpeg`, `mediainfo`, `HandBrakeCLI`, `mkvpropedit`, `bc`, `tput`, and `sudo`; the interpolation workflow additionally needs the matching `*-ncnn-vulkan` executable and Vulkan-capable hardware/drivers. `interpolation_nncn` no longer runs `amdmemtweak` (changing the memory refresh made no measurable difference). Install the tools needed for the workflow and selected interpolation method; this repository does not install dependencies. The one exception is the Excel run report of `interpolation_nncn`: on first use it creates a Python virtual environment `.venv` in the scripts' directory (gitignored) and installs `xlsxwriter` into it, which needs `python3` with the `venv` module and network access once.
+These are Linux-oriented Bash scripts and rely on external command-line tools. The movie script checks for `curl`, `mkvmerge`, `ffprobe`, `jq`, ImageMagick's `convert`, and `wget`. The workflows also use tools including `ffmpeg`, `mediainfo`, `HandBrakeCLI`, `mkvpropedit`, `bc`, `tput`, and `sudo`; the interpolation workflow additionally needs the matching `*-ncnn-vulkan` executable and Vulkan-capable hardware/drivers. `interpolation_nncn` no longer runs `amdmemtweak` (changing the memory refresh made no measurable difference). Install the tools needed for the workflow and selected interpolation method; this repository does not install dependencies. The one exception is the Excel run report of `interpolation_nncn`: on first use it creates a Python virtual environment `.venv` in the scripts' directory (gitignored) and installs `xlsxwriter` into it, which needs `python3` with the `venv` module and network access once (with `-S` the launcher does this before it starts the service, which has no network).
 
 GNU tools are the baseline (`sed -i`, `date -d`, `readlink -f`, `stat -c`, `grep -P`). `.config` checks these five tools first, before it uses any of them: when one of them is not GNU (BSD tools first in PATH, as under cron, systemd or on a fresh Mac), a script stops with exit code 1 and names the tool and its path; an interactive shell sourcing `.config` only gets the warning. uutils (the Rust coreutils, Ubuntu's default since 25.10) is accepted. On macOS install them with `brew install coreutils gnu-sed grep` and put their `gnubin` directories first in PATH. The check takes about 5 ms.
 
@@ -275,7 +275,7 @@ Each step of each chunk also gets a row in `TMP/timeline.csv` (`~`-separated), s
 ./interpolation_nncn -i "Movie.mkv" -E -g -S -M 24G
 ```
 
-The launcher checks the options, the input and the tools as an interactive run does, so such errors show at once. Then it starts the same command with `sudo systemd-run` and prints the lines below. The service starts with a clean environment, so the launcher passes on the settings read from it: `INTERMEDIATE_CODEC`, `PNG_COMPRESSION_LEVEL`, `NCNN_EXTRACTION_MARGIN`, `NCNN_GPUS`, `NCNN_THREADS`, `NCNN_FREE_CORES`, `GPU_PROBE_TIMEOUT_SEC`, `GPU_RETRY_AFTER_CHUNKS`, `GPU_RETRY_MAX_CHUNKS`, `GPU_MAX_LOSSES`, `RUN_MEMORY_PEAK_DEFAULT_GB`, `METRICS_INTERVAL_SEC` and, when set, `DESTINATION_DIR` (`CHUNK_SUMMARY_PAUSE_SEC` does not apply to a service). The launcher prints:
+The launcher checks the options, the input and the tools as an interactive run does, so such errors show at once. Then it starts the same command with `sudo systemd-run` and prints the lines below. The service starts with a clean environment, so the launcher passes on the settings read from it: `INTERMEDIATE_CODEC`, `PNG_COMPRESSION_LEVEL`, `NCNN_EXTRACTION_MARGIN`, `NCNN_GPUS`, `NCNN_THREADS`, `NCNN_FREE_CORES`, `GPU_PROBE_TIMEOUT_SEC`, `GPU_RETRY_AFTER_CHUNKS`, `GPU_RETRY_MAX_CHUNKS`, `GPU_MAX_LOSSES`, `RUN_MEMORY_PEAK_DEFAULT_GB`, `METRICS_INTERVAL_SEC` and, when set, `DESTINATION_DIR` (`CHUNK_SUMMARY_PAUSE_SEC` does not apply to a service). `SERVICE_MEMORY_MAX` (default `75%` of RAM) is the service's `MemoryMax`. The launcher prints:
 
 - the unit name, e.g. `interpolation-Smokin_Aces_2006_-2026.11.02-16.50.33` (the movie name with characters systemd does not allow replaced by `_`, and the run's timestamp, the same as in its log directory);
 - the log, and how to follow it: `tail -f '<log>'`;
@@ -286,6 +286,16 @@ Why a system service:
 - It survives closing the terminal, an SSH disconnect or a logout.
 - It runs in the system slice, not in the user slice that `systemd-oomd` watches under memory pressure.
 - It does **not** protect against the kernel's OOM killer, which chooses by memory use, whatever the slice (as with Smokin' Aces, Done item 16). `OOMScoreAdjust` was left out on purpose: protecting the run means the kernel kills something else (e.g. a VM). `-M` (`MemoryHigh`) slows the run down before memory runs out instead.
+- `MemoryMax` is always set (`SERVICE_MEMORY_MAX`, default `75%` of RAM, a size such as `40G` works too; another format: exit 2). It is generous on purpose: the tools' peak is ~19 GB in 4K, and the rest of the service's memory is page cache, which the kernel reclaims at the limit. Above it the kernel kills inside the run, not e.g. a VM; systemd then stops the service, so the Ctrl+C cleanup runs.
+
+Hardening (`systemd-analyze security <unit>`: 9.2 UNSAFE without it, 0.6 SAFE with it; a real `-S -Q -E` run worked with every option):
+
+- No network (`PrivateNetwork`, `IPAddressDeny=any`, only `AF_UNIX` sockets, which user lookups through SSSD need). The launcher therefore prepares the report's Python environment first, while it still has the network.
+- No privileges: `NoNewPrivileges` (no `sudo` inside the run; it needs none), no capabilities, its own user namespace (`PrivateUsers`), no SUID files, no realtime, no namespaces, `@system-service` system calls without `@privileged`, `MemoryDenyWriteExecute`.
+- A read-only system (`ProtectSystem=strict`, `ProtectHome=read-only`, a private `/tmp`). Writable only: the working directory (chunks, parts), `-o`, `-O`, the destination of `-E` (`DESTINATION_DIR`) and `~/.cache` (Mesa's shader cache). They are passed resolved: systemd cannot make a symlinked path writable (the default `~/var` is a symlink on rig2; the unit failed with exit 226, `Failed to set up mount namespacing: Permission denied`).
+- Only the GPUs as devices (`DevicePolicy=closed`, `DeviceAllow=char-drm rw`); the kernel, its logs, modules, tunables, clock, hostname and cgroups are protected; other users' processes are hidden.
+- Left open on purpose: `@resources` (`taskset`, `nice`), the GPU devices, `/proc/stat` and `/proc/meminfo` (metrics), `AF_UNIX`, and umask 022, as in a terminal (the movies are shared).
+- Run as root, the service keeps root's capabilities and user (no `CapabilityBoundingSet=`, no `PrivateUsers`), so it can still write into the users' directories.
 
 Details:
 
@@ -736,6 +746,12 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - Cause: systemd starts a service with SIGPIPE ignored (`IgnoreSIGPIPE=yes` is the default), and bash cannot undo it for its children. `ffprobe -show_entries frame=… | head -n1`, which reads the first frame's time, normally dies of SIGPIPE when `head` ends; in the service it only got write errors and decoded the whole chunk, single-threaded. Measured on a 60 s 4K chunk: 0.26 s with SIGPIPE, 55.6 s without (idle machine; ~85 s next to the encode).
     - Fix: the service is started with `-p IgnoreSIGPIPE=no`, so every `tool | head` pipeline behaves as in a terminal. Checked with a real `sudo systemd-run`: `SigIgn` of the service's bash no longer has SIGPIPE.
     - Not the cause, but seen in the same run: from chunk 090 the content is heavier (frames 45–49 GB instead of ~33 GB, extraction ~41 s instead of ~33 s, NCNN 410–490 s, encode 300–360 s), and merging streams took 35–47 s instead of ~4 s, with the larger intermediate file.
+40. **The `-S` service is hardened and its memory capped** (17 Nov).
+    - `systemd-analyze security`: 9.2 (UNSAFE) before, 0.6 (SAFE) after. The options were chosen from what the run needs: no network, no `sudo` (the NCNN build, which needs both, runs in the launcher, before the service), and writes only to its own directories. See [Silent run as a service](#silent-run-as-a-service--s).
+    - Tested on a real run (a 75 s 1080p clip, `-S -Q -E -F`, the frames on NVMe): preparation, NCNN on both RX 580s (100 % busy), the pinned HandBrake encode, VMAF, the join, the report: no errors. The Vulkan device list inside the service is the same as in a terminal (both cards twice, through two Radeon drivers, and llvmpipe), so `NCNN_GPUS=1,2` still picks the two cards.
+    - `MemoryMax` is always set: `SERVICE_MEMORY_MAX`, default 75 % of RAM (47 GiB on rig2; tools' peak ~19 GB, the service's memory with page cache ~26 GB in the A/B runs of 16–17 Nov).
+    - Found while testing: systemd cannot make a symlinked path writable, and the default `~/var` is a symlink on rig2 (the unit did not start, exit 226). The paths are now passed resolved (`readlink -f`); a second real run with the default `-o` worked.
+    - Run as root, the service keeps root's capabilities and user, so it can still write into users' directories.
 
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
@@ -771,7 +787,7 @@ Decision: lossless x264 `ultrafast` is the default because it is the fastest and
 
 ### Planned (in agreed order)
 
-Order agreed on 10 Nov: performance first (the fixed sleeps and PNG compression of item 4, then items 2 and 3), then `-N none` as the first step of combining `interpolation_nncn` with `movies_encoding`, then hardening the `-S` service. Dropped: see Done item 29, and (12 Nov) event-based waits for the remaining 1–3 s polling sleeps: they are in background monitors, except the 1 s NCNN throttle loop (~0.5 s per chunk on average), so inotify-style waits would add a dependency for under a second per chunk; the main-path waits are done (Done item 31).
+Order agreed on 10 Nov: performance first (the fixed sleeps and PNG compression of item 4, then items 2 and 3), then `-N none` as the first step of combining `interpolation_nncn` with `movies_encoding`, then hardening the `-S` service (done 17 Nov, Done item 40). Dropped: see Done item 29, and (12 Nov) event-based waits for the remaining 1–3 s polling sleeps: they are in background monitors, except the 1 s NCNN throttle loop (~0.5 s per chunk on average), so inotify-style waits would add a dependency for under a second per chunk; the main-path waits are done (Done item 31).
 
 State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average per chunk without chunk 001:
 

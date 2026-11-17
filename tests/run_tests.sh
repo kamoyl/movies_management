@@ -498,14 +498,19 @@ printf '%s\n' "$@" >> service_args.txt
 EOF
 cat > "${WORK_DIR}/servicebin/id" <<'EOF'
 #!/usr/bin/env bash
-echo 1000
+echo "${FAKE_UID:-1000}"
 EOF
 chmod +x "${WORK_DIR}/servicebin/"*
-SERVICE_SETUP='eval "$(sed -n "/^starting_as_service()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; rm -rf svc; mkdir svc; cd svc || exit 99; FILE_NAME="Smokin'"'"' Aces (2006).mkv"; CURRENT_TIMESTAMP=2026.11.02-16.50.33; LOG=/var/log-x; SCRIPT=/repo/interpolation_nncn; ORIGINAL_ARGUMENTS=(-i "${FILE_NAME}" -E -g -S); MEMORY_HIGH=""'
-OUTPUT="$(PATH="${WORK_DIR}/servicebin:${PATH}" run_with_helpers "${SERVICE_SETUP}"'; MEMORY_HIGH=20G; INTERMEDIATE_CODEC=x264_crf10; DESTINATION_DIR="/media/my ready"; trap '"'"'echo "STATUS=$?"; echo "ARGS: $(tr "\n" "|" < service_args.txt)"'"'"' EXIT; starting_as_service' 2>&1)"
+SERVICE_SETUP='eval "$(sed -n "/^starting_as_service()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; rm -rf svc; mkdir svc; cd svc || exit 99; FILE_NAME="Smokin'"'"' Aces (2006).mkv"; CURRENT_TIMESTAMP=2026.11.02-16.50.33; LOG=/var/log-x; SCRIPT=/repo/interpolation_nncn; ORIGINAL_ARGUMENTS=(-i "${FILE_NAME}" -E -g -S); MEMORY_HIGH=""; SCRIPTS_HOME=/repo; mkdir "a\"b"; ln -s "a\"b" varlink; VAR="${PWD}/varlink"; VAR_OUT=/vo; python_venv_preparing() { echo "VENV: $*"; }'
+OUTPUT="$(PATH="${WORK_DIR}/servicebin:${PATH}" run_with_helpers "${SERVICE_SETUP}"'; MEMORY_HIGH=20G; FINAL_ENCODING=yes; INTERMEDIATE_CODEC=x264_crf10; DESTINATION_DIR="/media/my ready"; trap '"'"'echo "STATUS=$?"; echo "ARGS: $(tr "\n" "|" < service_args.txt)"'"'"' EXIT; starting_as_service' 2>&1)"
 assert_contains "-S exits 0 once the service is started" "${OUTPUT}" "STATUS=0"
 assert_contains "-S starts it through sudo, as the calling user, in the current directory" "${OUTPUT}" "ARGS: sudo|--quiet|--collect|--unit=interpolation-Smokin_Aces_2006_-2026.11.02-16.50.33|--description=interpolation_nncn: Smokin' Aces (2006).mkv|--uid=1000|--gid=1000|--working-directory=${WORK_DIR}/svc|"
-assert_contains "-S: systemctl stop sends SIGINT, as Ctrl+C (the cleanup runs)" "${OUTPUT}" "|-p|KillSignal=SIGINT|-p|TimeoutStopSec=120|-p|IgnoreSIGPIPE=no|-p|MemoryHigh=20G|"
+assert_contains "-S: systemctl stop sends SIGINT, as Ctrl+C (the cleanup runs)" "${OUTPUT}" "|-p|KillSignal=SIGINT|-p|TimeoutStopSec=120|-p|IgnoreSIGPIPE=no|-p|MemoryMax=75%|-p|MemoryHigh=20G|"
+assert_contains "-S hardens the service (no privileges, no network)" "${OUTPUT}" "|-p|NoNewPrivileges=yes|"
+assert_contains "-S drops all capabilities and maps only the user" "${OUTPUT}" "|-p|CapabilityBoundingSet=|-p|PrivateUsers=yes|"
+assert_contains "-S: the service has no network" "${OUTPUT}" "|-p|PrivateNetwork=yes|"
+assert_contains "-S: the working directory, -o (symlink resolved), -O and the destination of -E are writable, quoted" "${OUTPUT}" "|-p|ReadWritePaths=\"-${WORK_DIR}/svc\"|-p|ReadWritePaths=\"-${WORK_DIR}/svc/a\\\"b\"|-p|ReadWritePaths=\"-/vo\"|-p|ReadWritePaths=\"-${HOME}/.cache\"|-p|ReadWritePaths=\"-/media/my ready\"|"
+assert_contains "-S prepares the report's Python environment before (the service has no network)" "${OUTPUT}" "VENV: /repo/.venv xlsxwriter"
 assert_contains "-S: the service gets the launcher's timestamp and the same arguments" "${OUTPUT}" "|--setenv=INTERPOLATION_NNCN_SERVICE=yes|--setenv=SERVICE_RUN_TIMESTAMP=2026.11.02-16.50.33|/usr/bin/env|bash|/repo/interpolation_nncn|-i|Smokin' Aces (2006).mkv|-E|-g|-S|"
 assert_contains "-S passes the settings read from the environment to the service" "${OUTPUT}" "|--setenv=INTERMEDIATE_CODEC=x264_crf10|"
 assert_contains "-S passes DESTINATION_DIR when it is set (spaces kept)" "${OUTPUT}" "|--setenv=DESTINATION_DIR=/media/my ready|"
@@ -513,11 +518,18 @@ assert_contains "-S prints the log of the service" "${OUTPUT}" "/var/log-x/inter
 assert_contains "-S prints how to stop it" "${OUTPUT}" "sudo systemctl stop 'interpolation-Smokin_Aces_2006_-2026.11.02-16.50.33'"
 OUTPUT="$(PATH="${WORK_DIR}/servicebin:${PATH}" run_with_helpers "${SERVICE_SETUP}"'; trap '"'"'echo "ARGS: $(tr "\n" "|" < service_args.txt)"'"'"' EXIT; starting_as_service' 2>&1)"
 if [[ ${OUTPUT} == *MemoryHigh* ]]; then fail "-S without -M sets no MemoryHigh"; else pass "-S without -M sets no MemoryHigh"; fi
+if [[ ${OUTPUT} == *media/ready* ]]; then fail "-S without -E makes no destination writable"; else pass "-S without -E makes no destination writable"; fi
 if [[ ${OUTPUT} == *DESTINATION_DIR* ]]; then fail "-S without DESTINATION_DIR passes none (the service keeps its default)"; else pass "-S without DESTINATION_DIR passes none (the service keeps its default)"; fi
 OUTPUT="$(PATH="${WORK_DIR}/servicebin:${PATH}" run_with_helpers "${SERVICE_SETUP}"'; touch sudo_denied; trap '"'"'echo "STATUS=$?"; if [ -e service_args.txt ]; then echo STARTED; fi'"'"' EXIT; starting_as_service' 2>&1)"
 assert_contains "-S without sudo stops with 1" "${OUTPUT}" "STATUS=1"
 assert_contains "-S without sudo suggests an interactive run" "${OUTPUT}" "run it interactively (without -S)"
 if [[ ${OUTPUT} == *STARTED* ]]; then fail "-S without sudo starts nothing"; else pass "-S without sudo starts nothing"; fi
+OUTPUT="$(PATH="${WORK_DIR}/servicebin:${PATH}" FAKE_UID=0 run_with_helpers "${SERVICE_SETUP}"'; trap '"'"'echo "ARGS: $(tr "\n" "|" < service_args.txt)"'"'"' EXIT; starting_as_service' 2>&1)"
+assert_contains "-S as root starts the service without sudo" "${OUTPUT}" "ARGS: --quiet|"
+if [[ ${OUTPUT} == *PrivateUsers* ]] || [[ ${OUTPUT} == *CapabilityBoundingSet* ]]; then fail "-S as root keeps root's access to the users' directories"; else pass "-S as root keeps root's access to the users' directories"; fi
+OUTPUT="$(PATH="${WORK_DIR}/servicebin:${PATH}" run_with_helpers "${SERVICE_SETUP}"'; SERVICE_MEMORY_MAX=lots; trap '"'"'echo "STATUS=$?"; if [ -e service_args.txt ]; then echo STARTED; fi'"'"' EXIT; starting_as_service' 2>&1)"
+assert_contains "-S with a wrong SERVICE_MEMORY_MAX stops with 2" "${OUTPUT}" "STATUS=2"
+if [[ ${OUTPUT} == *STARTED* ]]; then fail "-S with a wrong SERVICE_MEMORY_MAX starts nothing"; else pass "-S with a wrong SERVICE_MEMORY_MAX starts nothing"; fi
 
 echo "sampling_frames (real ffmpeg on a generated video)"
 OUTPUT="$(run_with_helpers 'rm -rf smp; mkdir smp; cd smp || exit 99; ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x240:rate=24 -t 6 -c:v libx264 -g 48 v.mkv; sampling_frames v.mkv 6.000 fa; echo "STATUS=$?"; echo "FILES: $(ls fa | tr "\n" " ")"; sampling_frames v.mkv N/A fb; echo "BAD=$?"' 2>&1)"
