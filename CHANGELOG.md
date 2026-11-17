@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- interpolation_nncn: report of all runs of a video (-R), combined automatically ([debc9fd](https://github.com/kamoyl/movies_management/commit/debc9fd1c8f94c331bd9280f5b05d4fa8bd7608c) by Kamoyl).
 - README: RIFE -j re-measured, the default 6:2,2:8 stays ([dcb1c32](https://github.com/kamoyl/movies_management/commit/dcb1c32ca264ae1af5cafc45f9fab936bf70997d) by Kamoyl).
 - README: overlapping whole chunks measured, below the 10 % threshold ([584c3f5](https://github.com/kamoyl/movies_management/commit/584c3f51ea6478f41b438194e9de967f3cee0963) by Kamoyl).
 - -S: harden the service (systemd-analyze security 9.2 -> 0.6) and cap its memory ([c4dec7f](https://github.com/kamoyl/movies_management/commit/c4dec7f21f5a3fb599d8c3b7814f723ac09dbe89) by Kamoyl).
