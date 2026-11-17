@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- README: A/B test of the NCNN pinning and the CCD (chiplet) benchmark ([09abafd](https://github.com/kamoyl/movies_management/commit/09abafdbffac758da4d95bb2992d3b58d2a24e3b) by Kamoyl).
 - -S: start the service with IgnoreSIGPIPE=no; README: real result of the pinning ([3af324c](https://github.com/kamoyl/movies_management/commit/3af324cf290a48f250c7838d247f8e92ef2f4365) by Kamoyl).
 - Keep the part encode and VMAF off NCNN's cores ([afd02bb](https://github.com/kamoyl/movies_management/commit/afd02bb12b1034ffe26264d388680a4996d193ac) by Kamoyl).
 - Explain the slower NCNN: the encode shares cores, not CPU time ([0b1854f](https://github.com/kamoyl/movies_management/commit/0b1854fefa754e222e63ef000caa95306fd59d4c) by Kamoyl).
