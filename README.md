@@ -411,6 +411,20 @@ NCNN thread settings (`-j load:process:save`) measured on the same chunk:
 | `6:2,2:8` (memory REF 5 & 30) | 2:01 |
 | `8:2,2:10` | 1:48 |
 
+Re-measured on 17 Nov with the current command (`-g 1,2 -u -m rife-v4.6`, 300 → 600 4K frames of Good Omens S3E1, nothing else running, two rounds each; agreed threshold: at least 5 % faster):
+
+| `-j` value | Time [s] |
+| --- | --- |
+| `4:2,2:6` | 74.2, 78.0 |
+| `6:1,1:8` | 70.2, 70.3 |
+| `6:2,2:8` (default) | 68.4, 68.8 |
+| `6:3,3:8` | 68.8, 69.5 |
+| `8:2,2:10` | 69.3, 68.4 |
+| `8:3,3:10` | 68.3, 68.3 |
+| `10:2,2:12` | 68.4, 68.4 |
+
+From `6:2,2:8` upwards the times stay within 1 %, so the GPUs, not the threads, now set the pace; the default stays. With the encode running beside NCNN, more threads would only move CPU time from the encode to NCNN, as the pinning A/B test showed (Done item 38).
+
 The GPUs and threads depend on the machine, not on a choice per run, so the script picks them by OS: on Linux `-g 1,2 -j 6:2,2:8` (the two AMD GPUs, tuned above), on macOS `-g 0 -j 1:2:2` (one GPU). A machine with another GPU set can override both with the environment variables `NCNN_GPUS` and `NCNN_THREADS`; `-j` needs one process value per GPU, for example:
 
 ```bash
