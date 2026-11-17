@@ -111,7 +111,7 @@ do
   assert_status   "${SCRIPT_NAME} rejects -i without a value with 2" 2 $?
 done
 # edit-safe: a syntax error just before the final exit must stop even -h, so bash read the whole file first
-sed 's/^exit$/fi fi\nexit/' "${REPO_ROOT}/interpolation_nncn" > "${WORK_DIR}/edit_safe_nncn"
+sed 's/^exit 0$/fi fi\nexit 0/' "${REPO_ROOT}/interpolation_nncn" > "${WORK_DIR}/edit_safe_nncn"
 OUTPUT="$(TERM=dumb bash "${WORK_DIR}/edit_safe_nncn" -h 2>&1)"
 assert_contains "interpolation_nncn is read whole before it runs (safe to edit during a run)" "${OUTPUT}" "syntax error near unexpected token"
 OUTPUT="$(TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -h 2>&1)"
@@ -129,6 +129,10 @@ assert_contains "interpolation_nncn -M without -S says why" "${OUTPUT}" "so it n
 OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -S -M 20GB 2>&1)"; STATUS=$?
 assert_status   "interpolation_nncn -M with a wrong size stops with 2" 2 "${STATUS}"
 assert_contains "interpolation_nncn -M with a wrong size says why" "${OUTPUT}" "-M expects a size like 20G"
+OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -R -E -i x.mkv -o "${WORK_DIR}/cli/r" 2>&1)"; STATUS=$?
+assert_status   "interpolation_nncn -R with an option of a run stops with 2" 2 "${STATUS}"
+assert_contains "interpolation_nncn -R with an option of a run says why" "${OUTPUT}" "-R (report only) takes only -i, -o and -v"
+if [ -z "$(ls -A "${WORK_DIR}/cli/r")" ]; then pass "interpolation_nncn -R leaves no empty work directories"; else fail "interpolation_nncn -R leaves no empty work directories"; fi
 
 echo "failed: never exits 0"
 run_with_helpers 'ERROR_CODE=2; failed' > /dev/null
@@ -531,6 +535,15 @@ OUTPUT="$(PATH="${WORK_DIR}/servicebin:${PATH}" run_with_helpers "${SERVICE_SETU
 assert_contains "-S with a wrong SERVICE_MEMORY_MAX stops with 2" "${OUTPUT}" "STATUS=2"
 if [[ ${OUTPUT} == *STARTED* ]]; then fail "-S with a wrong SERVICE_MEMORY_MAX starts nothing"; else pass "-S with a wrong SERVICE_MEMORY_MAX starts nothing"; fi
 
+echo "report of all runs of a video (exporting_video_report; python3 replaced by a fake)"
+VIDEO_REPORT_SETUP='eval "$(sed -n "/^exporting_video_report()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; rm -rf vrep; mkdir -p vrep/home/.venv/bin vrep/var vrep/log; cd vrep || exit 99; printf "#!/usr/bin/env bash\nprintf \"%%s|\" \"\$@\" > args.txt\n" > home/.venv/bin/python3; chmod +x home/.venv/bin/python3; SCRIPTS_HOME=$PWD/home; VAR=$PWD/var; LOG=$PWD/log; SCRIPT_NAME=interpolation_nncn; R=var/tmp-interpolation_nncn_2026.11.16; mkdir $R-08.00.00 $R-09.00.00 $R-10.00.00 $R-11.00.00; touch "$R-08.00.00/My Movie_report.xlsx"; echo "My Movie" > $R-09.00.00/movie_name; echo "Other" > $R-10.00.00/movie_name; touch "$R-10.00.00/My Movie_report.xlsx" "$R-11.00.00/Other_video_packets.csv"'
+OUTPUT="$(run_with_helpers "${VIDEO_REPORT_SETUP}"'; exporting_video_report "My Movie" 2; echo "STATUS=$?"; echo "ARGS: $(cat args.txt)"' 2>&1)"
+assert_contains "the report of all runs takes the movie's runs (movie_name, older ones by file names) in order" "${OUTPUT}" "ARGS: ${WORK_DIR}/vrep/home/metrics_to_excel.py|${WORK_DIR}/vrep/var/tmp-interpolation_nncn_2026.11.16-08.00.00|${WORK_DIR}/vrep/var/tmp-interpolation_nncn_2026.11.16-09.00.00|${WORK_DIR}/vrep/var/My Movie_report.xlsx|"
+assert_contains "the report of all runs is announced" "${OUTPUT}" "report of all 2 runs of the video"
+OUTPUT="$(run_with_helpers "${VIDEO_REPORT_SETUP}"'; rm "$R-08.00.00/My Movie_report.xlsx"; exporting_video_report "My Movie" 2; echo "STATUS=$?"; if [ -e args.txt ]; then echo CALLED; fi' 2>&1)"
+assert_contains "after a run, the report of all runs needs an earlier run" "${OUTPUT}" "STATUS=1"
+if [[ ${OUTPUT} == *CALLED* ]]; then fail "a single run gets no report of all runs after it"; else pass "a single run gets no report of all runs after it"; fi
+
 echo "sampling_frames (real ffmpeg on a generated video)"
 OUTPUT="$(run_with_helpers 'rm -rf smp; mkdir smp; cd smp || exit 99; ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x240:rate=24 -t 6 -c:v libx264 -g 48 v.mkv; sampling_frames v.mkv 6.000 fa; echo "STATUS=$?"; echo "FILES: $(ls fa | tr "\n" " ")"; sampling_frames v.mkv N/A fb; echo "BAD=$?"' 2>&1)"
 assert_contains "sampling_frames writes 7 evenly spread frames" "${OUTPUT}" "STATUS=0"
@@ -574,6 +587,35 @@ then
   assert_contains "metrics_to_excel.py writes the workbook" "${OUTPUT}" "STATUS=0"
   assert_contains "metrics_to_excel.py: charts, metrics, timeline, steps per chunk, memory, statistics; 8 charts (with GPU power)" "${OUTPUT}" "SHEETS=6 CHARTS=8"
   assert_contains "metrics_to_excel.py keeps chunk numbers as text" "${OUTPUT}" "CHUNK=True"
+  # runs a, b, c of one video: 021 complete in a, only started in c; 022 complete in a and b;
+  # 023 only started in b; the 10:00:05 sample is in a and b; b repeats its statistics header
+  for RUN in a b c
+  do
+    mkdir -p "${WORK_DIR}/runs/${RUN}"
+    printf 'video_id~step~duration [s]\n' > "${WORK_DIR}/runs/${RUN}/timeline.csv"
+  done
+  printf 'video_id~runtime\n021~500.1[s]\n022~400.0[s]\n' > "${WORK_DIR}/runs/a/statistics.txt"
+  printf '021~interpolating~300.0\n022~interpolating~200.0\n' >> "${WORK_DIR}/runs/a/timeline.csv"
+  printf 'time~cpu_busy [%%]\n2026-11-05 10:00:00~50.0\n2026-11-05 10:00:05~60.0\n' > "${WORK_DIR}/runs/a/metrics.csv"
+  printf 'video_id~runtime\nvideo_id~runtime\n022~410.0[s]\n' > "${WORK_DIR}/runs/b/statistics.txt"
+  printf '022~interpolating~210.0\n023~interpolating~220.0\n' >> "${WORK_DIR}/runs/b/timeline.csv"
+  printf 'time~cpu_busy [%%]~card0_busy [%%]\n2026-11-05 10:00:05~60.0~90\n2026-11-05 11:00:00~70.0~95\n' > "${WORK_DIR}/runs/b/metrics.csv"
+  printf '021~interpolating~5.0\n' >> "${WORK_DIR}/runs/c/timeline.csv"
+  printf 'time~cpu_busy [%%]\n2026-11-05 12:00:00~10.0\n' > "${WORK_DIR}/runs/c/metrics.csv"
+  OUTPUT="$(cd "${REPO_ROOT}" && "${REPO_ROOT}/.venv/bin/python3" -c "
+import sys, metrics_to_excel as m
+c = m.combining(sys.argv[1:])
+print('STATISTICS=' + ' '.join('%s:%s:%s' % (r[0], r[1], r[-1]) for r in c['statistics'][1]))
+print('TIMELINE=' + ' '.join('%s:%s:%s' % (r[0], r[2], r[-1]) for r in c['timeline'][1]))
+print('METRICS=%s %s' % (c['metrics'][0], len(c['metrics'][1])))
+print('USED=' + ' '.join('%s:%s:%s' % (r[0], r[1], r[6]) for r in c['runs'][1]))
+" "${WORK_DIR}/runs/c" "${WORK_DIR}/runs/a" "${WORK_DIR}/runs/b" 2>&1
+  "${REPO_ROOT}/.venv/bin/python3" "${REPO_ROOT}/metrics_to_excel.py" "${WORK_DIR}/runs/a" "${WORK_DIR}/runs/b" "${WORK_DIR}/runs/all.xlsx" 2>&1; echo "STATUS=$?")"
+  assert_contains "several runs: a chunk comes from the latest run where it is complete" "${OUTPUT}" "STATISTICS=021:500.1:a 022:410.0:b"
+  assert_contains "several runs: a chunk complete nowhere comes from the latest run which has it" "${OUTPUT}" "TIMELINE=021:300.0:a 022:210.0:b 023:220.0:b"
+  assert_contains "several runs: metrics of the used runs, all columns, a sample of the same time once" "${OUTPUT}" "METRICS=['time', 'cpu_busy [%]', 'card0_busy [%]', 'run'] 3"
+  assert_contains "several runs: the runs sheet lists the runs in order of their names, used or not" "${OUTPUT}" "USED=a:yes:021 b:yes:022 023 c:no:"
+  assert_contains "metrics_to_excel.py writes the report of several runs" "${OUTPUT}" "STATUS=0"
 else
   echo "  skipped: metrics_to_excel.py (no .venv with xlsxwriter; a run prepares it)"
 fi

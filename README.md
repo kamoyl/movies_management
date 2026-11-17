@@ -221,6 +221,7 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 
 ```bash
 ./interpolation_nncn -i "Video.mkv" [options]
+./interpolation_nncn -R -i "Video.mkv" [ -o DIR ]   # report of all runs only
 ```
 
 | Option | Argument | Description |
@@ -241,6 +242,7 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 | `-H` | — | With `-E`: high-motion profile (as `movies_encoding -H`). Without `-E`: exit 2. |
 | `-S` | — | Silent, as a background service: the same command is started again as a transient systemd service `interpolation-<movie>-<timestamp>` in the system slice, run as your user in the current directory, and the launcher exits 0. All output goes to `LOG/interpolation_nncn_silent_<timestamp>.log`. Needs root or `sudo` (it may ask for your password); otherwise it exits (1, or 127 without `sudo`/`systemd-run`) and suggests running interactively. See [Silent run as a service](#silent-run-as-a-service--s). |
 | `-M` | `SIZE` | With `-S`: `MemoryHigh` of the service, e.g. `20G`, `512M` or `50%`. Above it the kernel reclaims memory from the service's processes and slows them down, instead of letting memory run out. No limit by default. Without `-S` or with another format: exit 2. |
+| `-R` | — | Report only: writes `VAR/<input name>_report.xlsx` from all runs of the video in the workspace (`-o`) and does nothing else; the video itself is not needed anymore. Takes only `-i`, `-o` and `-v` (otherwise exit 2); exit 1 when no run of the video is found. See [Report of all runs of a video](#report-of-all-runs-of-a-video--r). |
 | `-v` | — | Enable verbose diagnostics. |
 | `-h` | — | Print usage information. |
 
@@ -268,6 +270,20 @@ Each step of each chunk also gets a row in `TMP/timeline.csv` (`~`-separated), s
 | `chunk [%]` | the duration as a percent of the chunk's `chunk` row, filled in at the end of the run (empty for an interrupted run) |
 
 `encoding` and `quality_check` run in the background alongside the next chunk, so they can end after their chunk and exceed 100 %. Rows are in the order the steps ended. The sum of the step durations (without the `chunk` and `whole_run` rows) divided by `whole_run` is the average number of steps running at the same time.
+
+### Report of all runs of a video (`-R`)
+
+Each run writes its own `TMP/<movie>_report.xlsx`. A video is often processed in several runs (stopped with Ctrl+C and continued, restarted with `-s`, run again for a test), so the report of all of them is written too: `VAR/<movie>_report.xlsx`, next to the run directories. It is rebuilt at the end of every run of the video (also after Ctrl+C or an error exit) when there is an earlier run in the same workspace, and on demand with `-R`:
+
+```bash
+cd "/media/download/Good Omens" && interpolation_nncn -R -i "S3E1 - The Finale.mkv" -o var
+```
+
+- The runs are the `tmp-interpolation_nncn_*` directories in `VAR` whose `movie_name` file names the movie; directories from before it (17 Nov) are recognised by the movie's `_report.xlsx` or `_video_packets.csv` in them.
+- A chunk processed in several runs comes from the latest run in which it is complete (it has a `statistics.txt` row); a chunk complete in no run comes from the latest run which has it, for example the last chunk of a stopped run.
+- Only the runs which supply a chunk are used. Their `metrics.csv` samples are combined (a sample of the same time once, e.g. from files appended by hand), with the columns of all runs; rows repeating the header are skipped.
+- Every sheet has a `run` column with the row's run, and the `runs` sheet lists all runs found: used or not, first and last sample, the chunks in the run and those taken from it.
+- `metrics_to_excel.py` does the combining: `metrics_to_excel.py RUN_DIR [RUN_DIR ...] OUTPUT.xlsx`; with one directory the report is the same as before.
 
 ### Silent run as a service (`-S`)
 
@@ -766,6 +782,10 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - `MemoryMax` is always set: `SERVICE_MEMORY_MAX`, default 75 % of RAM (47 GiB on rig2; tools' peak ~19 GB, the service's memory with page cache ~26 GB in the A/B runs of 16–17 Nov).
     - Found while testing: systemd cannot make a symlinked path writable, and the default `~/var` is a symlink on rig2 (the unit did not start, exit 226). The paths are now passed resolved (`readlink -f`); a second real run with the default `-o` worked.
     - Run as root, the service keeps root's capabilities and user, so it can still write into users' directories.
+41. **Report of all runs of a video, `-R`** (17 Nov; the user's idea of 10 Nov, replacing `manual_stats_concat`).
+    - At the end of each run, `VAR/<movie>_report.xlsx` combines all runs of the movie in the workspace; `-R` writes it on demand, without the video. See [Report of all runs of a video](#report-of-all-runs-of-a-video--r).
+    - A repeated chunk comes from the latest run in which it is complete, so the A/B test (chunks 079–086 run twice) and a stopped run's unfinished last chunk do not hide finished ones. On Good Omens S3E1 (6 runs, two of them combined by hand before): chunks 079–085 from the last A/B run, 086–092 from the run before it, the rest from the hand-combined run; 13,175 metrics samples; ~3 s.
+    - Found while testing it: a finished run ended with a bare `exit`, so with the status of its last command, `tput cnorm`, which fails without a usable terminal (`TERM=dumb`, cron; not in the `-S` service, which gets `TERM`). The run then exited 1, and the EXIT trap took it for an error: the cleanup and the report ran a second time. It now ends with `exit 0`.
 
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
@@ -898,7 +918,7 @@ Process the same chunk before and after a change (for example `-F -s 029` on `vi
 
 Logs of `interpolation_nncn` are compressed with gzip (`name.log.gz`) when nothing writes to them anymore: a chunk's logs when the chunk is done, the rest at the end of the run or after Ctrl+C / `systemctl stop`. Read them with `zless`, `zgrep` or `zcat`. The silent log (`-S`) stays plain; after an error exit, the logs of the last chunk stay plain too (its processes may still be ending).
 
-Next to `timeline.csv`, `TMP` of `interpolation_nncn` holds `metrics.csv` (machine and tool metrics every 5 s), `memory.csv` (memory estimate and use per final encode, Done item 22) and, at the end of the run (also after Ctrl+C or an error exit), `<movie>_report.xlsx` with charts; see Done items 21 and 23.
+Next to `timeline.csv`, `TMP` of `interpolation_nncn` holds `metrics.csv` (machine and tool metrics every 5 s), `memory.csv` (memory estimate and use per final encode, Done item 22), `movie_name` (for the report of all runs) and, at the end of the run (also after Ctrl+C or an error exit), `<movie>_report.xlsx` with charts; see Done items 21 and 23. `VAR/<movie>_report.xlsx` combines all runs of a movie, see [Report of all runs of a video](#report-of-all-runs-of-a-video--r).
 
 For `interpolation_nncn`, `-O` is where the large extracted and processed frame files are stored, so a fast volume with ample free space is useful. `-o` holds the script's workspace and logs. With the default settings, both roots point to `$HOME/var`. The script reports the resolved paths and available space in verbose mode. The scripts may also create chunk and merged video files in the current working directory; the `-O` option does not relocate all video outputs. Choose both the current directory and configured roots with enough free space. The helper checks that requested roots can be created, but the scripts' use of `df --block-size G` is GNU/Linux-oriented.
 

@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Writes the files of one interpolation_nncn run into an Excel workbook with charts.
+"""Writes the files of interpolation_nncn runs into an Excel workbook with charts.
 
-usage: metrics_to_excel.py RUN_TMP_DIR OUTPUT.xlsx
+usage: metrics_to_excel.py RUN_TMP_DIR [RUN_TMP_DIR ...] OUTPUT.xlsx
 
-Reads from RUN_TMP_DIR (all "~"-separated, header first, each one optional):
+Reads from each RUN_TMP_DIR (all "~"-separated, header first, each one optional):
   metrics.csv    - samples of metrics_sampling (.config): CPU, memory, disks, GPUs, tools
   timeline.csv   - one row per step and chunk (timeline_entry in .config_video)
   statistics.txt - one row per chunk, times as "12.3[s]"
   memory.csv     - one row per final encode: memory estimate and what was used (memory_entry)
 Sheets: "charts" (line charts over time, steps per chunk), then one sheet per file.
+
+With several directories (runs of one video, e.g. after a stop and a restart) the files are
+combined into one report: the directories are ordered by name (the run's start time), and each
+chunk comes from the latest run in which it is complete (has a statistics row), otherwise from
+the latest run which has it. Only the runs which supply a chunk are used, metrics.csv samples
+of the same time are taken once, the columns of all runs are kept, a "run" column names the
+source of each row, and a "runs" sheet lists the runs.
 """
 
 import sys
@@ -56,6 +63,9 @@ def reading(path):
     rows = []
     for line in lines[1:]:
         fields = line.split("~")
+        # a header repeated inside the file (files of runs appended by hand)
+        if fields == header:
+            continue
         rows.append(fields[:1] + [number(field) for field in fields[1:]])
     return header, rows
 
@@ -161,17 +171,105 @@ def charting_memory(workbook, charts, data, position):
     return position + 19
 
 
+FILES = {"metrics": "metrics.csv", "timeline": "timeline.csv", "statistics": "statistics.txt", "memory": "memory.csv"}
+CHUNK_FILES = ["timeline", "statistics", "memory"]
+
+
+def is_chunk(value):
+    return isinstance(value, str) and value.isdigit()
+
+
+def joining(parts):
+    """[(run, (header, rows)), ...] -> one (header, rows): the columns of all, in order of first
+    appearance, and a "run" column; a column a run does not have stays empty."""
+    header = []
+    for _, (part_header, _) in parts:
+        header += [name for name in part_header if name not in header]
+    rows = []
+    for run, (part_header, part_rows) in parts:
+        for row in part_rows:
+            record = dict(zip(part_header, row))
+            rows.append([record.get(name, "") for name in header] + [run])
+    return header + ["run"], rows
+
+
+def combining(run_dirs):
+    """the files of several runs of one video as one set, see the module description."""
+    run_dirs = sorted(run_dirs, key=lambda path: os.path.basename(os.path.normpath(path)))
+    names = [os.path.basename(os.path.normpath(path)) for path in run_dirs]
+    data = [{key: reading(os.path.join(path, file)) for key, file in FILES.items()} for path in run_dirs]
+    complete = [{row[0] for row in (run["statistics"] or ([], []))[1] if is_chunk(row[0])} for run in data]
+    present = [{row[0] for key in CHUNK_FILES for row in (run[key] or ([], []))[1] if is_chunk(row[0])}
+               for run in data]
+    chosen = {}
+    for chunk in set().union(*present):
+        candidates = [index for index in range(len(data)) if chunk in complete[index]] or \
+                     [index for index in range(len(data)) if chunk in present[index]]
+        chosen[chunk] = max(candidates)
+    used = sorted(set(chosen.values()))
+    combined = {}
+    for key in CHUNK_FILES:
+        # a chunk's rows come from its chosen run, or (memory.csv is written per encode) from
+        # the latest run which has rows of that chunk in this file
+        holders = {}
+        for index, run in enumerate(data):
+            for row in (run[key] or ([], []))[1]:
+                if is_chunk(row[0]):
+                    holders.setdefault(row[0], set()).add(index)
+        source = {chunk: (chosen[chunk] if chosen[chunk] in runs else max(runs)) for chunk, runs in holders.items()}
+        parts = []
+        for index in used + [index for index in range(len(data)) if index not in used]:
+            if not data[index][key]:
+                continue
+            header, rows = data[index][key]
+            kept = [row for row in rows if (is_chunk(row[0]) and source[row[0]] == index)
+                    or (not is_chunk(row[0]) and index in used)]
+            if kept:
+                parts.append((names[index], (header, kept)))
+        if parts:
+            header, rows = joining(parts)
+            # chunks in order, rows of other kinds (the whole run, "all") after them; stable sort
+            rows.sort(key=lambda row: (0, row[0]) if is_chunk(row[0]) else (1, ""))
+            combined[key] = (header, rows)
+        else:
+            combined[key] = None
+    parts = [(names[index], data[index]["metrics"]) for index in used if data[index]["metrics"]]
+    if parts:
+        header, rows = joining(parts)
+        seen = set()
+        unique = []
+        for row in sorted(rows, key=lambda row: str(row[0])):
+            if row[0] not in seen:
+                seen.add(row[0])
+                unique.append(row)
+        combined["metrics"] = (header, unique)
+    else:
+        combined["metrics"] = None
+    runs = []
+    for index, path in enumerate(run_dirs):
+        samples = (data[index]["metrics"] or ([], []))[1]
+        own = sorted(chunk for chunk, run in chosen.items() if run == index)
+        runs.append([names[index], "yes" if index in used else "no",
+                     str(samples[0][0]) if samples else "", str(samples[-1][0]) if samples else "",
+                     f"{min(present[index])}-{max(present[index])}" if present[index] else "",
+                     len(own), " ".join(own), path])
+    combined["runs"] = (["run", "used", "first sample", "last sample", "chunks in run",
+                         "chunks used [count]", "chunks used", "directory"], runs)
+    return combined
+
+
 def main():
-    if len(sys.argv) != 3:
+    if len(sys.argv) < 3:
         print(__doc__, file=sys.stderr)
         return 2
-    run_dir, output = sys.argv[1], sys.argv[2]
-    metrics = reading(os.path.join(run_dir, "metrics.csv"))
-    timeline = reading(os.path.join(run_dir, "timeline.csv"))
-    statistics = reading(os.path.join(run_dir, "statistics.txt"))
-    memory = reading(os.path.join(run_dir, "memory.csv"))
+    run_dirs, output = sys.argv[1:-1], sys.argv[-1]
+    if len(run_dirs) == 1:
+        files = {key: reading(os.path.join(run_dirs[0], file)) for key, file in FILES.items()}
+    else:
+        files = combining(run_dirs)
+    metrics, timeline, statistics, memory = (files[key] for key in ("metrics", "timeline", "statistics", "memory"))
     if not (metrics or timeline or statistics or memory):
-        print("nothing to report in " + run_dir, file=sys.stderr)
+        print("nothing to report in " + " ".join(run_dirs), file=sys.stderr)
         return 1
     workbook = xlsxwriter.Workbook(output)
     bold = workbook.add_format({"bold": True})
@@ -188,6 +286,8 @@ def main():
         position = charting_memory(workbook, charts, memory, position)
     if statistics:
         writing_sheet(workbook, "statistics", statistics, bold)
+    if "runs" in files:
+        writing_sheet(workbook, "runs", files["runs"], bold)
     workbook.close()
     return 0
 

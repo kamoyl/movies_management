@@ -54,6 +54,7 @@ usage()
 echo "
 ${CYAN}Usage:${BRIGHT}${WHITE}
 $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ] [ -Q ] [ -E [ -a | -g | -H ] ] [ -S [ -M size ] ] [ -v ] [ -h ]
+$0 -R -i FILE [ -o var ] [ -v ]
 
     ${NORMAL}${CYAN}Description: processes a video with a neural network (NCNN/Vulkan) tool, in chunks of about 60 seconds:
             1. converts MP4 to MKV when needed, then splits it into chunks at keyframes starting
@@ -75,6 +76,9 @@ $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ]
           Ctrl+C or an error also stops the background tools (NCNN, ffmpeg) started by this run.
           Ctrl+C then removes the unfinished parts and intermediate files (not with -k);
           finished chunks are kept, and the next run resumes them.
+          Each run writes TMP/<input name>_report.xlsx (metrics, timeline, statistics, charts); when
+          earlier runs of the same video are in the workspace (-o), it also writes the report of
+          all of them together: VAR/<input name>_report.xlsx.
 
     ${LIME}-i${DODGERBLUE1}  input video (required; MP4 input is converted to MKV)
     ${LIME}-N${DODGERBLUE1}  NCNN/Vulkan method (default: ${CYAN}rife${DODGERBLUE1}); supported by this script:
@@ -117,11 +121,112 @@ $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ]
           Ctrl+C cleanup. Without root or sudo it exits; run the script interactively then
     ${LIME}-M${DODGERBLUE1}  with -S: MemoryHigh of the service (e.g. 20G or 50%): above it the processes are
           slowed down (memory reclaimed) instead of being killed; no limit by default
+    ${LIME}-R${DODGERBLUE1}  report only: writes VAR/<input name>_report.xlsx from all runs of the video in the
+          workspace (-o) and does nothing else; the video itself is not needed anymore. A chunk
+          processed in several runs comes from the latest run in which it is complete
     ${LIME}-v${DODGERBLUE1}  verbose diagnostics
     ${LIME}-h${DODGERBLUE1}  this help${RESET}
 "
   exit 0
 }
+
+# exporting_video_report MOVIE_NAME MINIMUM_RUNS: writes VAR/<movie>_report.xlsx from all runs of
+# the movie in VAR (metrics_to_excel.py chooses, per chunk, the latest run where it is complete),
+# when there are at least MINIMUM_RUNS of them. A run is recognised by TMP/movie_name, runs from
+# before it (17 Nov) by the movie's _report.xlsx or _video_packets.csv in their TMP. The Python
+# environment must be ready (exporting_run_report or reporting_only prepare it).
+exporting_video_report()
+{
+  local MOVIE_NAME="${1}"
+  local MINIMUM_RUNS="${2}"
+  local REPORT="${VAR}/${MOVIE_NAME}_report.xlsx"
+  local RUN_DIR
+  local RUN_OF_MOVIE
+  local RUN_DIRS=()
+  for RUN_DIR in "${VAR}/tmp-${SCRIPT_NAME}_"*
+  do
+    RUN_OF_MOVIE="no"
+    if [ -s "${RUN_DIR}/movie_name" ]
+    then
+      if [[ "$(cat "${RUN_DIR}/movie_name")" == "${MOVIE_NAME}" ]]
+      then
+        RUN_OF_MOVIE="yes"
+      fi
+    elif [ -e "${RUN_DIR}/${MOVIE_NAME}_report.xlsx" ] || [ -e "${RUN_DIR}/${MOVIE_NAME}_video_packets.csv" ]
+    then
+      RUN_OF_MOVIE="yes"
+    fi
+    if [[ ${RUN_OF_MOVIE} == yes ]]
+    then
+      RUN_DIRS+=("${RUN_DIR}")
+    fi
+  done
+  if [ "${#RUN_DIRS[@]}" -eq 0 ] || [ "${#RUN_DIRS[@]}" -lt "${MINIMUM_RUNS}" ]
+  then
+    return 1
+  fi
+  if "${SCRIPTS_HOME}/.venv/bin/python3" "${SCRIPTS_HOME}/metrics_to_excel.py" "${RUN_DIRS[@]}" "${REPORT}" > "${LOG}/metrics_to_excel_all_runs.log" 2>&1
+  then
+    inf "    report of all ${#RUN_DIRS[@]} runs of the video: ${YELLOW}${REPORT}"
+  else
+    warn "    no report of all runs: metrics_to_excel.py failed, see ${BLUE}${LOG}/metrics_to_excel_all_runs.log"
+    return 1
+  fi
+  }
+
+# the work directories created for a -R start (.var_management): removed again when they hold
+# nothing but empty logs
+removing_report_only_dirs()
+{
+  local REPORT_DIR
+  find "${LOG}" -maxdepth 1 -type f -empty -delete 2>/dev/null
+  for REPORT_DIR in "${TMP}" "${TMP_OUT}" "${LOG}" "${LOG_OUT}"
+  do
+    rmdir -- "${REPORT_DIR}" 2>/dev/null
+  done
+  }
+
+# -R: only the report of all runs of the video (exporting_video_report), then exits
+reporting_only()
+{
+  local MOVIE_NAME="${FILE_NAME}"
+  local REPORT_STATUS="0"
+  if [[ ${SILENT} == yes ]] || [[ ${QUALITY_CHECK} == yes ]] || [[ ${FINAL_ENCODING} == yes ]] || [[ ${FRESH_START} == yes ]] || [[ ${RESUME_OPTION} == yes ]] || [[ ${TONE_MAPPING} == no ]] || [[ ${KEEP_INTERMEDIATES} == yes ]] || [[ ${ANIMATION} == yes ]] || [[ ${GRAIN} == yes ]] || [[ ${HIGHMOTION} == yes ]] || [ -n "${N}" ] || [ -n "${O}" ] || [ -n "${s}" ] || [ -n "${MEMORY_HIGH}" ]
+  then
+    error "  -R (report only) takes only -i, -o and -v"
+    removing_report_only_dirs
+    ERROR_CODE="2"
+    failed
+  fi
+  if [ -z "${FILE_NAME}" ]
+  then
+    error "  -R needs -i: the video whose runs are reported"
+    removing_report_only_dirs
+    ERROR_CODE="2"
+    failed
+  fi
+  case "${FILE_NAME}" in
+    *.mkv|*.mp4)
+      MOVIE_NAME="${FILE_NAME%.*}"
+      ;;
+  esac
+  if ! python_venv_preparing "${SCRIPTS_HOME}/.venv" xlsxwriter
+  then
+    error "  the Python environment could not be prepared, see ${BLUE}${LOG}/python_venv_preparing.log"
+    ERROR_CODE="1"
+    failed
+  fi
+  if ! exporting_video_report "${MOVIE_NAME}" 1
+  then
+    if [ ! -s "${LOG}/metrics_to_excel_all_runs.log" ]
+    then
+      warn "  no run of ${YELLOW}${MOVIE_NAME}${WINE} in ${BLUE}${VAR}"
+    fi
+    REPORT_STATUS="1"
+  fi
+  removing_report_only_dirs
+  exit "${REPORT_STATUS}"
+  }
 
 INTERPOLATION=no
 SILENT=no
@@ -138,7 +243,8 @@ ANIMATION=no
 GRAIN=no
 HIGHMOTION=no
 MEMORY_HIGH=""
-while getopts ":o:O:i:N:s:M:rFTkvShQEagH" ARG
+REPORT_ONLY=no
+while getopts ":o:O:i:N:s:M:rFTkvShQEagHR" ARG
 do
   case "${ARG}" in
         i)
@@ -199,6 +305,9 @@ do
         v)
             VERBOSE=yes
             ;;
+        R)
+            REPORT_ONLY=yes
+            ;;
         h)
             usage
             ;;
@@ -253,6 +362,11 @@ then
   error "  run the script from the video's directory, e.g.: cd \"$(dirname -- "${FILE_NAME}")\" && $(basename -- "$0") -i \"$(basename -- "${FILE_NAME}")\""
   ERROR_CODE="2"
   failed
+fi
+
+if [[ ${REPORT_ONLY} == yes ]]
+then
+  reporting_only
 fi
 
 if [ ! -s "${FILE_NAME}" ]
@@ -615,6 +729,10 @@ exporting_run_report()
     inf "    report with charts: ${YELLOW}${REPORT}"
   else
     warn "    no report: metrics_to_excel.py failed, see ${BLUE}${LOG}/metrics_to_excel.log"
+  fi
+  if [ -n "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]
+  then
+    exporting_video_report "${WHOLE_MOVIE_NAME_ARRAY[*]}" 2
   fi
   }
 
@@ -1221,6 +1339,8 @@ then
 fi
 WHOLE_MOVIE_NAME_ARRAY=("${FILE_NAME%.mkv}")
 FILE_NAME_EXTENSION=${FILE_NAME: (-3)}
+# for the report of all runs of the movie (exporting_video_report)
+echo "${WHOLE_MOVIE_NAME_ARRAY[*]}" > "${TMP}/movie_name"
 
 VIDEO_DURATION_RAW=$(ffprobe -v quiet -print_format json -show_format -show_streams "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" | jq -r '.format.duration')
 if [[ ! ${VIDEO_DURATION_RAW} =~ ^[0-9]+(\.[0-9]+)?$ ]]
@@ -1584,5 +1704,7 @@ exporting_run_report
 printf "\033[%d;0H\033[2K %s\n" "${TERMINAL_HEIGHT}" "${TEAL}DONE"
 trap SIGINT
 tput cnorm
-exit
+# not a bare exit: it returned tput's status, 1 without a usable terminal (TERM=dumb, cron), and
+# the EXIT trap then took the finished run for an error (cleanup and report again)
+exit 0
 }
