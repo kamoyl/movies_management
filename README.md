@@ -835,7 +835,10 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 2. **Predictable deletion of input frames.** Done (Done item 33). Left open: running NCNN without `-v` would need `throttling_ncnn` and the deletion to read the output frames instead of the log; not worth it while the log costs nothing measurable.
 3. **Pipe NCNN output into the merge.** Feed output frames in order into the merging `ffmpeg` (`-f image2pipe`) while NCNN is still running, so the merge overlaps with interpolation.
 4. **Smaller items:**
-   - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item);
+   - overlap whole chunks, for example extracting chunk N+1 while chunk N is interpolated (the most complex item). Measured 17 Nov, not worth it for now (agreed threshold: at least 10 % per chunk):
+     - in the 4K run (chunks 080–086, ~476 s each) frame extraction already overlaps NCNN; only preparation (~14 s), merging frames (~36 s) and merging streams (~8–12 s) are serial, so the ceiling is ~13 %;
+     - benchmark (`rife-v4.6`, 300 → 600 4K frames): NCNN alone 69 s, with a lossless x264 merge of 4K PNGs looping beside it 122–124 s (+77 %), and the merge ran at ~78 % of its solo speed (64 vs 82 fps);
+     - so moving the ~36 s merge next to NCNN slows NCNN by ~20 s, a net gain of ~16 s; with preparation and stream merging, ~30 s per chunk (~6–7 %), below the threshold. The same contention limits item 3.
    - encode-only mode with `-N none` (no interpolation), so `movies_encoding`-style encodes use the same chunked pipeline; compare chunked and whole-file encoding once. The first step of combining `interpolation_nncn` with `movies_encoding`.
 5. **Research: interpolation above 8 bits (keep HDR without tone mapping).** Today an HDR source must be tone mapped to 8-bit SDR before NCNN. The limit is in rife-ncnn-vulkan's input/output, not in the network:
    - `main.cpp` loads images with `stbi_load_from_memory(…, 3)` (8 bits per channel), so a 10/16-bit PNG is cut to 8 bits on load; `stbi_write_png` writes 8 bits;
