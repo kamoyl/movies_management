@@ -149,7 +149,7 @@ bash tests/shellcheck.sh   # gate: no errors, and none of the fixed warning clas
 bash tests/run_tests.sh    # behavior tests; no extra test framework needed
 ```
 
-`tests/run_tests.sh` does not load the full `.config`, because it contacts the network. It checks the command-line options (help, unknown options, missing values), the exit codes of `failed`, and the helpers `require_output`, `mkvtoolnix_status`, `safe_remove_dir`, `remove_numbered_frames`, and `mp4_to_mkv`; for the last one, `ffmpeg` is replaced by a fake script. Its work files go to `tmp/tmp-run_tests_<timestamp>_XXXX` inside the repository (`tmp/` is gitignored) and are removed when the tests finish. `.github/workflows/checks.yml` runs both commands on GitHub Actions for each push and pull request.
+`tests/run_tests.sh` does not load the full `.config`, because it contacts the network. It checks the command-line options (help, unknown options, missing values), the exit codes of `failed`, and the helpers `require_output`, `mkvtoolnix_status`, `safe_remove_dir`, `remove_numbered_frames`, `mp4_to_mkv` and `bluray_to_mkv`; for the last two, `ffmpeg` and `mkvmerge` are replaced by fake scripts. Its work files go to `tmp/tmp-run_tests_<timestamp>_XXXX` inside the repository (`tmp/` is gitignored) and are removed when the tests finish. `.github/workflows/checks.yml` runs both commands on GitHub Actions for each push and pull request.
 
 ## Requirements and configuration
 
@@ -221,12 +221,14 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 
 ```bash
 ./interpolation_nncn -i "Video.mkv" [options]
+./interpolation_nncn -i "Disc.Folder" [ -P 00800 ] [options]   # a Blu-ray folder (BDMV)
 ./interpolation_nncn -R -i "Video.mkv" [ -o DIR ]   # report of all runs only
 ```
 
 | Option | Argument | Description |
 | --- | --- | --- |
-| `-i` | `FILE` | Required input video. MP4 input is converted to MKV before processing. |
+| `-i` | `FILE` | Required input video. MP4 input is converted to MKV before processing. A Blu-ray folder (with `BDMV/`, e.g. `Project.Hail.Mary`) is converted to `<folder>.mkv` first: its longest playlist, with chapters and track languages. See [Blu-ray folder as input](#blu-ray-folder-as-input). |
+| `-P` | `PLAYLIST` | With a Blu-ray folder: the playlist to convert instead of the longest, e.g. `00800` (`BDMV/PLAYLIST/00800.mpls`). Exit 2 without a Blu-ray folder or when the playlist does not exist. |
 | `-N` | `METHOD` | NCNN method/executable name. Defaults to `rife`; see method notes below. |
 | `-o` | `DIR` | Workspace root for temporary files and logs. Defaults to `$HOME/var`. |
 | `-O` | `DIR` | Separate root for extracted/processed frames and related temporary data. Defaults to the `-o` workspace root. |
@@ -270,6 +272,21 @@ Each step of each chunk also gets a row in `TMP/timeline.csv` (`~`-separated), s
 | `chunk [%]` | the duration as a percent of the chunk's `chunk` row, filled in at the end of the run (empty for an interrupted run) |
 
 `encoding` and `quality_check` run in the background alongside the next chunk, so they can end after their chunk and exceed 100 %. Rows are in the order the steps ended. The sum of the step durations (without the `chunk` and `whole_run` rows) divided by `whole_run` is the average number of steps running at the same time.
+
+### Blu-ray folder as input
+
+A disc copy keeps the film in pieces (`BDMV/STREAM/*.m2ts`), and their order, chapters and track languages in playlists (`BDMV/PLAYLIST/*.mpls`). Give the folder as `-i`; it is converted once to `<folder>.mkv` in the same directory, which is then processed like any `.mkv` (the final file and the reports are named after the folder):
+
+```bash
+cd /media/download && interpolation_nncn -i Project.Hail.Mary -o var -O var_out -Q -E -S
+```
+
+- `mkvmerge` reads the playlist directly: one pass joins the pieces in order and keeps the chapters and track languages (a Blu-ray stores no track names).
+- The longest playlist is taken as the film; discs carry dozens of short ones for extras and menus. The run lists the five longest (length, size, the one used); `-P NNNNN` takes another one.
+- Some discs hide the film among several playlists of the same length, only one of them in the right order. Then a warning lists them; if the result has scenes out of order, run again with `-P`.
+- `<folder>.mkv.done` records the playlist converted, so a resumed run reuses the `.mkv`; a different `-P` converts again. `-F` keeps it (it is the input, not a result).
+- The free space in the directory is checked first (the `.mkv` is about as big as the playlist's pieces); the log is `LOG/<folder>_bluray-2-mkv.log`.
+- The disc copy must be decrypted (e.g. a MakeMKV backup); `mkvmerge` cannot read an encrypted one.
 
 ### Report of all runs of a video (`-R`)
 
@@ -786,6 +803,7 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - At the end of each run, `VAR/<movie>_report.xlsx` combines all runs of the movie in the workspace; `-R` writes it on demand, without the video. See [Report of all runs of a video](#report-of-all-runs-of-a-video--r).
     - A repeated chunk comes from the latest run in which it is complete, so the A/B test (chunks 079–086 run twice) and a stopped run's unfinished last chunk do not hide finished ones. On Good Omens S3E1 (6 runs, two of them combined by hand before): chunks 079–085 from the last A/B run, 086–092 from the run before it, the rest from the hand-combined run; 13,175 metrics samples; ~3 s.
     - Found while testing it: a finished run ended with a bare `exit`, so with the status of its last command, `tput cnorm`, which fails without a usable terminal (`TERM=dumb`, cron; not in the `-S` service, which gets `TERM`). The run then exited 1, and the EXIT trap took it for an error: the cleanup and the report ran a second time. It now ends with `exit 0`.
+42. **Blu-ray folder as input** (18 Nov, Planned item 5). `-i` takes a disc folder (`BDMV/`), converted once to `<folder>.mkv` from its longest playlist (or `-P`); see [Blu-ray folder as input](#blu-ray-folder-as-input). Tested with a fake `mkvmerge` only; the first real disc is the actual check. Work time ~30 min (estimate ~60).
 
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
@@ -874,7 +892,7 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
      - benchmark (`rife-v4.6`, 300 → 600 4K frames): NCNN alone 69 s, with a lossless x264 merge of 4K PNGs looping beside it 122–124 s (+77 %), and the merge ran at ~78 % of its solo speed (64 vs 82 fps);
      - so moving the ~36 s merge next to NCNN slows NCNN by ~20 s, a net gain of ~16 s; with preparation and stream merging, ~30 s per chunk (~6–7 %), below the threshold. The same contention limits item 3.
    - encode-only mode with `-N none` (no interpolation), so `movies_encoding`-style encodes use the same chunked pipeline; compare chunked and whole-file encoding once. The first step of combining `interpolation_nncn` with `movies_encoding`.
-5. **Blu-ray folder as input (`BDMV`).** A disc copy keeps the film in pieces (`BDMV/STREAM/*.m2ts`) and their order, chapters and track languages in playlists (`BDMV/PLAYLIST/*.mpls`). Proposal (18 Nov): `-i` accepts the disc folder (e.g. `Project.Hail.Mary`) and it is turned into one `.mkv` first, like an `.mp4` today (`mp4_to_mkv`):
+5. **Blu-ray folder as input (`BDMV`).** Done 18 Nov (Done item 42). A disc copy keeps the film in pieces (`BDMV/STREAM/*.m2ts`) and their order, chapters and track languages in playlists (`BDMV/PLAYLIST/*.mpls`). Proposal (18 Nov): `-i` accepts the disc folder (e.g. `Project.Hail.Mary`) and it is turned into one `.mkv` first, like an `.mp4` today (`mp4_to_mkv`):
    - `mkvmerge` reads an `.mpls` playlist directly: one pass joins the pieces in order and keeps the chapters and track languages (Blu-ray stores no track names);
    - the main film is the longest playlist (discs carry dozens of short ones for extras and menus); a parameter (not an interactive prompt) picks another playlist when the guess is wrong;
    - tests with a fake `mkvmerge`; the first real disc is the actual check. Estimated work time: ~60 min.

@@ -384,6 +384,93 @@ mp4_to_mkv()
   inf "    conversion of ${YELLOW}${FILE_NAME}${CYAN} done successfully ${MAGENTA}${RUNTIME}"
   }
 
+# bluray_to_mkv - a Blu-ray folder (FILE_NAME, with BDMV/PLAYLIST/*.mpls and BDMV/STREAM/*.m2ts)
+# becomes FILE_NAME.mkv in the current directory. mkvmerge reads a playlist directly: its pieces in
+# order, the chapters and the track languages (Blu-ray stores no track names). The playlist is
+# BLURAY_PLAYLIST (-P) or the longest one: discs carry dozens of short ones (extras, menus). A
+# finished conversion is marked by FILE_NAME.mkv.done, holding the playlist, so a resumed run
+# reuses it; another -P converts again. The disc must be decrypted (a backup copy, e.g. MakeMKV).
+bluray_to_mkv()
+{
+  local DISC_DIR="${FILE_NAME}"
+  local OUTPUT_FILE="${FILE_NAME}.mkv"
+  local CONVERSION_LOG="${LOG}/${FILE_NAME}_bluray-2-mkv.log"
+  local PLAYLIST_FILE PLAYLIST_INFO PLAYLIST_LINE
+  local PLAYLIST_LINES=()
+  local SORTED_LINES CHOSEN_LINE CHOSEN_DURATION SAME_DURATION
+  local CHOSEN_PLAYLIST="" CHOSEN_SIZE="0" FREE_BYTES MKVMERGE_STATUS
+  start_time_collecting
+  inf "  conversion of the Blu-ray folder ${YELLOW}${DISC_DIR}${CYAN} to mkv"
+  # one line per playlist: duration (ns) TAB size (bytes) TAB file name
+  for PLAYLIST_FILE in "${DISC_DIR}"/BDMV/PLAYLIST/*.mpls
+  do
+    if [ ! -f "${PLAYLIST_FILE}" ]
+    then
+      continue
+    fi
+    PLAYLIST_INFO="$(mkvmerge -J "${PLAYLIST_FILE}" 2>/dev/null | jq -r '[(.container.properties.playlist_duration // 0), (.container.properties.playlist_size // 0)] | @tsv' 2>/dev/null)"
+    if [[ ${PLAYLIST_INFO} =~ ^[0-9]+$'\t'[0-9]+$ ]]
+    then
+      PLAYLIST_LINES+=("${PLAYLIST_INFO}"$'\t'"$(basename -- "${PLAYLIST_FILE}")")
+    fi
+  done
+  if [ "${#PLAYLIST_LINES[@]}" -eq 0 ]
+  then
+    error "  no readable playlist in ${YELLOW}${DISC_DIR}/BDMV/PLAYLIST${RED} (mkvmerge -J; an encrypted disc must be decrypted first)"
+    ERROR_CODE="1"
+    failed
+  fi
+  SORTED_LINES="$(printf '%s\n' "${PLAYLIST_LINES[@]}" | sort -t $'\t' -k1,1nr -k2,2nr -k3,3)"
+  if [ -n "${BLURAY_PLAYLIST}" ]
+  then
+    CHOSEN_LINE="$(awk -F '\t' -v NAME="${BLURAY_PLAYLIST}" '$3 == NAME' <<< "${SORTED_LINES}" | head -n 1)"
+    if [ -z "${CHOSEN_LINE}" ]
+    then
+      error "  -P: playlist ${YELLOW}${BLURAY_PLAYLIST}${RED} could not be read in ${YELLOW}${DISC_DIR}/BDMV/PLAYLIST${RED}"
+      ERROR_CODE="1"
+      failed
+    fi
+  else
+    CHOSEN_LINE="$(head -n 1 <<< "${SORTED_LINES}")"
+  fi
+  CHOSEN_DURATION="$(cut -f 1 <<< "${CHOSEN_LINE}")"
+  CHOSEN_SIZE="$(cut -f 2 <<< "${CHOSEN_LINE}")"
+  CHOSEN_PLAYLIST="$(cut -f 3 <<< "${CHOSEN_LINE}")"
+  inf "    playlists (the longest first, ${#PLAYLIST_LINES[@]} in all; another one with -P NNNNN):"
+  while IFS=$'\t' read -r PLAYLIST_LINE PLAYLIST_INFO PLAYLIST_FILE
+  do
+    inf "      ${PLAYLIST_FILE}  $(awk -v NS="${PLAYLIST_LINE}" -v B="${PLAYLIST_INFO}" 'BEGIN { S = int(NS / 1000000000); printf "%d:%02d:%02d  %.1f GB", S / 3600, (S % 3600) / 60, S % 60, B / 1000000000 }')$(if [[ ${PLAYLIST_FILE} == "${CHOSEN_PLAYLIST}" ]]; then printf '  <- used'; fi)"
+  done < <(head -n 5 <<< "${SORTED_LINES}")
+  # some discs hide the film among playlists of the same length in a wrong order (obfuscation)
+  SAME_DURATION="$(awk -F '\t' -v D="${CHOSEN_DURATION}" '$1 == D { print $3 }' <<< "${SORTED_LINES}" | tr '\n' ' ')"
+  if [ -z "${BLURAY_PLAYLIST}" ] && [ "$(wc -w <<< "${SAME_DURATION}")" -gt 1 ]
+  then
+    warn "    playlists of the same length: ${SAME_DURATION}- if the result is wrong (scenes out of order), choose one with -P"
+  fi
+  if [ -s "${OUTPUT_FILE}" ] && [ -f "${OUTPUT_FILE}.done" ] && [[ $(cat "${OUTPUT_FILE}.done") == "${CHOSEN_PLAYLIST}" ]]
+  then
+    FILE_NAME="${OUTPUT_FILE}"
+    inf "    ${YELLOW}${OUTPUT_FILE}${CYAN} was already converted from ${CHOSEN_PLAYLIST}, it is reused"
+    return
+  fi
+  rm -f -- "${OUTPUT_FILE}.done"
+  FREE_BYTES="$(df --output=avail -B1 . | tail -n 1 | tr -d ' ')"
+  if [[ ${FREE_BYTES} =~ ^[0-9]+$ ]] && [ "${CHOSEN_SIZE}" -gt "${FREE_BYTES}" ]
+  then
+    error "  not enough space for ${YELLOW}${OUTPUT_FILE}${RED}: it needs about $((CHOSEN_SIZE / 1000000000)) GB, $((FREE_BYTES / 1000000000)) GB are free here"
+    ERROR_CODE="1"
+    failed
+  fi
+  mkvmerge -o "${OUTPUT_FILE}" "${DISC_DIR}/BDMV/PLAYLIST/${CHOSEN_PLAYLIST}" > "${CONVERSION_LOG}" 2>&1
+  MKVMERGE_STATUS=$?
+  mkvtoolnix_status "${MKVMERGE_STATUS}" "Blu-ray to mkv conversion" "${CONVERSION_LOG}"
+  FILE_NAME="${OUTPUT_FILE}"
+  require_output "${FILE_NAME}" "Blu-ray to mkv conversion" "${CONVERSION_LOG}"
+  echo "${CHOSEN_PLAYLIST}" > "${OUTPUT_FILE}.done"
+  end_time_collecting
+  inf "    conversion of ${YELLOW}${DISC_DIR}${CYAN} (${CHOSEN_PLAYLIST}) to ${YELLOW}${FILE_NAME}${CYAN} done successfully ${MAGENTA}${RUNTIME}"
+  }
+
 splitting_video()
 {
   start_time_collecting

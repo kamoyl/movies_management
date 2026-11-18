@@ -57,7 +57,7 @@ $0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ]
 $0 -R -i FILE [ -o var ] [ -v ]
 
     ${NORMAL}${CYAN}Description: processes a video with a neural network (NCNN/Vulkan) tool, in chunks of about 60 seconds:
-            1. converts MP4 to MKV when needed, then splits it into chunks at keyframes starting
+            1. converts MP4 or a Blu-ray folder to MKV when needed, then splits it into chunks at keyframes starting
                a closed GOP (50-70 s), so no frame is lost at a split
                (a video of up to 90 seconds is not split: it is processed as one chunk, 001)
             2. tone-maps HDR to SDR when needed (unless -T)
@@ -80,7 +80,10 @@ $0 -R -i FILE [ -o var ] [ -v ]
           earlier runs of the same video are in the workspace (-o), it also writes the report of
           all of them together: VAR/<input name>_report.xlsx.
 
-    ${LIME}-i${DODGERBLUE1}  input video (required; MP4 input is converted to MKV)
+    ${LIME}-i${DODGERBLUE1}  input video (required; MP4 input is converted to MKV), or a Blu-ray folder (with BDMV/):
+          its longest playlist is converted to <folder>.mkv first (mkvmerge: chapters, languages)
+    ${LIME}-P${DODGERBLUE1}  with a Blu-ray folder: the playlist to convert instead of the longest, e.g. [-P 00800]
+          (BDMV/PLAYLIST/00800.mpls; the run lists the longest playlists)
     ${LIME}-N${DODGERBLUE1}  NCNN/Vulkan method (default: ${CYAN}rife${DODGERBLUE1}); supported by this script:
                      ${ORANGERED1}rife        ${DARKCYAN}- Real-Time Intermediate Flow Estimation (frame interpolation)    ${DEEPPINK1}(https://github.com/nihui/rife-ncnn-vulkan)
                      ${ORANGERED1}dain        ${DARKCYAN}- Depth-Aware Video Frame Interpolation                           ${DEEPPINK1}(https://github.com/nihui/dain-ncnn-vulkan)
@@ -191,7 +194,7 @@ reporting_only()
 {
   local MOVIE_NAME="${FILE_NAME}"
   local REPORT_STATUS="0"
-  if [[ ${SILENT} == yes ]] || [[ ${QUALITY_CHECK} == yes ]] || [[ ${FINAL_ENCODING} == yes ]] || [[ ${FRESH_START} == yes ]] || [[ ${RESUME_OPTION} == yes ]] || [[ ${TONE_MAPPING} == no ]] || [[ ${KEEP_INTERMEDIATES} == yes ]] || [[ ${ANIMATION} == yes ]] || [[ ${GRAIN} == yes ]] || [[ ${HIGHMOTION} == yes ]] || [ -n "${N}" ] || [ -n "${O}" ] || [ -n "${s}" ] || [ -n "${MEMORY_HIGH}" ]
+  if [[ ${SILENT} == yes ]] || [[ ${QUALITY_CHECK} == yes ]] || [[ ${FINAL_ENCODING} == yes ]] || [[ ${FRESH_START} == yes ]] || [[ ${RESUME_OPTION} == yes ]] || [[ ${TONE_MAPPING} == no ]] || [[ ${KEEP_INTERMEDIATES} == yes ]] || [[ ${ANIMATION} == yes ]] || [[ ${GRAIN} == yes ]] || [[ ${HIGHMOTION} == yes ]] || [ -n "${N}" ] || [ -n "${O}" ] || [ -n "${s}" ] || [ -n "${MEMORY_HIGH}" ] || [ -n "${BLURAY_PLAYLIST}" ]
   then
     error "  -R (report only) takes only -i, -o and -v"
     removing_report_only_dirs
@@ -244,13 +247,19 @@ GRAIN=no
 HIGHMOTION=no
 MEMORY_HIGH=""
 REPORT_ONLY=no
-while getopts ":o:O:i:N:s:M:rFTkvShQEagHR" ARG
+BLURAY_PLAYLIST=""
+while getopts ":o:O:i:N:s:M:P:rFTkvShQEagHR" ARG
 do
   case "${ARG}" in
         i)
             i=${OPTARG}
-            FILE_NAME=${i}
+            # a Blu-ray folder may be given with a trailing slash (tab completion)
+            FILE_NAME=${i%/}
             FILE_NAME_EXTENSION=${FILE_NAME: (-3)}
+            ;;
+        P)
+            # the playlist of a Blu-ray folder: 00800 or 00800.mpls
+            BLURAY_PLAYLIST=${OPTARG%.mpls}.mpls
             ;;
         N)
             N=${OPTARG}
@@ -374,6 +383,27 @@ then
   error "  Interpolation without input video file ? how shall I approach it ? ;)"
   ERROR_CODE="2"
   failed
+fi
+if [ -d "${FILE_NAME}" ] && ! compgen -G "${FILE_NAME}/BDMV/PLAYLIST/*.mpls" > /dev/null
+then
+  error "  -i: ${YELLOW}${FILE_NAME}${RED} is a directory, but not a Blu-ray folder (no BDMV/PLAYLIST/*.mpls in it)"
+  ERROR_CODE="2"
+  failed
+fi
+if [ -n "${BLURAY_PLAYLIST}" ]
+then
+  if [ ! -d "${FILE_NAME}" ]
+  then
+    error "  -P (playlist) needs a Blu-ray folder as -i"
+    ERROR_CODE="2"
+    failed
+  fi
+  if [[ ! ${BLURAY_PLAYLIST} =~ ^[0-9]{5}\.mpls$ ]] || [ ! -f "${FILE_NAME}/BDMV/PLAYLIST/${BLURAY_PLAYLIST}" ]
+  then
+    error "  -P expects a playlist of ${YELLOW}${FILE_NAME}/BDMV/PLAYLIST${RED}, for example 00800 (got: ${YELLOW}${BLURAY_PLAYLIST%.mpls}${RED})"
+    ERROR_CODE="2"
+    failed
+  fi
 fi
 
 if [ -z ${SPLIT_PART_START} ] || [[ ${SPLIT_PART_START} == "" ]]
@@ -524,6 +554,10 @@ starting_as_service()
   # a recognizable name: the movie and the run's timestamp (the same as in its log directory);
   # systemd allows only letters, digits and ":_.-\" in unit names
   local UNIT_MOVIE_NAME="${FILE_NAME%.*}"
+  if [ -d "${FILE_NAME}" ]
+  then
+    UNIT_MOVIE_NAME="${FILE_NAME}"
+  fi
   UNIT_MOVIE_NAME="$(printf '%s' "${UNIT_MOVIE_NAME}" | tr -c 'A-Za-z0-9_.-' '_' | tr -s '_')"
   local UNIT_NAME="interpolation-${UNIT_MOVIE_NAME:0:80}-${CURRENT_TIMESTAMP}"
   # the report's Python environment needs the network the first time (pip), which the service has not
@@ -1253,7 +1287,10 @@ SPLIT_TIME_SEC="60"
 NO_SPLIT_MAX_SEC="90"
 # preparation, analysis, all calculations and information - START
 
-if [[ ${FILE_NAME_EXTENSION} == mp4 ]]
+if [ -d "${FILE_NAME}" ]
+then
+  bluray_to_mkv
+elif [[ ${FILE_NAME_EXTENSION} == mp4 ]]
 then
   mp4_to_mkv ${FILE_NAME}
 fi

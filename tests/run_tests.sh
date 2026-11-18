@@ -133,6 +133,15 @@ OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nnc
 assert_status   "interpolation_nncn -R with an option of a run stops with 2" 2 "${STATUS}"
 assert_contains "interpolation_nncn -R with an option of a run says why" "${OUTPUT}" "-R (report only) takes only -i, -o and -v"
 if [ -z "$(ls -A "${WORK_DIR}/cli/r")" ]; then pass "interpolation_nncn -R leaves no empty work directories"; else fail "interpolation_nncn -R leaves no empty work directories"; fi
+mkdir -p "${WORK_DIR}/cli/NoDisc" "${WORK_DIR}/cli/Disc/BDMV/PLAYLIST" && echo x > "${WORK_DIR}/cli/NoDisc/x" && echo x > "${WORK_DIR}/cli/Disc/BDMV/PLAYLIST/00800.mpls"
+OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i NoDisc/ -o "${WORK_DIR}/cli/v" 2>&1)"; STATUS=$?
+assert_status   "interpolation_nncn -i with a directory which is no Blu-ray folder stops with 2" 2 "${STATUS}"
+assert_contains "interpolation_nncn -i with such a directory says why" "${OUTPUT}" "not a Blu-ray folder"
+OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -P 00800 -o "${WORK_DIR}/cli/v" 2>&1)"; STATUS=$?
+assert_status   "interpolation_nncn -P without a Blu-ray folder stops with 2" 2 "${STATUS}"
+OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i Disc/ -P 00801 -o "${WORK_DIR}/cli/v" 2>&1)"; STATUS=$?
+assert_status   "interpolation_nncn -P with a missing playlist stops with 2" 2 "${STATUS}"
+assert_contains "interpolation_nncn -P with a missing playlist says why" "${OUTPUT}" "-P expects a playlist of"
 
 echo "failed: never exits 0"
 run_with_helpers 'ERROR_CODE=2; failed' > /dev/null
@@ -197,6 +206,41 @@ chmod +x "${WORK_DIR}/bin/ffmpeg"
 OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkdir -p "$LOG"; echo x > "My.Movie 2024.mp4"; FILE_NAME="My.Movie 2024.mp4"; mp4_to_mkv; echo "RESULT=$FILE_NAME"')"; STATUS=$?
 assert_status   "converts a dotted, spaced name" 0 "${STATUS}"
 assert_contains "keeps every dot in the name" "${OUTPUT}" "RESULT=My.Movie 2024.mkv"
+
+echo "bluray_to_mkv (mkvmerge replaced by a fake; each playlist holds its duration and size)"
+mkdir -p "${WORK_DIR}/bdbin"
+cat > "${WORK_DIR}/bdbin/mkvmerge" <<'EOF'
+#!/usr/bin/env bash
+# fake mkvmerge: -J PLAYLIST prints the duration (s) and size (bytes) written in the playlist;
+# -o OUTPUT PLAYLIST writes the output and records the playlist converted
+if [ "$1" = "-J" ]
+then
+  read -r SECONDS_IN SIZE_IN < "$2"
+  printf '{"container":{"properties":{"playlist_duration":%s,"playlist_size":%s}}}\n' "${SECONDS_IN}000000000" "${SIZE_IN}"
+elif [ "$1" = "-o" ]
+then
+  echo "fake mkv" > "$2"
+  basename "$3" >> converted.txt
+fi
+EOF
+chmod +x "${WORK_DIR}/bdbin/mkvmerge"
+BD_SETUP='LOG="$PWD/log"; mkdir -p "$LOG"; rm -rf "My.Disc 2024" "My.Disc 2024.mkv"* converted.txt; mkdir -p "My.Disc 2024/BDMV/PLAYLIST"; echo "120 1000" > "My.Disc 2024/BDMV/PLAYLIST/00000.mpls"; echo "9000 5000" > "My.Disc 2024/BDMV/PLAYLIST/00800.mpls"; echo "300 2000" > "My.Disc 2024/BDMV/PLAYLIST/00001.mpls"; FILE_NAME="My.Disc 2024"'
+OUTPUT="$(PATH="${WORK_DIR}/bdbin:${PATH}" run_with_helpers "${BD_SETUP}"'; bluray_to_mkv; echo "RESULT=$FILE_NAME"; echo "CONVERTED=$(cat converted.txt)"; echo "MARKER=$(cat "My.Disc 2024.mkv.done")"; FILE_NAME="My.Disc 2024"; bluray_to_mkv; echo "AGAIN=$(wc -l < converted.txt)"; BLURAY_PLAYLIST=00001.mpls; FILE_NAME="My.Disc 2024"; bluray_to_mkv; echo "OTHER=$(tail -n 1 converted.txt)/$(cat "My.Disc 2024.mkv.done")"' 2>&1)"; STATUS=$?
+assert_status   "converts a Blu-ray folder" 0 "${STATUS}"
+assert_contains "the result keeps the folder name with its dots" "${OUTPUT}" "RESULT=My.Disc 2024.mkv"
+assert_contains "converts the longest playlist" "${OUTPUT}" "CONVERTED=00800.mpls"
+assert_contains "lists the playlists with length and size" "${OUTPUT}" "00800.mpls  2:30:00  0.0 GB  <- used"
+assert_contains "marks the conversion with its playlist" "${OUTPUT}" "MARKER=00800.mpls"
+assert_contains "a resumed run reuses the conversion" "${OUTPUT}" "AGAIN=1"
+assert_contains "-P converts another playlist again" "${OUTPUT}" "OTHER=00001.mpls/00001.mpls"
+if [[ ${OUTPUT} == *"of the same length"* ]]; then fail "no warning when one playlist is the longest"; else pass "no warning when one playlist is the longest"; fi
+OUTPUT="$(PATH="${WORK_DIR}/bdbin:${PATH}" run_with_helpers "${BD_SETUP}"'; echo "9000 5000" > "My.Disc 2024/BDMV/PLAYLIST/00801.mpls"; bluray_to_mkv' 2>&1)"
+assert_contains "warns about playlists of the same length (obfuscation)" "${OUTPUT}" "playlists of the same length: 00800.mpls 00801.mpls"
+OUTPUT="$(PATH="${WORK_DIR}/bdbin:${PATH}" run_with_helpers "${BD_SETUP}"'; echo "x" > "My.Disc 2024/BDMV/PLAYLIST/00800.mpls"; BLURAY_PLAYLIST=00800.mpls; bluray_to_mkv' 2>&1)"; STATUS=$?
+assert_status   "an unreadable -P playlist stops with 1" 1 "${STATUS}"
+OUTPUT="$(PATH="${WORK_DIR}/bdbin:${PATH}" run_with_helpers "${BD_SETUP}"'; df() { printf "Avail\n1000\n"; }; bluray_to_mkv' 2>&1)"; STATUS=$?
+assert_status   "too little free space stops with 1" 1 "${STATUS}"
+assert_contains "and says why" "${OUTPUT}" "not enough space"
 
 echo "converting_hdr2sdr (only decides; tone mapping is done by the frames extraction)"
 HDR_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; MOVIE_NAME_ARRAY=(hdr); echo x > hdr.mkv
