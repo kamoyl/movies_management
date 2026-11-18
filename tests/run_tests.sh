@@ -326,8 +326,8 @@ done
 EOF
 chmod +x "${WORK_DIR}/slowvmafbin/ffmpeg"
 VMAF_BG_SETUP='TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; rm -f "$LOG"/*; TARGET_FRAME_COUNT=2; INTER_FRAMES_COUNT=2880; INPUT_FPS=25; VERBOSE=yes'
-OUTPUT="$(PATH="${WORK_DIR}/slowvmafbin:${PATH}" run_with_helpers "${VMAF_BG_SETUP}"'; S=$(date +%s); starting_quality_metric m.mkv o.mkv; echo "RETURNED_AFTER=$(( $(date +%s) - S ))"; finishing_quality_metric; echo "MEAN=${VMAF_MEAN} PID=[${QUALITY_METRIC_CHECK_PID}] NICE=$(cat nice.txt)"' 2>&1)"
-assert_contains "starting returns at once (VMAF keeps running)" "${OUTPUT}" "RETURNED_AFTER=0"
+OUTPUT="$(PATH="${WORK_DIR}/slowvmafbin:${PATH}" run_with_helpers "${VMAF_BG_SETUP}"'; S=$(date +%s%3N); starting_quality_metric m.mkv o.mkv; echo "RETURNED_MS=$(( $(date +%s%3N) - S ))"; if [ $(( $(date +%s%3N) - S )) -lt 1000 ]; then echo RETURNED_FAST; fi; finishing_quality_metric; echo "MEAN=${VMAF_MEAN} PID=[${QUALITY_METRIC_CHECK_PID}] NICE=$(cat nice.txt)"' 2>&1)"
+assert_contains "starting returns at once (VMAF keeps running)" "${OUTPUT}" "RETURNED_FAST"
 assert_contains "finishing waits and reads the VMAF mean" "${OUTPUT}" "MEAN=96.5 PID=[]"
 assert_contains "VMAF runs with lower priority (nice 10)" "${OUTPUT}" "NICE=10"
 OUTPUT="$(PATH="${WORK_DIR}/slowvmafbin:${PATH}" run_with_helpers "${VMAF_BG_SETUP}"'; touch fail_vmaf; starting_quality_metric m.mkv o.mkv; finishing_quality_metric; rm -f fail_vmaf; echo "MEAN=${VMAF_MEAN}"' 2>&1)"; STATUS=$?
@@ -842,8 +842,8 @@ OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkd
 assert_contains "the crop is read from one scan of the whole video" "${OUTPUT}" "CROP=8:4:0:0"
 PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers 'LOG="$PWD/log"; mkdir -p "$LOG"; echo "" > crop.txt; detecting_crop whole.mkv' > /dev/null 2>&1
 assert_status "an unreadable crop stops the run with 1" 1 $?
-OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo "My Movie" > p_merged.mkv.done; S=$(date +%s); starting_part_encoding p_merged.mkv p_encoded.mkv ""; echo "RETURNED_AFTER=$(( $(date +%s) - S ))"; finishing_part_encoding; echo "DONE=$(head -n1 p_encoded.mkv.done) PROFILE=$(sed -n 2p p_encoded.mkv.done) RUNTIME=${ENCODING_RUNTIME} NICE=$(cat hb_nice.txt) CONTENT=$(cat p_encoded.mkv)"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_merged.mkv.done ]; then echo MERGED_MARKER_KEPT; fi; if [ -e p_encoded_video_only.mkv ]; then echo VIDEO_ONLY_KEPT; fi; tr "\n" " " < hb_args.txt; echo; echo "MUX: $(tr "\n" " " < mux_args.txt)"' 2>&1)"
-assert_contains "starting returns at once (the encode keeps running)" "${OUTPUT}" "RETURNED_AFTER=0"
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo "My Movie" > p_merged.mkv.done; S=$(date +%s%3N); starting_part_encoding p_merged.mkv p_encoded.mkv ""; echo "RETURNED_MS=$(( $(date +%s%3N) - S ))"; if [ $(( $(date +%s%3N) - S )) -lt 1000 ]; then echo RETURNED_FAST; fi; finishing_part_encoding; echo "DONE=$(head -n1 p_encoded.mkv.done) PROFILE=$(sed -n 2p p_encoded.mkv.done) RUNTIME=${ENCODING_RUNTIME} NICE=$(cat hb_nice.txt) CONTENT=$(cat p_encoded.mkv)"; if [ -e p_merged.mkv ]; then echo MERGED_KEPT; fi; if [ -e p_merged.mkv.done ]; then echo MERGED_MARKER_KEPT; fi; if [ -e p_encoded_video_only.mkv ]; then echo VIDEO_ONLY_KEPT; fi; tr "\n" " " < hb_args.txt; echo; echo "MUX: $(tr "\n" " " < mux_args.txt)"' 2>&1)"
+assert_contains "starting returns at once (the encode keeps running)" "${OUTPUT}" "RETURNED_FAST"
 assert_contains "finishing marks the encoded part with the movie name and profile" "${OUTPUT}" "DONE=My Movie PROFILE=film RUNTIME=0s"
 assert_contains "the encode runs with lower priority (nice 10)" "${OUTPUT}" "NICE=10"
 assert_contains "every part gets the crop of the whole video" "${OUTPUT}" "--crop 8:4:0:0"
@@ -1023,7 +1023,15 @@ assert_contains "environment overrides them" "${OUTPUT}" "G=0 J=1:2:2"
 
 echo "throttling_ncnn (a sleeping process stands in for NCNN)"
 THROTTLE_TEST='sleep 60 & PID=$!; mkdir -p l; NCNN_EXTRACTION_MARGIN=50
-state() { ps -o stat= -p "$PID" | cut -c1; }
+# STOP/CONT arrive asynchronously: wait up to 1 s for the state NCNN_PAUSED expects, then report what ps sees
+state() {
+  for _ in $(seq 20); do
+    S="$(ps -o stat= -p "$PID" | cut -c1)"
+    if [[ ( ${NCNN_PAUSED} == yes && ${S} == T ) || ( ${NCNN_PAUSED} != yes && ${S} == S ) ]]; then break; fi
+    sleep 0.05
+  done
+  echo "${S}"
+}
 printf "frame=100\n" > l/ex.log; printf "/x/00000060.png /x/00000061.png 0.5 -> /y/00000121.png done\n" > l/nc.log
 throttling_ncnn "$PID" l/ex.log l/nc.log; echo "GAP39=$(state) $NCNN_PAUSED"
 printf "frame=150\n" >> l/ex.log; throttling_ncnn "$PID" l/ex.log l/nc.log; echo "GAP89=$(state) $NCNN_PAUSED"
