@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- tests: fix three timing races that failed about one run in three ([73b5b84](https://github.com/kamoyl/movies_management/commit/73b5b84f4b9affb0d89cb93bc96d5867950c0061) by Kamoyl).
 - .config: synced with get-auditing (unused tmpfs_creating and LDAPTLS_REQCERT=never removed) ([8d64e55](https://github.com/kamoyl/movies_management/commit/8d64e55b185c1b83400bbf33f233f4570c696caf) by Kamoyl).
 - .gitignore: copilot_sessions (the user's link to ~/copilot_sessions) ([9ee9d1a](https://github.com/kamoyl/movies_management/commit/9ee9d1af2ba447fd54a773414a00f82e271a23fc) by Kamoyl).
 - interpolation_nncn: Blu-ray folder as input (-i DISC, -P playlist) ([851c305](https://github.com/kamoyl/movies_management/commit/851c30599e7907a99a2693a6a30f3ec1e0ebba5f) by Kamoyl).
