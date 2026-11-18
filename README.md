@@ -70,7 +70,7 @@ below cost a failed or out-of-sync run; the details are in
 
 - *NCNN works on 8-bit images.* rife-ncnn-vulkan reads and writes
   8-bit images only, so HDR is tone mapped to SDR before
-  interpolation (Planned item 5 is the research on more than
+  interpolation (Planned item 6 is the research on more than
   8 bits).
 - *NCNN racing the extraction.* NCNN could read frames not yet
   written, and a monitor could delete them; NCNN keeps a margin
@@ -874,7 +874,11 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
      - benchmark (`rife-v4.6`, 300 → 600 4K frames): NCNN alone 69 s, with a lossless x264 merge of 4K PNGs looping beside it 122–124 s (+77 %), and the merge ran at ~78 % of its solo speed (64 vs 82 fps);
      - so moving the ~36 s merge next to NCNN slows NCNN by ~20 s, a net gain of ~16 s; with preparation and stream merging, ~30 s per chunk (~6–7 %), below the threshold. The same contention limits item 3.
    - encode-only mode with `-N none` (no interpolation), so `movies_encoding`-style encodes use the same chunked pipeline; compare chunked and whole-file encoding once. The first step of combining `interpolation_nncn` with `movies_encoding`.
-5. **Research: interpolation above 8 bits (keep HDR without tone mapping).** Today an HDR source must be tone mapped to 8-bit SDR before NCNN. The limit is in rife-ncnn-vulkan's input/output, not in the network:
+5. **Blu-ray folder as input (`BDMV`).** A disc copy keeps the film in pieces (`BDMV/STREAM/*.m2ts`) and their order, chapters and track languages in playlists (`BDMV/PLAYLIST/*.mpls`). Proposal (18 Nov): `-i` accepts the disc folder (e.g. `Project.Hail.Mary`) and it is turned into one `.mkv` first, like an `.mp4` today (`mp4_to_mkv`):
+   - `mkvmerge` reads an `.mpls` playlist directly: one pass joins the pieces in order and keeps the chapters and track languages (Blu-ray stores no track names);
+   - the main film is the longest playlist (discs carry dozens of short ones for extras and menus); a parameter (not an interactive prompt) picks another playlist when the guess is wrong;
+   - tests with a fake `mkvmerge`; the first real disc is the actual check. Estimated work time: ~60 min.
+6. **Research: interpolation above 8 bits (keep HDR without tone mapping).** Today an HDR source must be tone mapped to 8-bit SDR before NCNN. The limit is in rife-ncnn-vulkan's input/output, not in the network:
    - `main.cpp` loads images with `stbi_load_from_memory(…, 3)` (8 bits per channel), so a 10/16-bit PNG is cut to 8 bits on load; `stbi_write_png` writes 8 bits;
    - the GPU shaders convert `uint8` ↔ float: `rife_preproc.comp` multiplies by `1/255`, `rife_postproc.comp` by `255` and clamps to `0..255`;
    - the network itself works on floats `0.0…1.0`, stored as fp16 on the GPU (~11 bits of precision, enough for 10-bit video).
