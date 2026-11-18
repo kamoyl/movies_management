@@ -660,36 +660,9 @@ exit_function()
     exporting_run_report
   fi
   error "  interrupted (Ctrl+C)"
-  warning_leftover_processes
+  warning_leftover_processes 'HandBrakeCLI|-ncnn-vulkan|interpolation_nncn'
   # 130 = 128 + SIGINT(2), the conventional exit code of an interrupted program
   exit 130
-  }
-
-# After a stop: lists this user's video processes still running (e.g. a hung HandBrake that
-# ignored SIGTERM, or another run), so a new run is not started alongside them by mistake.
-warning_leftover_processes()
-{
-  local LEFTOVER_PID LEFTOVER_LINE
-  local LEFTOVER_FOUND="no"
-  for LEFTOVER_PID in $(pgrep -u "$(id -u)" -f 'HandBrakeCLI|-ncnn-vulkan|interpolation_nncn' 2>/dev/null)
-  do
-    # this script and its command substitutions (same command line) are not leftovers
-    if [ "${LEFTOVER_PID}" = "$$" ] || [ "$(ps -o ppid= -p "${LEFTOVER_PID}" 2>/dev/null | tr -d ' ')" = "$$" ]
-    then
-      continue
-    fi
-    LEFTOVER_LINE="$(ps -o pid=,etime=,args= -p "${LEFTOVER_PID}" 2>/dev/null | cut -c1-150)"
-    if [ -z "${LEFTOVER_LINE}" ]
-    then
-      continue
-    fi
-    if [[ ${LEFTOVER_FOUND} == no ]]
-    then
-      warn "  still running (PID, time, command) - do not start a new run before they end; stop them with kill PID (kill -9 PID if they stay):"
-      LEFTOVER_FOUND="yes"
-    fi
-    warn "    ${LEFTOVER_LINE}"
-  done
   }
 
 # Compresses the logs not compressed yet when their chunk finished: the movie's and those of the
@@ -762,59 +735,6 @@ exiting_function()
   then
     exporting_run_report
   fi
-  }
-
-# PIDs of all processes started by the given PIDs (children, their children, ...); the command
-# substitution which calls it is a child of the script too, so it is skipped (BASHPID)
-descendant_pids()
-{
-  local PARENT_PID
-  local CHILD_PID
-  for PARENT_PID in "$@"
-  do
-    for CHILD_PID in $(pgrep -P "${PARENT_PID}" 2>/dev/null)
-    do
-      if [ "${CHILD_PID}" != "${BASHPID}" ]
-      then
-        echo "${CHILD_PID}"
-        descendant_pids "${CHILD_PID}"
-      fi
-    done
-  done
-  }
-
-# running_pids PID... - true while one of the PIDs still runs
-running_pids()
-{
-  local PID
-  for PID in "$@"
-  do
-    if kill -0 "${PID}" 2>/dev/null
-    then
-      return 0
-    fi
-  done
-  return 1
-  }
-
-stop_background_jobs()
-{
-  # subshells (progress monitors) must not run this: $$ is still the main script there
-  if [ "${BASHPID}" != "$$" ]
-  then
-    return
-  fi
-  local CHILD_PID
-  # also grandchildren: HandBrake runs in the encoding subshell, and ended only after the
-  # cleanup when it was not stopped itself (its 0-byte _video_only.mkv stayed, 8 Nov); the
-  # PIDs are kept, because a grandchild whose parent ended is no descendant anymore
-  STOPPED_PIDS=($(descendant_pids $$))
-  for CHILD_PID in "${STOPPED_PIDS[@]}"
-  do
-    kill "${CHILD_PID}" 2>/dev/null
-    # a process paused by throttling_ncnn (SIGSTOP) handles SIGTERM only after SIGCONT
-    kill -CONT "${CHILD_PID}" 2>/dev/null
-  done
   }
 
 # removing_work_files DIR... - removes what a run's work left in its work directories (TMP,
