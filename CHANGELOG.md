@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- .gitignore: copilot_sessions (the user's link to ~/copilot_sessions) ([9ee9d1a](https://github.com/kamoyl/movies_management/commit/9ee9d1af2ba447fd54a773414a00f82e271a23fc) by Kamoyl).
 - interpolation_nncn: Blu-ray folder as input (-i DISC, -P playlist) ([851c305](https://github.com/kamoyl/movies_management/commit/851c30599e7907a99a2693a6a30f3ec1e0ebba5f) by Kamoyl).
 - interpolation_nncn: generic process helpers moved to the shared .config ([7e0cfe7](https://github.com/kamoyl/movies_management/commit/7e0cfe75c9d8fdc3f903c1d761ee56652eb78485) by Kamoyl).
 - README: backlog item 5, Blu-ray folder (BDMV) as input ([5eedc8a](https://github.com/kamoyl/movies_management/commit/5eedc8aa56cb52804f590f18304086d2529a9c9f) by Kamoyl).
