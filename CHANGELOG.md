@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- interpolation_nncn: generic process helpers moved to the shared .config ([7e0cfe7](https://github.com/kamoyl/movies_management/commit/7e0cfe75c9d8fdc3f903c1d761ee56652eb78485) by Kamoyl).
 - README: backlog item 5, Blu-ray folder (BDMV) as input ([5eedc8a](https://github.com/kamoyl/movies_management/commit/5eedc8aa56cb52804f590f18304086d2529a9c9f) by Kamoyl).
 - interpolation_nncn: report of all runs of a video (-R), combined automatically ([debc9fd](https://github.com/kamoyl/movies_management/commit/debc9fd1c8f94c331bd9280f5b05d4fa8bd7608c) by Kamoyl).
 - README: RIFE -j re-measured, the default 6:2,2:8 stays ([dcb1c32](https://github.com/kamoyl/movies_management/commit/dcb1c32ca264ae1af5cafc45f9fab936bf70997d) by Kamoyl).
