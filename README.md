@@ -3,7 +3,9 @@
 This repository contains two Bash utilities for working with Matroska video:
 
 - `movies_encoding` collects and updates movie metadata, and can start an AV1 encode.
-- `interpolation_nncn` splits a video into chunks of about one minute, at closed-GOP keyframes (a video of up to 90 seconds is processed as one chunk), processes the chunks with an NCNN/Vulkan image-processing tool, and merges each chunk's video with its audio and subtitle streams. Audio and subtitle tracks in Polish, Dutch, or English are extracted with `mkvmerge`, keeping their original language tags; if a chunk has audio but none in these languages, all its audio tracks are taken. Audio and subtitles are optional: a chunk without them is still processed, with a warning, and merged without them.
+- `interpolation_nncn` splits a video into chunks of about one minute, at closed-GOP keyframes (a video of up to 90 seconds is processed as one chunk), processes the chunks with an NCNN/Vulkan image-processing tool, and merges each chunk's video with its audio and subtitle streams. Audio and subtitle tracks in Polish, Dutch, or English are extracted with `mkvmerge`, keeping their original language tags; if a chunk has audio but none in these languages, all its audio tracks are taken. Audio and subtitles are optional: a chunk without them is still processed, with a warning, and merged without them. With `-N none -E` it only encodes the chunks (no NCNN), see [Encode only](#encode-only--n-none).
+
+The history of changes is in [CHANGELOG.md](CHANGELOG.md), generated from the commits with git-changelog.
 
 Both scripts load shared functions from `.config` (which loads `.config_colours` and `.config_video`) and use `.var_management` to create working, temporary, and log directories. Run the scripts from a working directory where you have space for the input, intermediate files, and outputs.
 
