@@ -2020,8 +2020,7 @@ handbrake_encode_settings()
     OPTIMIZATION="film"
   fi
 
-  # aq-mode=4 from aq-mode=1
-  # VIDEO_ENCODER=(x265_10bit --quality 18 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts strong-intra-smoothing=0:rect=0:aq-mode=4)
+  # x265 (-c x265 below): aq-mode=4 from aq-mode=1
   # --cqp 1-70 (ffmpeg) -> --quality 22 (HandBrake)
   # --input-depth {8, 10}, default is 10bit, and to do 10bit out of 8bit source, it needs conversion first, or svt_av1_10bit -> svt_av1
   # VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts aq-mode=2)
@@ -2029,7 +2028,13 @@ handbrake_encode_settings()
   
   # enable-overlays=1 deadlocks SVT-AV1 3.1.2 (HandBrake 20240621) at the end of some chunks (hang at 99.96%);
   # overlays off: same VMAF (-0.006), ~0.1% smaller, ~2% faster
-  VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts tune=0:enable-overlays=0:aq-mode=2)
+  # VIDEO_CODEC: interpolation_nncn -c (av1 by default, also for movies_encoding)
+  if [[ ${VIDEO_CODEC:-av1} == x265 ]]
+  then
+    VIDEO_ENCODER=(x265_10bit --quality 18 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts strong-intra-smoothing=0:rect=0:aq-mode=4)
+  else
+    VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts tune=0:enable-overlays=0:aq-mode=2)
+  fi
   AUDIO_ENCODER="copy"
   }
 
@@ -2821,8 +2826,9 @@ finishing_part_encoding()
     fi
     return
   fi
-  # line 2: the profile, so -r can warn when the parts of one movie get different profiles
-  printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" "${OPTIMIZATION}" > "${PART_ENCODED_FILE}.done"
+  # line 2: the profile, so -r can warn when the parts of one movie get different profiles;
+  # line 3: the encoder, so a resumed movie never joins parts of two encoders
+  printf '%s\n' "${WHOLE_MOVIE_NAME_ARRAY[*]}" "${OPTIMIZATION}" "${VIDEO_CODEC:-av1}" > "${PART_ENCODED_FILE}.done"
   inf "    final encoding of ${YELLOW}${PART_MERGED_FILE}${CYAN} took ${DARKCYAN}${ENCODING_RUNTIME}"
   # the encoded part replaces the merged one (kept with -k); its marker goes with it, because
   # the encoded part's marker is written first and a marker without its file is never used

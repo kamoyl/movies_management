@@ -129,6 +129,17 @@ assert_contains "interpolation_nncn -M without -S says why" "${OUTPUT}" "so it n
 OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -S -M 20GB 2>&1)"; STATUS=$?
 assert_status   "interpolation_nncn -M with a wrong size stops with 2" 2 "${STATUS}"
 assert_contains "interpolation_nncn -M with a wrong size says why" "${OUTPUT}" "-M expects a size like 20G"
+OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -N none 2>&1)"; STATUS=$?
+assert_status   "interpolation_nncn -N none without -E stops with 2" 2 "${STATUS}"
+assert_contains "interpolation_nncn -N none without -E says why" "${OUTPUT}" "-N none only encodes the chunks, so it needs -E"
+OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -N none -E -T 2>&1)"; STATUS=$?
+assert_status   "interpolation_nncn -N none with -T stops with 2" 2 "${STATUS}"
+OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -c x265 2>&1)"; STATUS=$?
+assert_status   "interpolation_nncn -c without -E stops with 2" 2 "${STATUS}"
+assert_contains "interpolation_nncn -c without -E says why" "${OUTPUT}" "-c chooses the encoder of the final encode, so it needs -E"
+OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -E -c vp9 2>&1)"; STATUS=$?
+assert_status   "interpolation_nncn -c with an unknown encoder stops with 2" 2 "${STATUS}"
+assert_contains "interpolation_nncn -c with an unknown encoder says why" "${OUTPUT}" "-c expects av1 or x265"
 OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -R -E -i x.mkv -o "${WORK_DIR}/cli/r" 2>&1)"; STATUS=$?
 assert_status   "interpolation_nncn -R with an option of a run stops with 2" 2 "${STATUS}"
 assert_contains "interpolation_nncn -R with an option of a run says why" "${OUTPUT}" "-R (report only) takes only -i, -o and -v"
@@ -855,6 +866,9 @@ assert_contains "the muxed file is the encoded part" "${OUTPUT}" "CONTENT=fake m
 if [[ ${OUTPUT} == *VIDEO_ONLY_KEPT* ]]; then fail "the video-only encode is removed after muxing"; else pass "the video-only encode is removed after muxing"; fi
 if [[ ${OUTPUT} == *MERGED_KEPT* ]]; then fail "the merged part is removed after its encode"; else pass "the merged part is removed after its encode"; fi
 if [[ ${OUTPUT} == *MERGED_MARKER_KEPT* ]]; then fail "the merged part's marker is removed with it"; else pass "the merged part's marker is removed with it"; fi
+OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; VIDEO_CODEC=x265; handbrake_encode_settings; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; echo "CODEC=$(sed -n 3p p_encoded.mkv.done)"; tr "\n" " " < hb_args.txt' 2>&1)"
+assert_contains "-c x265 encodes with HandBrake's x265 10-bit" "${OUTPUT}" "--encoder x265_10bit --quality 18"
+assert_contains "the encoded part's marker names its encoder (line 3)" "${OUTPUT}" "CODEC=x265"
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo 0.042000 > start.txt; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; echo "MUX: $(tr "\n" " " < mux_args.txt)"' 2>&1)"
 assert_contains "the encoded video starts where the merged part's video starts" "${OUTPUT}" "MUX: -o p_encoded.mkv --sync 0:42 p_encoded_video_only.mkv -D"
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; KEEP_INTERMEDIATES=yes; echo "My Movie" > p_merged.mkv.done; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ] && [ -e p_merged.mkv.done ]; then echo MERGED_KEPT; fi' 2>&1)"
@@ -966,6 +980,16 @@ OUTPUT="$(PATH="${WORK_DIR}/joinbin:${PATH}" run_with_helpers "${JOIN_SETUP}"'; 
 assert_contains "the join warns about parts of another profile" "${OUTPUT}" "were encoded with another profile than"
 assert_contains "the warning lists the parts and their profiles" "${OUTPUT}" "mixes them: 001 (unknown)"
 assert_contains "parts with a profile line are still joined" "${OUTPUT}" "video_part_minute_002_rife_50_encoded.mkv"
+OUTPUT="$(PATH="${WORK_DIR}/joinbin:${PATH}" run_with_helpers "${JOIN_SETUP}"'; for FUNC in encoded_part_profile encoded_part_codec; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; OPTIMIZATION=unknown; VIDEO_CODEC=av1; printf "S\nfilm\nx265\n" > video_part_minute_002_rife_50_encoded.mkv.done; echo "{\"tracks\":[]}" > tracks.json; rm -f join_args.txt; joining_encoded_parts; echo "JOINED=$(cat join_args.txt 2>/dev/null | head -c 2)"' 2>&1)"; STATUS=$?
+assert_status   "the join stops when a part has another encoder (markers without one are av1)" 1 "${STATUS}"
+assert_contains "the join names the part of another encoder" "${OUTPUT}" "chunk 002 was encoded with x265, not av1"
+
+echo "encoding_source_chunk (-N none: the source chunk goes to the final encode)"
+OUTPUT="$(run_with_helpers 'for FUNC in encoding_source_chunk statistics_row_file saving_statistics_row; do eval "$(sed -n "/^${FUNC}()/,/^  }/p" "'"${REPO_ROOT}"'/interpolation_nncn")"; done; finishing_previous_chunk() { echo PREVIOUS_FINISHED; }; stopping_after_failed_encode() { :; }; starting_part_encoding() { echo "ENCODE: $*"; }; timeline_entry() { :; }; start_time_collecting() { START_TIME=1; }; end_time_collecting() { RUNTIME=5[s]; }; rm -rf none; mkdir none; cd none || exit 99; ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=160x120:rate=24000/1001 -t 2 -c:v libx264 video_part_minute_004.mkv; WHOLE_MOVIE_NAME_ARRAY=(Film); NCNN_METHOD=none; VIDEO_CODEC=x265; OPTIMIZATION=film; QUALITY_CHECK=yes; TONE_MAPPING_FILTER=old; encoding_source_chunk 004 video_part_minute_004.mkv; echo "FPS=${INPUT_FPS} FRAMES=${INTER_FRAMES_COUNT} TONE=[${TONE_MAPPING_FILTER}] PENDING=${PENDING_CHUNK_ID}"; tr "\n" "|" < video_part_minute_004_none.statistics' 2>&1)"
+assert_contains "the chunk before is finished first (one encode at a time)" "${OUTPUT}" "PREVIOUS_FINISHED"
+assert_contains "the source chunk itself is encoded, -Q compares with it" "${OUTPUT}" "ENCODE: video_part_minute_004.mkv video_part_minute_004_none_source_encoded.mkv video_part_minute_004.mkv"
+assert_contains "VMAF gets the source rate and frame count, no tone mapping" "${OUTPUT}" "FPS=23.976024 FRAMES=48 TONE=[] PENDING=004"
+assert_contains "the saved row has empty NCNN and space columns" "${OUTPUT}" "Film|004~~~~~|~|5[s]|"
 
 echo "intermediate_codec_options (ffmpeg replaced by a fake encoder list)"
 mkdir -p "${WORK_DIR}/codecbin"

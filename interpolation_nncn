@@ -53,7 +53,7 @@ usage()
   fi
 echo "
 ${CYAN}Usage:${BRIGHT}${WHITE}
-$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ] [ -Q ] [ -E [ -a | -g | -H ] ] [ -S [ -M size ] ] [ -v ] [ -h ]
+$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ] [ -Q ] [ -E [ -c codec ] [ -a | -g | -H ] ] [ -S [ -M size ] ] [ -v ] [ -h ]
 $0 -R -i FILE [ -o var ] [ -v ]
 
     ${NORMAL}${CYAN}Description: processes a video with a neural network (NCNN/Vulkan) tool, in chunks of about 60 seconds:
@@ -89,6 +89,8 @@ $0 -R -i FILE [ -o var ] [ -v ]
                      ${ORANGERED1}dain        ${DARKCYAN}- Depth-Aware Video Frame Interpolation                           ${DEEPPINK1}(https://github.com/nihui/dain-ncnn-vulkan)
                      ${ORANGERED1}cain        ${DARKCYAN}- Channel Attention Frame Interpolation                           ${DEEPPINK1}(https://github.com/nihui/cain-ncnn-vulkan)
                      ${ORANGERED1}realsr      ${DARKCYAN}- superresolution (4x scale)                                      ${DEEPPINK1}(https://github.com/nihui/realsr-ncnn-vulkan)
+                     ${ORANGERED1}none        ${DARKCYAN}- no NCNN processing: each source chunk is only encoded (needs -E); steps 2-5 are
+                                   skipped, no GPU is used, an HDR video stays HDR (-T is not needed)
           ${DODGERBLUE1}not supported yet (frame calculations are not configured for them, so they are rejected):
                      ${ORANGERED1}ifrnet      ${DARKCYAN}- Intermediate Feature Refine Network (frame interpolation)       ${DEEPPINK1}(https://github.com/nihui/ifrnet-ncnn-vulkan)
                      ${ORANGERED1}Real-ESRGAN ${DARKCYAN}- image and video restoration                                     ${DEEPPINK1}(https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan)
@@ -115,6 +117,11 @@ $0 -R -i FILE [ -o var ] [ -v ]
           background, removes its merged part (kept with -k), and at the end joins the encoded parts
           into DESTINATION_DIR/<input name>.mkv; the crop is detected once, on the whole input
           a failed encode stops the run after the current chunk (run again with -E to continue)
+    ${LIME}-c${DODGERBLUE1}  with -E: video encoder of the final encode (default: ${CYAN}av1${DODGERBLUE1}):
+                     ${ORANGERED1}av1         ${DARKCYAN}- SVT-AV1 10-bit (HandBrake svt_av1_10bit)
+                     ${ORANGERED1}x265        ${DARKCYAN}- x265 10-bit / HEVC (HandBrake x265_10bit)
+          ${DODGERBLUE1}every part of one movie must have the same encoder: a part encoded with another one
+          is done again
     ${LIME}-a${DODGERBLUE1}  with -E: animation encoding profile
     ${LIME}-g${DODGERBLUE1}  with -E: grain encoding profile
     ${LIME}-H${DODGERBLUE1}  with -E: high-motion encoding profile
@@ -194,7 +201,7 @@ reporting_only()
 {
   local MOVIE_NAME="${FILE_NAME}"
   local REPORT_STATUS="0"
-  if [[ ${SILENT} == yes ]] || [[ ${QUALITY_CHECK} == yes ]] || [[ ${FINAL_ENCODING} == yes ]] || [[ ${FRESH_START} == yes ]] || [[ ${RESUME_OPTION} == yes ]] || [[ ${TONE_MAPPING} == no ]] || [[ ${KEEP_INTERMEDIATES} == yes ]] || [[ ${ANIMATION} == yes ]] || [[ ${GRAIN} == yes ]] || [[ ${HIGHMOTION} == yes ]] || [ -n "${N}" ] || [ -n "${O}" ] || [ -n "${s}" ] || [ -n "${MEMORY_HIGH}" ] || [ -n "${BLURAY_PLAYLIST}" ]
+  if [[ ${SILENT} == yes ]] || [[ ${QUALITY_CHECK} == yes ]] || [[ ${FINAL_ENCODING} == yes ]] || [[ ${FRESH_START} == yes ]] || [[ ${RESUME_OPTION} == yes ]] || [[ ${TONE_MAPPING} == no ]] || [[ ${KEEP_INTERMEDIATES} == yes ]] || [[ ${ANIMATION} == yes ]] || [[ ${GRAIN} == yes ]] || [[ ${HIGHMOTION} == yes ]] || [ -n "${N}" ] || [ -n "${O}" ] || [ -n "${s}" ] || [ -n "${MEMORY_HIGH}" ] || [ -n "${BLURAY_PLAYLIST}" ] || [ -n "${VIDEO_CODEC}" ]
   then
     error "  -R (report only) takes only -i, -o and -v"
     removing_report_only_dirs
@@ -248,7 +255,8 @@ HIGHMOTION=no
 MEMORY_HIGH=""
 REPORT_ONLY=no
 BLURAY_PLAYLIST=""
-while getopts ":o:O:i:N:s:M:P:rFTkvShQEagHR" ARG
+VIDEO_CODEC=""
+while getopts ":o:O:i:N:s:M:P:c:rFTkvShQEagHR" ARG
 do
   case "${ARG}" in
         i)
@@ -264,6 +272,9 @@ do
         N)
             N=${OPTARG}
             NCNN_METHOD=${N}
+            ;;
+        c)
+            VIDEO_CODEC=${OPTARG}
             ;;
         o)
             o=${OPTARG}
@@ -445,10 +456,45 @@ then
 fi
 
 case "${NCNN_METHOD}" in
-  rife|dain|cain|realsr)
+  rife|dain|cain|realsr|none)
     ;;
   *)
-    error "  NCNN method ${YELLOW}${NCNN_METHOD}${RED} is not supported by this script (supported: rife, dain, cain, realsr)"
+    error "  NCNN method ${YELLOW}${NCNN_METHOD}${RED} is not supported by this script (supported: rife, dain, cain, realsr, none)"
+    ERROR_CODE="2"
+    failed
+    ;;
+esac
+
+if [[ ${NCNN_METHOD} == none ]]
+then
+  if [[ ${FINAL_ENCODING} != yes ]]
+  then
+    error "  -N none only encodes the chunks, so it needs -E"
+    ERROR_CODE="2"
+    failed
+  fi
+  if [[ ${TONE_MAPPING} == no ]]
+  then
+    error "  -T is for the NCNN processing; -N none does not tone-map, an HDR video stays HDR"
+    ERROR_CODE="2"
+    failed
+  fi
+  # nothing is tone-mapped: the source chunk goes to HandBrake as it is (also no libplacebo check)
+  TONE_MAPPING=no
+fi
+
+if [ -n "${VIDEO_CODEC}" ] && [[ ${FINAL_ENCODING} != yes ]]
+then
+  error "  -c chooses the encoder of the final encode, so it needs -E"
+  ERROR_CODE="2"
+  failed
+fi
+VIDEO_CODEC="${VIDEO_CODEC:-av1}"
+case "${VIDEO_CODEC}" in
+  av1|x265)
+    ;;
+  *)
+    error "  -c expects av1 or x265 (got: ${YELLOW}${VIDEO_CODEC}${RED})"
     ERROR_CODE="2"
     failed
     ;;
@@ -464,13 +510,16 @@ then
   fi
 fi
 
-if ! type "${NCNN_METHOD}-ncnn-vulkan" > /dev/null 2>&1
+REQUIRED_COMMANDS=(ffmpeg ffprobe mkvmerge jq bc mediainfo)
+if [[ ${NCNN_METHOD} != none ]]
 then
-  ncnn-release-build "nihui/${NCNN_METHOD}-ncnn-vulkan"
+  if ! type "${NCNN_METHOD}-ncnn-vulkan" > /dev/null 2>&1
+  then
+    ncnn-release-build "nihui/${NCNN_METHOD}-ncnn-vulkan"
+  fi
+  # also checks that the NCNN build above really produced the tool
+  REQUIRED_COMMANDS+=("${NCNN_METHOD}-ncnn-vulkan")
 fi
-
-# also checks that the NCNN build above really produced the tool
-REQUIRED_COMMANDS=(ffmpeg ffprobe mkvmerge jq bc mediainfo "${NCNN_METHOD}-ncnn-vulkan")
 if [[ ${FINAL_ENCODING} == yes ]]
 then
   REQUIRED_COMMANDS+=(HandBrakeCLI)
@@ -1155,6 +1204,60 @@ encoded_part_profile()
   echo "${PROFILE:-unknown}"
   }
 
+# Encoder (-c) of an encoded part: line 3 of its .done marker; markers from before -c (19 Nov)
+# have none, and every part was SVT-AV1 then
+encoded_part_codec()
+{
+  local CODEC
+  CODEC="$(sed -n 3p "${1}" 2>/dev/null)"
+  echo "${CODEC:-av1}"
+  }
+
+# -N none: the source chunk itself goes to the final encode (no frames, no NCNN, no GPU), after
+# the encode of the chunk before has ended, so one HandBrake runs at a time; the later chunks
+# are split meanwhile. With -Q the encode is compared with the same source chunk.
+encoding_source_chunk()
+{
+  local CHUNK_ID="${1}"
+  local CHUNK_FILE="${2}"
+  start_time_collecting
+  finishing_previous_chunk
+  stopping_after_failed_encode
+  # the rate and the frame count are only for VMAF: frame pairing and its progress
+  local CHUNK_FRAME_RATE
+  local CHUNK_DURATION
+  CHUNK_FRAME_RATE="$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "${CHUNK_FILE}" 2>/dev/null | head -n1 | cut -d, -f1)"
+  if [[ ! ${CHUNK_FRAME_RATE} =~ ^([0-9]+)/([1-9][0-9]*)$ ]] || [ "${BASH_REMATCH[1]}" -eq 0 ]
+  then
+    error "  could not read frame rate of ${YELLOW}${CHUNK_FILE}${RED} (got: '${CHUNK_FRAME_RATE}')"
+    ERROR_CODE="1"
+    failed
+  fi
+  INPUT_FPS="$(LC_ALL=C awk -v n="${BASH_REMATCH[1]}" -v d="${BASH_REMATCH[2]}" 'BEGIN { printf "%.6f", n / d }')"
+  CHUNK_DURATION="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "${CHUNK_FILE}" 2>/dev/null)"
+  INTER_FRAMES_COUNT="$(LC_ALL=C awk -v t="${CHUNK_DURATION}" -v f="${INPUT_FPS}" 'BEGIN { printf "%d", t * f }')"
+  TONE_MAPPING_FILTER=""
+  # "source": the parts keep the source's frame rate (the fps place of the NCNN names)
+  OUTPUT_FPS_ROUND="source"
+  local PART_VMAF_REFERENCE=""
+  if [[ ${QUALITY_CHECK} == yes ]]
+  then
+    PART_VMAF_REFERENCE="${CHUNK_FILE}"
+  fi
+  inf "  chunk ${YELLOW}${CHUNK_ID}${CYAN}: final encode (${VIDEO_CODEC}, ${OPTIMIZATION}) of the source chunk ${YELLOW}${CHUNK_FILE}"
+  starting_part_encoding "${CHUNK_FILE}" "video_part_minute_${CHUNK_ID}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_encoded.mkv" "${PART_VMAF_REFERENCE}"
+  end_time_collecting
+  timeline_entry chunk
+  # the NCNN steps and the space columns stay empty; encode and VMAF come with the row
+  PENDING_CHUNK_ID="${CHUNK_ID}"
+  PENDING_STATISTICS_BEFORE_VMAF="${CHUNK_ID}~~~~~"
+  PENDING_STATISTICS_SPACE="~"
+  PENDING_PART_RUNTIME="${RUNTIME}"
+  PENDING_STATISTICS_GPUS=""
+  PENDING_STATISTICS_ROW="yes"
+  saving_statistics_row
+  }
+
 # Joins the encoded parts of all chunks (-E) into DESTINATION_DIR/<input name>.mkv; every chunk
 # must have its finished final encode, also chunks done by an earlier run (-s, -r).
 joining_encoded_parts()
@@ -1171,6 +1274,12 @@ joining_encoded_parts()
     if [ -e "${ENCODED_MARKERS[0]}" ] && [ -s "${ENCODED_MARKERS[0]%.done}" ] && [[ "$(head -n1 "${ENCODED_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
     then
       ENCODED_PARTS+=("${ENCODED_MARKERS[0]%.done}")
+      if [[ "$(encoded_part_codec "${ENCODED_MARKERS[0]}")" != "${VIDEO_CODEC}" ]]
+      then
+        error "  chunk ${YELLOW}${CHUNK_ID}${RED} was encoded with ${YELLOW}$(encoded_part_codec "${ENCODED_MARKERS[0]}")${RED}, not ${VIDEO_CODEC}; one video cannot mix encoders, run again with -E -c ${VIDEO_CODEC}"
+        ERROR_CODE="1"
+        failed
+      fi
       PART_PROFILE="$(encoded_part_profile "${ENCODED_MARKERS[0]}")"
       if [[ ${PART_PROFILE} != "${OPTIMIZATION}" ]]
       then
@@ -1308,6 +1417,12 @@ then
 fi
 VIDEO_LENGTH=$(printf "%.0f\n" "${VIDEO_DURATION_RAW}")
 
+if [[ ${NCNN_METHOD} == none ]]
+then
+  # no NCNN runs, so HandBrake and VMAF may use the cores kept free for it (NCNN_FREE_CORES)
+  ENCODE_PINNING=()
+fi
+
 # ffmpeg filters needed for this video and options (tone mapping, VMAF), checked before any work
 ffmpeg_feature_checks "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
 
@@ -1328,7 +1443,7 @@ then
     ERROR_CODE="2"
     failed
   fi
-  inf "  final encode with the ${YELLOW}${OPTIMIZATION}${CYAN} profile into ${YELLOW}${FINAL_VIDEO_FILE}"
+  inf "  final encode (${YELLOW}${VIDEO_CODEC}${CYAN}) with the ${YELLOW}${OPTIMIZATION}${CYAN} profile into ${YELLOW}${FINAL_VIDEO_FILE}"
   # sets HANDBRAKE_CROP, one crop for every part
   detecting_crop "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
 fi
@@ -1420,6 +1535,16 @@ do
       FINISHED_ENCODED_MARKERS=(video_part_minute_${VIDEO_FRAGMENT_ID}_${NCNN_METHOD}_*_encoded.mkv.done)
       if [ -e "${FINISHED_ENCODED_MARKERS[0]}" ] && [ -s "${FINISHED_ENCODED_MARKERS[0]%.done}" ] && [[ "$(head -n1 "${FINISHED_ENCODED_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
       then
+        ENCODED_CODEC="$(encoded_part_codec "${FINISHED_ENCODED_MARKERS[0]}")"
+        if [[ ${ENCODED_CODEC} != "${VIDEO_CODEC}" ]]
+        then
+          # parts of two encoders cannot be joined into one video track, so the chunk is done again
+          warn "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${WINE} was encoded with ${YELLOW}${ENCODED_CODEC}${WINE}, this run uses ${YELLOW}${VIDEO_CODEC}${WINE}: it is done again"
+          rm -f -- "${FINISHED_ENCODED_MARKERS[0]}" "${FINISHED_ENCODED_MARKERS[0]%.done}"
+        fi
+      fi
+      if [ -e "${FINISHED_ENCODED_MARKERS[0]}" ] && [ -s "${FINISHED_ENCODED_MARKERS[0]%.done}" ] && [[ "$(head -n1 "${FINISHED_ENCODED_MARKERS[0]}")" == "${WHOLE_MOVIE_NAME_ARRAY[*]}" ]]
+      then
         inf "  chunk ${YELLOW}${VIDEO_FRAGMENT_ID}${CYAN} already finished and encoded (${FINISHED_ENCODED_MARKERS[0]%.done}), skipping"
         ENCODED_PROFILE="$(encoded_part_profile "${FINISHED_ENCODED_MARKERS[0]}")"
         if [[ ${ENCODED_PROFILE} != "${OPTIMIZATION}" ]]
@@ -1481,6 +1606,11 @@ do
   fi 
   # checks every step itself (including NCNN failures) and stops the run on error; after a lost
   # GPU the chunk is done again on the GPUs which still work (at most GPU_MAX_LOSSES times)
+  if [[ ${NCNN_METHOD} == none ]]
+  then
+    encoding_source_chunk "${VIDEO_FRAGMENT_ID}" "${CURRENTLY_MANAGED_VIDEO_PART_FILENAME}"
+    continue
+  fi
   retrying_lost_gpus "${VIDEO_FRAGMENT_ID}"
   CHUNK_GPU_RETRIES=0
   while true
