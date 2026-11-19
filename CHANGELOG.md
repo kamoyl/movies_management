@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- interpolation_nncn: encode only (-N none) and the x265 encoder (-c av1|x265) ([db556ab](https://github.com/kamoyl/movies_management/commit/db556abb17524df1fd1dab5d14f94a166e5d440d) by Kamoyl).
 - .config synced from get-auditing: reports use the repository's .venv; pyenv removed ([2d29bcc](https://github.com/kamoyl/movies_management/commit/2d29bcc1d7d0087356cb74dd355c741a17eef536) by Kamoyl).
 - tests: fix three timing races that failed about one run in three ([73b5b84](https://github.com/kamoyl/movies_management/commit/73b5b84f4b9affb0d89cb93bc96d5867950c0061) by Kamoyl).
 - .config: synced with get-auditing (unused tmpfs_creating and LDAPTLS_REQCERT=never removed) ([8d64e55](https://github.com/kamoyl/movies_management/commit/8d64e55b185c1b83400bbf33f233f4570c696caf) by Kamoyl).
