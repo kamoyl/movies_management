@@ -374,6 +374,16 @@ DESTINATION_DIR="$HOME/ready" ./interpolation_nncn -i "Episode.mkv" -E -g
   - VMAF runs after each encode, not alongside it: in the 86 GB Project Hail Mary run (20 Nov, 157 parts, `-N none -E -Q`) it took 2.7 h of 6.9 h (encode 4.1 h). Leave `-Q` out when the time matters.
   - Today the model is always `vmaf_v0.6.1`, made for SDR 1080p seen from 3 picture heights. For a 4K video `vmaf_4k_v0.6.1` is the right one (it is installed in `/usr/share/model/`), so 4K scores are not comparable yet (Planned item 7).
   - VMAF was not trained on HDR (PQ/HLG): for an HDR video it is only a rough guide, not a quality verdict. Project Hail Mary (4K HDR, `svt_av1_10bit` RF 22) averaged 90 (81-96 per part).
+  - Chunked against one-shot, measured 21 Nov on Project Hail Mary (the same HandBrake settings; one minute each, the source as reference, frames aligned exactly):
+
+    | Part | Model | Chunked (`-N none -E`) | One-shot HandBrake |
+    |---|---|---|---|
+    | 121 (worst) | `vmaf_v0.6.1` | 81.45 | 81.42 |
+    | 121 (worst) | `vmaf_4k_v0.6.1` | 86.75 | 86.72 |
+    | 037 (median) | `vmaf_v0.6.1` | 90.08 | 90.08 |
+    | 037 (median) | `vmaf_4k_v0.6.1` | 93.18 | 93.19 |
+
+    No quality difference (±0.03), and the same size (18.42 against 18.48 GB). The 4K model scores 3-5 points higher, the same for both, so it changes the number, not the comparison.
   - Synthesized film grain (AV1 `film-grain=N`) lowers VMAF although it looks right, because the grain is not the same pixels as the source's.
   - `--nlmeans-tune` and `--lapsharp-tune` only tune the denoise/sharpen filters; without `--nlmeans`/`--lapsharp` those filters are off and the tunes do nothing (seen in the HandBrake log: only the frame-rate filter runs).
 
@@ -938,6 +948,8 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
 
 7. **VMAF model by resolution** (21 Nov): `vmaf_4k_v0.6.1` for videos above 1080p, `vmaf_v0.6.1` otherwise, the model named in the log and the report; an HDR video gets a note that its score is a guide only. Also to check: VMAF alongside the next encode instead of after it (2.7 h of 6.9 h, see [Final encode of each part](#final-encode-of-each-part--e)).
 8. **Film grain for AV1, to discuss and measure** (21 Nov): `film-grain=8` (SVT-AV1 `--encopts`) removes the grain before encoding and the player adds a synthetic one back: much smaller files for grainy films that look the same. To compare on one grainy movie: size, encode time and a visual check (VMAF will be lower by design). Same session: whether to drop or really enable `--nlmeans`/`--lapsharp` (today their tunes have no effect).
+
+9. **12 frames fewer in the joined movie** (found 21 Nov): Project Hail Mary chunked has 225,165 video frames, the source 225,177; the shift grows along the film (2 frames at part 37, 4 at part 121), while audio comes from the source. To check: lip sync near the end (up to ~0.5 s), and where the frames go (open-GOP splits, Done items 13/14).
 
 **Early ToDo list** (moved from the header of `interpolation_nncn`; new ideas start as drafts in `questions.txt`):
 
