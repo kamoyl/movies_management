@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- README: chunked vs one-shot VMAF measured; 12 frames lost in the join ([efe53fc](https://github.com/kamoyl/movies_management/commit/efe53fc64a7948023244958b9f6016f717ccf97d) by Kamoyl).
 - README: what the VMAF number means; planned VMAF model and film grain ([9bd9138](https://github.com/kamoyl/movies_management/commit/9bd9138ed6b4b99a49ff7f99d3bab878d4f02f61) by Kamoyl).
 - README: link to CHANGELOG.md, -N none in the introduction ([63ca03d](https://github.com/kamoyl/movies_management/commit/63ca03dc7155cdc19ca3314cf9b7876607161faa) by Kamoyl).
 - interpolation_nncn: encode only (-N none) and the x265 encoder (-c av1|x265) ([db556ab](https://github.com/kamoyl/movies_management/commit/db556abb17524df1fd1dab5d14f94a166e5d440d) by Kamoyl).
