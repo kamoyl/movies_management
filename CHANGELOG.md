@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- README: cause of the 12 lost frames with -N none, and fix options ([12d2581](https://github.com/kamoyl/movies_management/commit/12d25819f7959ba7e74b460faaf9c6f1c89f9903) by Kamoyl).
 - README: Planned 9 corrected with the measured lip-sync shift ([a9d51a2](https://github.com/kamoyl/movies_management/commit/a9d51a26ca521f81cf62b4d3eddb88b91ed67698) by Kamoyl).
 - README: chunked vs one-shot VMAF measured; 12 frames lost in the join ([efe53fc](https://github.com/kamoyl/movies_management/commit/efe53fc64a7948023244958b9f6016f717ccf97d) by Kamoyl).
 - README: what the VMAF number means; planned VMAF model and film grain ([9bd9138](https://github.com/kamoyl/movies_management/commit/9bd9138ed6b4b99a49ff7f99d3bab878d4f02f61) by Kamoyl).
