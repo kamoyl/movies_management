@@ -370,6 +370,12 @@ DESTINATION_DIR="$HOME/ready" ./interpolation_nncn -i "Episode.mkv" -E -g
 - HandBrake encodes only the video of a part (`-a none -s none`). `mkvmerge` then copies the chosen audio and subtitle tracks (the same language choice as `movies_encoding`) from the merged part; its output follows HandBrake's in the same log. Copying a TrueHD track through HandBrake made it drop one video frame near the start of every part, without a message, see [Done](#done) item 12. HandBrake's video starts at 0, so the mux places it at the start of the merged part's video (`--sync`), as `merging_streams_mkv` does.
 - Copying the audio through HandBrake again would not help with sync: the drift found in a joined movie came from frames lost at open-GOP splits, from a rounded frame rate, and from audio start offsets added at every join, the same with either audio path, see [Done](#done) items 13 and 14.
 - Why per part and not one encode of the joined movie: see the measurement in [Performance optimization](#performance-optimization).
+- **What the VMAF number (`-Q`) means - read before judging settings by it:**
+  - VMAF runs after each encode, not alongside it: in the 86 GB Project Hail Mary run (20 Nov, 157 parts, `-N none -E -Q`) it took 2.7 h of 6.9 h (encode 4.1 h). Leave `-Q` out when the time matters.
+  - Today the model is always `vmaf_v0.6.1`, made for SDR 1080p seen from 3 picture heights. For a 4K video `vmaf_4k_v0.6.1` is the right one (it is installed in `/usr/share/model/`), so 4K scores are not comparable yet (Planned item 7).
+  - VMAF was not trained on HDR (PQ/HLG): for an HDR video it is only a rough guide, not a quality verdict. Project Hail Mary (4K HDR, `svt_av1_10bit` RF 22) averaged 90 (81-96 per part).
+  - Synthesized film grain (AV1 `film-grain=N`) lowers VMAF although it looks right, because the grain is not the same pixels as the source's.
+  - `--nlmeans-tune` and `--lapsharp-tune` only tune the denoise/sharpen filters; without `--nlmeans`/`--lapsharp` those filters are off and the tunes do nothing (seen in the HandBrake log: only the frame-rate filter runs).
 
 ### Encode only (`-N none`)
 
@@ -929,6 +935,9 @@ State over time, Smokin' Aces (4K HDR, 23.976 → 47.952 fps, `-Q -E`), average 
    - vs-mlrt (VapourSynth): runs the same RIFE models on 32-bit float RGB frames, with a Vulkan (ncnn) backend usable on the RX580s; frames stay in memory, so the PNG pipeline would change.
 
    Open risk: RIFE was trained on 8-bit SDR images; HDR in PQ encoding has a different brightness distribution, so the quality has to be measured (VMAF, visual check) before it is used.
+
+7. **VMAF model by resolution** (21 Nov): `vmaf_4k_v0.6.1` for videos above 1080p, `vmaf_v0.6.1` otherwise, the model named in the log and the report; an HDR video gets a note that its score is a guide only. Also to check: VMAF alongside the next encode instead of after it (2.7 h of 6.9 h, see [Final encode of each part](#final-encode-of-each-part--e)).
+8. **Film grain for AV1, to discuss and measure** (21 Nov): `film-grain=8` (SVT-AV1 `--encopts`) removes the grain before encoding and the player adds a synthetic one back: much smaller files for grainy films that look the same. To compare on one grainy movie: size, encode time and a visual check (VMAF will be lower by design). Same session: whether to drop or really enable `--nlmeans`/`--lapsharp` (today their tunes have no effect).
 
 **Early ToDo list** (moved from the header of `interpolation_nncn`; new ideas start as drafts in `questions.txt`):
 
