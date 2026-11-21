@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- -N none: encode each part from the whole movie, so open-GOP splits lose no frames ([a59a3c9](https://github.com/kamoyl/movies_management/commit/a59a3c94269c85a1dabc6a0bec3a177ad30fcb3a) by Kamoyl).
 - README: Planned 9, fix option 1 tested and frame-accurate ([8540887](https://github.com/kamoyl/movies_management/commit/85408875ec8f65acf9228dd6503186dbe3dde4ab) by Kamoyl).
 - README: cause of the 12 lost frames with -N none, and fix options ([12d2581](https://github.com/kamoyl/movies_management/commit/12d25819f7959ba7e74b460faaf9c6f1c89f9903) by Kamoyl).
 - README: Planned 9 corrected with the measured lip-sync shift ([a9d51a2](https://github.com/kamoyl/movies_management/commit/a9d51a26ca521f81cf62b4d3eddb88b91ed67698) by Kamoyl).
