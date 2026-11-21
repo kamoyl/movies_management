@@ -767,6 +767,34 @@ assert_contains "a closed-GOP split loses nothing" "${OUTPUT}" "CLOSED=0"
 assert_contains "the last chunk has no next chunk to recover from" "${OUTPUT}" "LAST=0"
 if [[ ${OUTPUT} == *DECODED* ]]; then fail "nothing is decoded when nothing is lost"; else pass "nothing is decoded when nothing is lost"; fi
 
+echo "source_chunk_range: -N none reads a part from the whole movie (ffprobe replaced by a fake)"
+mkdir -p "${WORK_DIR}/rangebin"
+cat > "${WORK_DIR}/rangebin/ffprobe" <<'EOF'
+#!/usr/bin/env bash
+# fake ffprobe: the movie's start from movie_start.txt, the chunk's packet count and first packets (decode order)
+if [[ " $* " == *"stream=start_time"* ]]
+then
+  cat movie_start.txt
+elif [[ " $* " == *"-count_packets"* ]]
+then
+  echo 1446
+else
+  cat chunk_packets.csv
+fi
+EOF
+chmod +x "${WORK_DIR}/rangebin/ffprobe"
+# chunk 2 starts at K (0.083 in the chunk = 60.060 s in the movie); its 2 leading frames are shown before K
+RANGE_SETUP='WHOLE_MOVIE_NAME_ARRAY=(Film); SPLIT_TIMESTAMPS="60.060s,120.120s"; echo 0.000000 > movie_start.txt
+printf "%s\n" 0.083000,K__ 0.000000,___ 0.042000,___ 0.250000,___ > chunk_packets.csv'
+RANGE_SHOW='; echo "RC=$? START=${SOURCE_RANGE_START_SEC} DURATION=${SOURCE_RANGE_DURATION_SEC} FRAMES=${SOURCE_RANGE_FRAMES}"'
+OUTPUT="$(PATH="${WORK_DIR}/rangebin:${PATH}" run_with_helpers "${RANGE_SETUP}"'; source_chunk_range video_part_minute_002.mkv 002 24000/1001'"${RANGE_SHOW}" 2>&1)"
+assert_contains "an open-GOP chunk starts at its leading frames, half a frame early, and lasts its frame count less a quarter (HandBrake counts it from its first frame)" "${OUTPUT}" "RC=0 START=59.956146 DURATION=60.299823 FRAMES=1446"
+OUTPUT="$(PATH="${WORK_DIR}/rangebin:${PATH}" run_with_helpers "${RANGE_SETUP}"'; printf "%s\n" 0.000000,K__ 0.083000,___ > chunk_packets.csv; source_chunk_range video_part_minute_001.mkv 001 24000/1001'"${RANGE_SHOW}" 2>&1)"
+assert_contains "chunk 1 starts at 0 and lasts the same (a frame count ending on the next frame took one frame too many)" "${OUTPUT}" "RC=0 START=0.000000 DURATION=60.299823"
+OUTPUT="$(PATH="${WORK_DIR}/rangebin:${PATH}" run_with_helpers "${RANGE_SETUP}"'; echo 1.500000 > movie_start.txt; source_chunk_range video_part_minute_002.mkv 002 24000/1001'"${RANGE_SHOW}" 2>&1)"
+assert_contains "a movie not starting at 0 keeps the chunk file" "${OUTPUT}" "RC=1 START= DURATION= FRAMES="
+assert_contains "and says why" "${OUTPUT}" "does not start at 0"
+
 echo "merging_streams_mkv keeps the video in sync (mkvmerge replaced by a fake)"
 mkdir -p "${WORK_DIR}/mkvbin"
 cat > "${WORK_DIR}/mkvbin/mkvmerge" <<'EOF'

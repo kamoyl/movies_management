@@ -688,6 +688,81 @@ recovering_lost_frames()
   printf '%s lost frames at movie timestamps:\n%s\n' "${LOST_FRAMES_COUNT}" "${LOST_FRAMES_PTS}" >> "${RECOVERY_LOG}"
   }
 
+# -N none encodes a part from the whole movie instead of its chunk: a chunk starting at an open-GOP
+# keyframe K begins with leading frames (shown before K, stored after it) that reference the chunk
+# before, so HandBrake dropped them (2 frames each at 6 splits of Project Hail Mary, 12 frames by
+# the end, the picture ahead of the sound). From the whole movie the referenced frames exist.
+# source_chunk_range CHUNK_FILE CHUNK_NUMBER FRAME_RATE (n/d) sets, in movie time:
+#   SOURCE_RANGE_START_SEC    - half a frame before the chunk's first shown frame (0 for chunk 1)
+#   SOURCE_RANGE_DURATION_SEC - the chunk's frame count less a quarter, in seconds
+#   SOURCE_RANGE_FRAMES       - the chunk's frame count (its packets, including the leading frames)
+# The margins make the frames in the range exactly the chunk's frames (ffmpeg's [start,
+# start + duration) as well as HandBrake's duration counted from its first frame).
+# HandBrake (--start-at/--stop-at pts) and ffmpeg (-ss/-t, the VMAF reference) seek to a keyframe
+# before the start, so only a few frames more are decoded (--start-at frames decoded the movie
+# from its beginning). Assumes a constant frame rate. Returns 1 with a warning when the range is
+# unknown (the movie does not start at 0, or the chunk cannot be read); the chunk is used then.
+source_chunk_range()
+{
+  if [ $# -ne 3 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs three parameters: ${YELLOW}CHUNK_FILE, ${ORANGE1}CHUNK_NUMBER, ${DEEPPINK1}FRAME_RATE"
+    ERROR_CODE="1"
+    failed
+  fi
+  local CHUNK_FILE="${1}"
+  local CHUNK_NUMBER="$((10#${2}))"
+  local FRAME_RATE="${3}"
+  SOURCE_RANGE_START_SEC=""
+  SOURCE_RANGE_DURATION_SEC=""
+  SOURCE_RANGE_FRAMES=""
+  # the split points and HandBrake's pts count from the start of the movie
+  local MOVIE_START
+  MOVIE_START="$(ffprobe -v error -select_streams v:0 -show_entries stream=start_time -of csv=p=0 "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" 2>/dev/null | head -n1 | cut -d, -f1)"
+  if [[ ! ${MOVIE_START} =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || ! LC_ALL=C awk -v s="${MOVIE_START}" 'BEGIN { exit !(s < 0.0005 && s > -0.0005) }'
+  then
+    warn "  ${YELLOW}${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv${YELLOW} does not start at 0 (video start: '${MOVIE_START}'), so chunk ${CHUNK_NUMBER} is encoded from its chunk file (frames at an open-GOP split may be lost)"
+    return 1
+  fi
+  local FRAMES_COUNT
+  FRAMES_COUNT="$(ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 "${CHUNK_FILE}" 2>/dev/null | head -n1 | cut -d, -f1)"
+  # packets in decode order: K first, its leading frames (lower timestamps) follow it
+  local FIRST_PACKETS
+  FIRST_PACKETS="$(ffprobe -v error -select_streams v:0 -show_entries packet=pts_time,flags -of csv=p=0 -read_intervals "%+#100" "${CHUNK_FILE}" 2>/dev/null)"
+  local SPLIT_PACKET_PTS
+  local SPLIT_PACKET_FLAGS
+  IFS=, read -r SPLIT_PACKET_PTS SPLIT_PACKET_FLAGS <<< "$(head -n1 <<< "${FIRST_PACKETS}")"
+  if [[ ! ${FRAMES_COUNT} =~ ^[1-9][0-9]*$ ]] || [[ ! ${SPLIT_PACKET_PTS} =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || [[ ${SPLIT_PACKET_FLAGS} != K* ]] || [[ ! ${FRAME_RATE} =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]]
+  then
+    warn "  could not read the frames of ${YELLOW}${CHUNK_FILE}${YELLOW} (frames: '${FRAMES_COUNT}', first packet: '${SPLIT_PACKET_PTS},${SPLIT_PACKET_FLAGS}', rate: '${FRAME_RATE}'), so it is encoded from its chunk file (frames at an open-GOP split may be lost)"
+    return 1
+  fi
+  local RATE_NUMERATOR="${BASH_REMATCH[1]}"
+  local RATE_DENOMINATOR="${BASH_REMATCH[2]}"
+  # K is at the split point before this chunk in the movie (chunk 1 starts at 0)
+  local SPLIT_POINT="0"
+  if [ "${CHUNK_NUMBER}" -gt 1 ]
+  then
+    SPLIT_POINT="$(tr ',' '\n' <<< "${SPLIT_TIMESTAMPS}" | sed -n "$((CHUNK_NUMBER - 1))p" | sed "s/s$//")"
+    if [[ ! ${SPLIT_POINT} =~ ^[0-9]+(\.[0-9]+)?$ ]]
+    then
+      warn "  no split point for chunk ${CHUNK_NUMBER} (split points: '${SPLIT_TIMESTAMPS}'), so it is encoded from its chunk file (frames at an open-GOP split may be lost)"
+      return 1
+    fi
+  fi
+  read -r SOURCE_RANGE_START_SEC SOURCE_RANGE_DURATION_SEC <<< "$(LC_ALL=C awk -F, -v k="${SPLIT_PACKET_PTS}" -v point="${SPLIT_POINT}" -v n="${RATE_NUMERATOR}" -v d="${RATE_DENOMINATOR}" -v frames="${FRAMES_COUNT}" '
+    $1 != "" { if (!seen || $1 + 0 < first) { first = $1 + 0 }; seen = 1 }
+    END {
+      start = point + first - k - 0.5 * d / n
+      if (start < 0) { start = 0 }
+      # HandBrake counts --stop-at from its first output frame (a stop exactly one frame count
+      # later kept one frame more: 1447 of 1446), ffmpeg -t from the start (half a frame earlier):
+      # frames - 1/4 ends a quarter frame before the next chunk for one and 3/4 for the other
+      printf "%.6f %.6f\n", start, (frames - 0.25) * d / n
+    }' <<< "${FIRST_PACKETS}")"
+  SOURCE_RANGE_FRAMES="${FRAMES_COUNT}"
+  }
+
 extracting_mkv_frames()
 {
   if [ $# -ne 3 ]
@@ -2184,6 +2259,13 @@ starting_quality_metric()
   # part, but are not in the reference chunk, so they are left out (not paired with its last frame)
   local VMAF_GRAPH="[0:v]select='not(mod(n\,${VMAF_FRAME_STEP}))',setpts=N/(${INPUT_FPS}*TB)[distorted];[1:v]${REFERENCE_FILTER}setpts=N/(${INPUT_FPS}*TB)[reference];[distorted][reference]libvmaf=n_threads=${VMAF_THREADS}:model=${VMAF_MODEL}:log_path=${LOG}/${VMAF_FILES}_vmaf.json:log_fmt=json:shortest=1"
   rm -f -- "${TMP}/${VMAF_FILES}_quality_metric.status" "${TMP}/${VMAF_FILES}_quality_metric.runtime"
+  # a part read from the movie (source_chunk_range) is compared with the same range of the movie;
+  # -ss before -i decodes from the keyframe before and drops the frames before the start
+  local REFERENCE_INPUT=(-i "${REFERENCE_VIDEO_FILE}")
+  if [ -n "${SOURCE_RANGE_START_SEC}" ]
+  then
+    REFERENCE_INPUT=(-ss "${SOURCE_RANGE_START_SEC}" -t "${SOURCE_RANGE_DURATION_SEC}" -i "${REFERENCE_VIDEO_FILE}")
+  fi
   # the subshell measures VMAF's own runtime and keeps ffmpeg's exit code, both read by
   # finishing_quality_metric; ffmpeg runs with nice and off NCNN's cores (ENCODE_PINNING), so the
   # next chunk's frame extraction and NCNN get the CPU first and VMAF uses what is left;
@@ -2191,7 +2273,7 @@ starting_quality_metric()
   (
     trap 'kill "${VMAF_FFMPEG_PID}" 2>/dev/null' TERM
     start_time_collecting
-    nice -n 10 "${ENCODE_PINNING[@]}" ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${ENCODED_VIDEO_FILE}" -i "${REFERENCE_VIDEO_FILE}" -lavfi "${VMAF_GRAPH}" -f null - > "${LOG}/${VMAF_FILES}_quality_metric.log" 2>&1 &
+    nice -n 10 "${ENCODE_PINNING[@]}" ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -threads 0 -i "${ENCODED_VIDEO_FILE}" "${REFERENCE_INPUT[@]}" -lavfi "${VMAF_GRAPH}" -f null - > "${LOG}/${VMAF_FILES}_quality_metric.log" 2>&1 &
     VMAF_FFMPEG_PID=$!
     wait "${VMAF_FFMPEG_PID}" 2>> "${LOG}/${VMAF_FILES}_quality_metric.log"
     VMAF_FFMPEG_STATUS=$?
@@ -2644,7 +2726,17 @@ starting_part_encoding()
   then
     VMAF_REFERENCE_CROP="crop=iw-${CROP_LEFT}-${CROP_RIGHT}:ih-${CROP_TOP}-${CROP_BOTTOM}:${CROP_LEFT}:${CROP_TOP}"
   fi
-  rm -f -- "${PART_ENCODED_FILE}" "${PART_ENCODED_FILE}.done" "${TMP}/${PART_ENCODED_FILE}_encoding.status" "${TMP}/${PART_ENCODED_FILE}_encoding.runtime"
+  # -N none (source_chunk_range): the part is read from the whole movie, from SOURCE_RANGE_START_SEC
+  # for SOURCE_RANGE_DURATION_SEC (pts: 90 kHz), so frames at an open-GOP split are not lost;
+  # the chunk is still the source of the audio and subtitle choice
+  local PART_INPUT=(-i "${PART_MERGED_FILE}")
+  local PART_EXPECTED_FRAMES=""
+  if [ -n "${SOURCE_RANGE_START_SEC}" ]
+  then
+    PART_INPUT=(-i "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" --start-at "pts:$(LC_ALL=C awk -v s="${SOURCE_RANGE_START_SEC}" 'BEGIN { printf "%d", s * 90000 + 0.5 }')" --stop-at "pts:$(LC_ALL=C awk -v s="${SOURCE_RANGE_DURATION_SEC}" 'BEGIN { printf "%d", s * 90000 + 0.5 }')")
+    PART_EXPECTED_FRAMES="${SOURCE_RANGE_FRAMES}"
+  fi
+  rm -f -- "${PART_ENCODED_FILE}" "${PART_ENCODED_FILE}.done" "${TMP}/${PART_ENCODED_FILE}_encoding.status" "${TMP}/${PART_ENCODED_FILE}_encoding.runtime" "${TMP}/${PART_ENCODED_FILE}_encoding.frames"
   # HandBrake encodes only the video; mkvmerge then copies the chosen audio and subtitle tracks
   # from the merged part (the audio is copied by HandBrake anyway). With a copied TrueHD track
   # HandBrake's A/V sync silently dropped one video frame near the start of every part, which
@@ -2678,7 +2770,7 @@ starting_part_encoding()
     # stderr when it reaps it, which may happen during the watchdog's sleep, before the wait: the
     # whole block's stderr goes to the encode's log, so the notice is next to HandBrake's output
     {
-      nice -n 10 "${ENCODE_PINNING[@]}" HandBrakeCLI -i "${PART_MERGED_FILE}" -o "${PART_VIDEO_FILE}" --encoder "${VIDEO_ENCODER[@]}" --crop "${PART_CROP}" --no-markers -a none -s none >> "${PART_ENCODING_LOG}" 2>&1 &
+      nice -n 10 "${ENCODE_PINNING[@]}" HandBrakeCLI "${PART_INPUT[@]}" -o "${PART_VIDEO_FILE}" --encoder "${VIDEO_ENCODER[@]}" --crop "${PART_CROP}" --no-markers -a none -s none >> "${PART_ENCODING_LOG}" 2>&1 &
       PART_HANDBRAKE_PID=$!
       # watchdog: a hung encoder may keep printing the same percentage for hours (chunk 097 of
       # Smokin' Aces: 99.96 % from 10:58 on, 52395 progress lines), so progress means a changed
@@ -2720,19 +2812,33 @@ starting_part_encoding()
     fi
     if [ "${PART_HANDBRAKE_STATUS}" -eq 0 ]
     then
-      # HandBrake's video starts at 0, the merged part's at its first frame (non-zero after
-      # frames lost at the start of a chunk), where its audio is in sync with it
-      PART_VIDEO_START_SEC="$(ffprobe -v error -select_streams v:0 -show_entries frame=best_effort_timestamp_time -of csv=p=0 -read_intervals "%+#1" "${PART_MERGED_FILE}" 2>/dev/null | head -n1 | cut -d, -f1)"
-      PART_VIDEO_SYNC=()
-      if [[ ${PART_VIDEO_START_SEC} =~ ^[0-9]+(\.[0-9]+)?$ ]]
+      # a part read from the movie must have exactly the chunk's frames: one more or less
+      # shifts every later part against the source's continuous audio
+      if [ -n "${PART_EXPECTED_FRAMES}" ]
       then
-        PART_VIDEO_START_MS="$(LC_ALL=C awk -v s="${PART_VIDEO_START_SEC}" 'BEGIN { printf "%d", s * 1000 + 0.5 }')"
-        if [ "${PART_VIDEO_START_MS}" -ne 0 ]
+        PART_ENCODED_FRAMES="$(tr '\r' '\n' < "${PART_ENCODING_LOG}" | grep -a "mux: track 0, " | tail -n1 | sed -n 's/^.*mux: track 0, \([0-9]*\) frames.*$/\1/p')"
+        if [[ ${PART_ENCODED_FRAMES} != "${PART_EXPECTED_FRAMES}" ]]
         then
-          PART_VIDEO_SYNC=(--sync "0:${PART_VIDEO_START_MS}")
+          echo "frame count: ${PART_ENCODED_FRAMES:-unknown} encoded, ${PART_EXPECTED_FRAMES} expected" | tee "${TMP}/${PART_ENCODED_FILE}_encoding.frames" >> "${PART_ENCODING_LOG}"
         fi
-      else
-        echo "could not read the start of the video of ${PART_MERGED_FILE} (got: '${PART_VIDEO_START_SEC}'), muxed without --sync" >> "${PART_ENCODING_LOG}"
+      fi
+      # HandBrake's video starts at 0, the merged part's at its first frame (non-zero after
+      # frames lost at the start of a chunk), where its audio is in sync with it; a part read
+      # from the movie has those frames, so it needs no shift
+      PART_VIDEO_SYNC=()
+      if [ -z "${PART_EXPECTED_FRAMES}" ]
+      then
+        PART_VIDEO_START_SEC="$(ffprobe -v error -select_streams v:0 -show_entries frame=best_effort_timestamp_time -of csv=p=0 -read_intervals "%+#1" "${PART_MERGED_FILE}" 2>/dev/null | head -n1 | cut -d, -f1)"
+        if [[ ${PART_VIDEO_START_SEC} =~ ^[0-9]+(\.[0-9]+)?$ ]]
+        then
+          PART_VIDEO_START_MS="$(LC_ALL=C awk -v s="${PART_VIDEO_START_SEC}" 'BEGIN { printf "%d", s * 1000 + 0.5 }')"
+          if [ "${PART_VIDEO_START_MS}" -ne 0 ]
+          then
+            PART_VIDEO_SYNC=(--sync "0:${PART_VIDEO_START_MS}")
+          fi
+        else
+          echo "could not read the start of the video of ${PART_MERGED_FILE} (got: '${PART_VIDEO_START_SEC}'), muxed without --sync" >> "${PART_ENCODING_LOG}"
+        fi
       fi
       # mkvmerge exits 1 for warnings only, 2 for errors (its output follows HandBrake's in the log)
       mkvmerge -o "${PART_ENCODED_FILE}" "${PART_VIDEO_SYNC[@]}" "${PART_VIDEO_FILE}" "${PART_MUX_TRACKS[@]}" "${PART_MERGED_FILE}" >> "${PART_ENCODING_LOG}" 2>&1
@@ -2825,6 +2931,10 @@ finishing_part_encoding()
       VMAF_MEAN="error"
     fi
     return
+  fi
+  if [ -s "${TMP}/${PART_ENCODED_FILE}_encoding.frames" ]
+  then
+    warn "  ${YELLOW}${PART_ENCODED_FILE}${WINE}: $(cat "${TMP}/${PART_ENCODED_FILE}_encoding.frames"); the joined movie's picture moves against its sound by the difference from this part on"
   fi
   # line 2: the profile, so -r can warn when the parts of one movie get different profiles;
   # line 3: the encoder, so a resumed movie never joins parts of two encoders

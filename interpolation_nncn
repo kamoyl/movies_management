@@ -1239,12 +1239,28 @@ encoding_source_chunk()
   TONE_MAPPING_FILTER=""
   # "source": the parts keep the source's frame rate (the fps place of the NCNN names)
   OUTPUT_FPS_ROUND="source"
+  # a split movie: the part is read from the whole movie (source_chunk_range), so frames at an
+  # open-GOP split are not lost; VMAF compares it with the same range of the movie
+  SOURCE_RANGE_START_SEC=""
+  SOURCE_RANGE_DURATION_SEC=""
+  SOURCE_RANGE_FRAMES=""
+  local PART_SOURCE="${CHUNK_FILE}"
+  if [[ ${WHOLE_VIDEO_IN_ONE_CHUNK} == no ]] && source_chunk_range "${CHUNK_FILE}" "${CHUNK_ID}" "${CHUNK_FRAME_RATE}"
+  then
+    INTER_FRAMES_COUNT="${SOURCE_RANGE_FRAMES}"
+    PART_SOURCE="${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
+  fi
   local PART_VMAF_REFERENCE=""
   if [[ ${QUALITY_CHECK} == yes ]]
   then
-    PART_VMAF_REFERENCE="${CHUNK_FILE}"
+    PART_VMAF_REFERENCE="${PART_SOURCE}"
   fi
-  inf "  chunk ${YELLOW}${CHUNK_ID}${CYAN}: final encode (${VIDEO_CODEC}, ${OPTIMIZATION}) of the source chunk ${YELLOW}${CHUNK_FILE}"
+  if [ -n "${SOURCE_RANGE_START_SEC}" ]
+  then
+    inf "  chunk ${YELLOW}${CHUNK_ID}${CYAN}: final encode (${VIDEO_CODEC}, ${OPTIMIZATION}) of ${YELLOW}${SOURCE_RANGE_FRAMES}${CYAN} frames of ${YELLOW}${PART_SOURCE}${CYAN} from ${YELLOW}${SOURCE_RANGE_START_SEC}s${CYAN} (the frames of ${YELLOW}${CHUNK_FILE}${CYAN})"
+  else
+    inf "  chunk ${YELLOW}${CHUNK_ID}${CYAN}: final encode (${VIDEO_CODEC}, ${OPTIMIZATION}) of the source chunk ${YELLOW}${CHUNK_FILE}"
+  fi
   starting_part_encoding "${CHUNK_FILE}" "video_part_minute_${CHUNK_ID}_${NCNN_METHOD}_${OUTPUT_FPS_ROUND}_encoded.mkv" "${PART_VMAF_REFERENCE}"
   end_time_collecting
   timeline_entry chunk
