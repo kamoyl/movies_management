@@ -53,7 +53,7 @@ usage()
   fi
 echo "
 ${CYAN}Usage:${BRIGHT}${WHITE}
-$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ] [ -Q ] [ -E [ -c codec ] [ -a | -g | -H ] ] [ -S [ -M size ] ] [ -v ] [ -h ]
+$0 -i FILE [ -N ncnn ] [ -o var ] [ -O var_out ] [ -s XXX ] [ -F ] [ -T ] [ -k ] [ -Q ] [ -E [ -c codec ] [ -g ] ] [ -S [ -M size ] ] [ -v ] [ -h ]
 $0 -R -i FILE [ -o var ] [ -v ]
 
     ${NORMAL}${CYAN}Description: processes a video with a neural network (NCNN/Vulkan) tool, in chunks of about 60 seconds:
@@ -122,10 +122,8 @@ $0 -R -i FILE [ -o var ] [ -v ]
                      ${ORANGERED1}x265        ${DARKCYAN}- x265 10-bit / HEVC (HandBrake x265_10bit)
             ${DODGERBLUE1}every part of one movie must have the same encoder: a part encoded with another one
             is done again
-      ${LIME}-a${DODGERBLUE1}  with ${LIME}-E${DODGERBLUE1}: animation encoding profile
       ${LIME}-g${DODGERBLUE1}  with ${LIME}-E${DODGERBLUE1}: grain encoding profile; AV1 only: the grain is removed before encoding and
           the player adds a synthetic one back (about 20-30 % smaller; encode 65-90 % slower at 1080p, about 2.8x at 4K)
-      ${LIME}-H${DODGERBLUE1}  with ${LIME}-E${DODGERBLUE1}: high-motion encoding profile
     ${LIME}-S${DODGERBLUE1}  silent: runs in the background as a systemd service (system slice, as your user;
           needs root or sudo), so it survives closing the terminal or a logout; prints the unit
           name, its log (all output) and how to follow or stop it. systemctl stop runs the
@@ -202,7 +200,7 @@ reporting_only()
 {
   local MOVIE_NAME="${FILE_NAME}"
   local REPORT_STATUS="0"
-  if [[ ${SILENT} == yes ]] || [[ ${QUALITY_CHECK} == yes ]] || [[ ${FINAL_ENCODING} == yes ]] || [[ ${FRESH_START} == yes ]] || [[ ${RESUME_OPTION} == yes ]] || [[ ${TONE_MAPPING} == no ]] || [[ ${KEEP_INTERMEDIATES} == yes ]] || [[ ${ANIMATION} == yes ]] || [[ ${GRAIN} == yes ]] || [[ ${HIGHMOTION} == yes ]] || [ -n "${N}" ] || [ -n "${O}" ] || [ -n "${s}" ] || [ -n "${MEMORY_HIGH}" ] || [ -n "${BLURAY_PLAYLIST}" ] || [ -n "${VIDEO_CODEC}" ]
+  if [[ ${SILENT} == yes ]] || [[ ${QUALITY_CHECK} == yes ]] || [[ ${FINAL_ENCODING} == yes ]] || [[ ${FRESH_START} == yes ]] || [[ ${RESUME_OPTION} == yes ]] || [[ ${TONE_MAPPING} == no ]] || [[ ${KEEP_INTERMEDIATES} == yes ]] || [[ ${GRAIN} == yes ]] || [ -n "${N}" ] || [ -n "${O}" ] || [ -n "${s}" ] || [ -n "${MEMORY_HIGH}" ] || [ -n "${BLURAY_PLAYLIST}" ] || [ -n "${VIDEO_CODEC}" ]
   then
     error "  -R (report only) takes only -i, -o and -v"
     removing_report_only_dirs
@@ -250,14 +248,12 @@ FRESH_START=no
 TONE_MAPPING=yes
 KEEP_INTERMEDIATES=no
 FINAL_ENCODING=no
-ANIMATION=no
 GRAIN=no
-HIGHMOTION=no
 MEMORY_HIGH=""
 REPORT_ONLY=no
 BLURAY_PLAYLIST=""
 VIDEO_CODEC=""
-while getopts ":o:O:i:N:s:M:P:c:rFTkvShQEagHR" ARG
+while getopts ":o:O:i:N:s:M:P:c:rFTkvShQEgR" ARG
 do
   case "${ARG}" in
         i)
@@ -293,14 +289,8 @@ do
         E)
             FINAL_ENCODING=yes
             ;;
-        a)
-            ANIMATION=yes
-            ;;
         g)
             GRAIN=yes
-            ;;
-        H)
-            HIGHMOTION=yes
             ;;
         r)
             # the default now; still accepted, so existing commands keep working
@@ -503,9 +493,9 @@ esac
 
 if [[ ${FINAL_ENCODING} == no ]]
 then
-  if [[ ${ANIMATION} == yes ]] || [[ ${GRAIN} == yes ]] || [[ ${HIGHMOTION} == yes ]]
+  if [[ ${GRAIN} == yes ]]
   then
-    error "  -a, -g and -H choose the profile of the final encode, so they need -E"
+    error "  -g chooses the profile of the final encode, so it needs -E"
     ERROR_CODE="2"
     failed
   fi
@@ -1197,11 +1187,16 @@ removing_earlier_results()
   }
 
 # Profile (OPTIMIZATION) of an encoded part: line 2 of its .done marker; markers of older runs
-# have only the movie name
+# have only the movie name. animation and highmotion (-a, -H, removed 22 Nov) encoded exactly as
+# film (their HandBrake tunes did nothing), so they count as film
 encoded_part_profile()
 {
   local PROFILE
   PROFILE="$(sed -n 2p "${1}" 2>/dev/null)"
+  if [[ ${PROFILE} == animation ]] || [[ ${PROFILE} == highmotion ]]
+  then
+    PROFILE="film"
+  fi
   echo "${PROFILE:-unknown}"
   }
 

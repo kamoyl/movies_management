@@ -2076,21 +2076,14 @@ subtitles_management()
 }
 
 # HandBrake settings shared by movies_encoding (-e) and interpolation_nncn (-E): destination,
-# profile (ANIMATION/GRAIN/HIGHMOTION, film by default) and encoder options
+# profile (grain with -g, film by default) and encoder options
 handbrake_encode_settings()
 {
   # can be overridden from the environment, e.g. DESTINATION_DIR=/media/other ./movies_encoding ...
   DESTINATION_DIR="${DESTINATION_DIR:-/media/ready}"
-  if [[ ${ANIMATION} == yes ]]
-  then
-    # doc: https://keithwiley.com/astroPhotography/imageSharpening.shtml
-    OPTIMIZATION="animation"
-  elif [[ ${GRAIN} == yes ]]
+  if [[ ${GRAIN} == yes ]]
   then
     OPTIMIZATION="grain"
-  elif [[ ${HIGHMOTION} == yes ]]
-  then
-    OPTIMIZATION="highmotion"
   else
     OPTIMIZATION="film"
   fi
@@ -2098,14 +2091,14 @@ handbrake_encode_settings()
   # x265 (-c x265 below): aq-mode=4 from aq-mode=1
   # --cqp 1-70 (ffmpeg) -> --quality 22 (HandBrake)
   # --input-depth {8, 10}, default is 10bit, and to do 10bit out of 8bit source, it needs conversion first, or svt_av1_10bit -> svt_av1
-  # VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts aq-mode=2)
-  # VIDEO_ENCODER=(svt_av1 -quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts rc=1:tune=0:enable-overlays=1:scd=1)
+  # VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --encopts aq-mode=2)
+  # VIDEO_ENCODER=(svt_av1 -quality 22 --encoder-preset 5 --encopts rc=1:tune=0:enable-overlays=1:scd=1)
   
   # enable-overlays=1 deadlocks SVT-AV1 3.1.2 (HandBrake 20240621) at the end of some chunks (hang at 99.96%);
   # overlays off: same VMAF (-0.006), ~0.1% smaller, ~2% faster
-  # --nlmeans-tune/--lapsharp-tune only tune the denoise/sharpen filters, which are not enabled
-  # (no --nlmeans/--lapsharp), so they change nothing: HandBrake's filter list is the same for
-  # every profile (checked 22 Nov)
+  # no --nlmeans-tune/--lapsharp-tune (removed 22 Nov with -a and -H): they only tune the
+  # denoise/sharpen filters, which were never enabled (no --nlmeans/--lapsharp), so they changed
+  # nothing; HandBrake's filter list was the same for every profile
   # grain profile (-g), AV1 only: SVT-AV1 removes the grain before encoding and the player adds a
   # synthetic one back; film-grain-denoise=1 is needed (SVT-AV1 3.x default 0 keeps the grain and
   # adds the synthetic one on top: no smaller file, +72 % time). Measured 22 Nov on 3 min clips:
@@ -2115,7 +2108,7 @@ handbrake_encode_settings()
   # VIDEO_CODEC: interpolation_nncn -c (av1 by default, also for movies_encoding)
   if [[ ${VIDEO_CODEC:-av1} == x265 ]]
   then
-    VIDEO_ENCODER=(x265_10bit --quality 18 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts strong-intra-smoothing=0:rect=0:aq-mode=4)
+    VIDEO_ENCODER=(x265_10bit --quality 18 --encopts strong-intra-smoothing=0:rect=0:aq-mode=4)
     if [[ ${OPTIMIZATION} == grain ]]
     then
       # x265 has no grain synthesis; its tune=grain keeps the grain with more bits (bigger files)
@@ -2126,7 +2119,7 @@ handbrake_encode_settings()
     then
       AV1_OPTIONS="${AV1_OPTIONS}:film-grain=8:film-grain-denoise=1"
     fi
-    VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune ${OPTIMIZATION} --lapsharp-tune ${OPTIMIZATION} --encopts "${AV1_OPTIONS}")
+    VIDEO_ENCODER=(svt_av1_10bit --quality 22 --encoder-preset 5 --encopts "${AV1_OPTIONS}")
   fi
   AUDIO_ENCODER="copy"
   }

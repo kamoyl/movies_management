@@ -47,7 +47,7 @@ usage()
   fi
 echo "
 ${CYAN}Usage:${BRIGHT}${WHITE}
-$0 -i FILE [ -I imdb_id ] [ -o var ] [ -a ] [ -g ] [ -H ] [ -u ] [ -e ] [ -v ] [ -h ]
+$0 -i FILE [ -I imdb_id ] [ -o var ] [ -g ] [ -u ] [ -e ] [ -v ] [ -h ]
 
     ${NORMAL}${CYAN}Description: collects movie metadata (local file, OMDb, TheMovieDB), optionally updates the MKV
           and its related files, and optionally starts a HandBrake encode.
@@ -57,10 +57,8 @@ $0 -i FILE [ -I imdb_id ] [ -o var ] [ -a ] [ -g ] [ -H ] [ -u ] [ -e ] [ -v ] [
     ${LIME}-I${DODGERBLUE1}  IMDb ID (tt...) or TheMovieDB ID
     ${LIME}-o${DODGERBLUE1}  workspace root for temporary files and logs
           (default directory is: ${CYAN}${HOME}/var${DODGERBLUE1}; TMP and LOG are created inside it for every run)
-    ${LIME}-a${DODGERBLUE1}  use the animation encoding profile
     ${LIME}-g${DODGERBLUE1}  use the grain encoding profile; AV1 only: the grain is removed before encoding and
           the player adds a synthetic one back (about 20-30 % smaller; encode 65-90 % slower at 1080p, about 2.8x at 4K)
-    ${LIME}-H${DODGERBLUE1}  use the high-motion encoding profile
     ${LIME}-u${DODGERBLUE1}  update MKV metadata and related file attributes
     ${LIME}-e${DODGERBLUE1}  start the configured HandBrake encode in the background
     ${LIME}-v${DODGERBLUE1}  verbose diagnostics
@@ -82,22 +80,14 @@ else
   fi
 fi
 
-ANIMATION=no
 GRAIN=no
 ENCODING=no
 UPDATE=no
-HIGHMOTION=no
-while getopts ":I:i:o:Haguvhe" ARG
+while getopts ":I:i:o:guvhe" ARG
 do
   case "${ARG}" in
-        a)
-            ANIMATION=yes
-            ;;
         g)
             GRAIN=yes
-            ;;
-        H)
-            HIGHMOTION=yes
             ;;
         e)  ENCODING=yes
             ;;

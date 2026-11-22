@@ -107,6 +107,8 @@ do
   assert_contains "${SCRIPT_NAME} -h shows its own name" "${OUTPUT}" "${SCRIPT_NAME} -i FILE"
   TERM=dumb bash "${REPO_ROOT}/${SCRIPT_NAME}" -z > /dev/null 2>&1
   assert_status   "${SCRIPT_NAME} rejects an unknown option with 2" 2 $?
+  TERM=dumb bash "${REPO_ROOT}/${SCRIPT_NAME}" -a > /dev/null 2>&1
+  assert_status   "${SCRIPT_NAME} rejects the removed -a with 2" 2 $?
   TERM=dumb bash "${REPO_ROOT}/${SCRIPT_NAME}" -i > /dev/null 2>&1
   assert_status   "${SCRIPT_NAME} rejects -i without a value with 2" 2 $?
 done
@@ -923,7 +925,7 @@ OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; VI
 assert_contains "-c x265 encodes with HandBrake's x265 10-bit" "${OUTPUT}" "--encoder x265_10bit --quality 18"
 assert_contains "the encoded part's marker names its encoder (line 3)" "${OUTPUT}" "CODEC=x265"
 OUTPUT="$(run_with_helpers 'GRAIN=yes; handbrake_encode_settings; echo "GRAIN_AV1=${VIDEO_ENCODER[*]}"; GRAIN=no; handbrake_encode_settings; echo "FILM_AV1=${VIDEO_ENCODER[*]}"; GRAIN=yes; VIDEO_CODEC=x265; handbrake_encode_settings; echo "GRAIN_X265=${VIDEO_ENCODER[*]}"' 2>&1)"
-assert_contains "-g with AV1 removes the grain and lets the player add it back" "${OUTPUT}" "GRAIN_AV1=svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune grain --lapsharp-tune grain --encopts tune=0:enable-overlays=0:aq-mode=2:film-grain=8:film-grain-denoise=1"
+assert_contains "-g with AV1 removes the grain and lets the player add it back" "${OUTPUT}" "GRAIN_AV1=svt_av1_10bit --quality 22 --encoder-preset 5 --encopts tune=0:enable-overlays=0:aq-mode=2:film-grain=8:film-grain-denoise=1"
 if [[ ${OUTPUT} == *FILM_AV1=*film-grain* ]]; then fail "without -g AV1 gets no film grain"; else pass "without -g AV1 gets no film grain"; fi
 if [[ ${OUTPUT} == *GRAIN_X265=*film-grain* ]]; then fail "-g with x265 gets no AV1 film grain option"; else pass "-g with x265 gets no AV1 film grain option"; fi
 assert_contains "-g with x265 warns that it changes nothing" "${OUTPUT}" "the grain profile (-g) changes nothing with x265"
@@ -947,7 +949,7 @@ OUTPUT="$(PATH="${WORK_DIR}/hbbin:${WORK_DIR}/vmafbin:${PATH}" run_with_helpers 
 assert_contains "-Q: VMAF of the encoded part follows its encode" "${OUTPUT}" "MEAN=95.5"
 assert_contains "-Q: the reference is cropped like the encode" "${OUTPUT}" "[1:v]crop=iw-0-0:ih-8-4:0:8,setpts="
 OUTPUT="$(run_with_helpers 'GRAIN=yes; unset DESTINATION_DIR; handbrake_encode_settings; echo "DEST=${DESTINATION_DIR} ${VIDEO_ENCODER[*]}"; DESTINATION_DIR=/x; handbrake_encode_settings; echo "OVERRIDE=${DESTINATION_DIR}"' 2>&1)"
-assert_contains "shared settings: profile and default destination" "${OUTPUT}" "DEST=/media/ready svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune grain"
+assert_contains "shared settings: profile and default destination" "${OUTPUT}" "DEST=/media/ready svt_av1_10bit --quality 22 --encoder-preset 5 --encopts tune=0:enable-overlays=0:aq-mode=2:film-grain=8"
 assert_contains "shared settings: DESTINATION_DIR can be overridden" "${OUTPUT}" "OVERRIDE=/x"
 OUTPUT="$(TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -h 2>&1)"
 assert_contains "interpolation_nncn -h documents -E (final encode)" "${OUTPUT}" "-E  final encode"
@@ -1008,6 +1010,8 @@ assert_status   "the run stops with 1 after a failed encode" 1 "${STATUS}"
 assert_contains "the stop tells how to continue" "${OUTPUT}" "run again with"
 OUTPUT="$(run_with_helpers "${STOP_SETUP}"'; printf "M\ngrain\n" > new.done; echo M > old.done; echo "NEW=$(encoded_part_profile new.done) OLD=$(encoded_part_profile old.done)"' 2>&1)"
 assert_contains "the profile is read from the marker, unknown for older markers" "${OUTPUT}" "NEW=grain OLD=unknown"
+OUTPUT="$(run_with_helpers "${STOP_SETUP}"'; printf "M\nanimation\n" > a.done; printf "M\nhighmotion\n" > h.done; echo "A=$(encoded_part_profile a.done) H=$(encoded_part_profile h.done)"' 2>&1)"
+assert_contains "parts of the removed -a/-H profiles count as film (they were encoded the same)" "${OUTPUT}" "A=film H=film"
 # the run stops only after the chunk processed alongside the failed encode is marked as done
 LINE_MARK="$(grep -n '_merged.mkv.done"$' "${REPO_ROOT}/interpolation_nncn" | tail -n1 | cut -d: -f1)"
 LINE_STOP="$(awk -v M="${LINE_MARK}" 'NR > M && /^done$/ { exit } NR > M && /^ +stopping_after_failed_encode$/ { print NR; exit }' "${REPO_ROOT}/interpolation_nncn")"
