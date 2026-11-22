@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- README: Planned item 10, free space at the destination ([98fb635](https://github.com/kamoyl/movies_management/commit/98fb63580011424d62718828b446b87f52d23cc7) by Kamoyl).
 - VMAF models: why the model follows the resolution (README and code comment) ([3af4112](https://github.com/kamoyl/movies_management/commit/3af4112c79f79f96ee4488c0154dd0508f82ca86) by Kamoyl).
 - interpolation_nncn help: options named inside descriptions in the option colour ([6ba25ff](https://github.com/kamoyl/movies_management/commit/6ba25ffcb95dc294cfa02bb735afe5fd11b52b9f) by Kamoyl).
 - VMAF model by resolution: vmaf_4k_v0.6.1 above 1080p, named in log and report ([0ee93c4](https://github.com/kamoyl/movies_management/commit/0ee93c4f500970e654a9846622312c9f0dcf18aa) by Kamoyl).
