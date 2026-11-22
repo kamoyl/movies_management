@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- -g: film grain synthesis for AV1 (opt-in), and -g's real effect corrected ([f3e8bd7](https://github.com/kamoyl/movies_management/commit/f3e8bd70824db964872b7de07a8452ad2004adca) by Kamoyl).
 - README: Planned item 10, free space at the destination ([98fb635](https://github.com/kamoyl/movies_management/commit/98fb63580011424d62718828b446b87f52d23cc7) by Kamoyl).
 - VMAF models: why the model follows the resolution (README and code comment) ([3af4112](https://github.com/kamoyl/movies_management/commit/3af4112c79f79f96ee4488c0154dd0508f82ca86) by Kamoyl).
 - interpolation_nncn help: options named inside descriptions in the option colour ([6ba25ff](https://github.com/kamoyl/movies_management/commit/6ba25ffcb95dc294cfa02bb735afe5fd11b52b9f) by Kamoyl).
