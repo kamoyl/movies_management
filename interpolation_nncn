@@ -1442,6 +1442,23 @@ fi
 # ffmpeg filters needed for this video and options (tone mapping, VMAF), checked before any work
 ffmpeg_feature_checks "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
 
+# one VMAF model for the whole run, by the movie's resolution (scores of the two models differ,
+# so the report column names it)
+VMAF_MODEL=""
+VMAF_MODEL_NAME=""
+VMAF_COLUMN="VMAF [mean]"
+if [[ ${QUALITY_CHECK} == yes ]]
+then
+  choosing_vmaf_model "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
+  VMAF_COLUMN="VMAF [mean, ${VMAF_MODEL_NAME}]"
+  inf "  VMAF model: ${YELLOW}${VMAF_MODEL_NAME}${CYAN} (${VMAF_MODEL})"
+  # with NCNN the reference is tone-mapped to SDR like the frames, without (-N none, -T) it stays HDR
+  if [[ ${VMAF_VIDEO_HDR} == yes ]] && { [[ ${NCNN_METHOD} == none ]] || [[ ${TONE_MAPPING} == no ]]; }
+  then
+    warn "  HDR video compared as HDR: the VMAF models are trained on SDR, so its scores are a guide only (fine for comparing parts or runs, not as an absolute grade)"
+  fi
+fi
+
 if [[ ${FINAL_ENCODING} == yes ]]
 then
   # sets DESTINATION_DIR, VIDEO_ENCODER and AUDIO_ENCODER (shared with movies_encoding)
@@ -1518,7 +1535,7 @@ then
   starting_split "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv" "${LOG}/${WHOLE_MOVIE_NAME_ARRAY[*]}_splitting_video.log"
 fi
 
-echo "video_id~extracting_streams_runtime~extracting_frames_runtime~interpolating_runtime~merging_frames_runtime~merging_streams_runtime~encoding_runtime~quality_check_runtime~max_space [GB]~max_space [%]~VMAF [mean]~runtime~gpus" > "${TMP}/statistics.txt"
+echo "video_id~extracting_streams_runtime~extracting_frames_runtime~interpolating_runtime~merging_frames_runtime~merging_streams_runtime~encoding_runtime~quality_check_runtime~max_space [GB]~max_space [%]~${VMAF_COLUMN}~runtime~gpus" > "${TMP}/statistics.txt"
 echo "video_id~step~start~end~start_epoch~end_epoch~duration [s]~chunk [%]" > "${TMP}/timeline.csv"
 for VIDEO_FRAGMENT_ID in $(seq -w ${SPLIT_PART_START} ${LAST_VIDEO_FRAGMENT_ID})
 do

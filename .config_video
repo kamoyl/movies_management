@@ -2209,6 +2209,44 @@ encoding_process()
   fi
   }
 
+# choosing_vmaf_model VIDEO_FILE sets the VMAF model for the video's resolution:
+#   VMAF_MODEL_NAME - vmaf_4k_v0.6.1 above 1080p (wider than 1920 or taller than 1080, so a
+#                     cropped 4K film still counts as 4K), vmaf_v0.6.1 otherwise (also when the
+#                     size cannot be read); the 4K model assumes a 4K screen seen from 1.5 times
+#                     its height, the other one a 1080p screen from 3 times its height
+#   VMAF_MODEL      - the libvmaf model option: the model file of the Linux packages, otherwise
+#                     the model built into libvmaf (e.g. Homebrew)
+#   VMAF_VIDEO_HDR  - yes for a PQ or HLG video: the models are trained on SDR, so VMAF of an HDR
+#                     video that is not tone-mapped is a guide only
+choosing_vmaf_model()
+{
+  if [ $# -ne 1 ]
+  then
+    error "Function ${LIME}${FUNCNAME[0]}${RED} needs one parameter: ${YELLOW}VIDEO_FILE"
+    ERROR_CODE="1"
+    failed
+  fi
+  local VIDEO_WIDTH
+  local VIDEO_HEIGHT
+  local VIDEO_TRANSFER
+  IFS=, read -r VIDEO_WIDTH VIDEO_HEIGHT VIDEO_TRANSFER <<< "$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height,color_transfer -of csv=p=0 "${1}" 2>/dev/null | head -n1)"
+  VMAF_MODEL_NAME="vmaf_v0.6.1"
+  if [[ ${VIDEO_WIDTH} =~ ^[0-9]+$ ]] && [[ ${VIDEO_HEIGHT} =~ ^[0-9]+$ ]] && { [ "${VIDEO_WIDTH}" -gt 1920 ] || [ "${VIDEO_HEIGHT}" -gt 1080 ]; }
+  then
+    VMAF_MODEL_NAME="vmaf_4k_v0.6.1"
+  fi
+  VMAF_MODEL="version=${VMAF_MODEL_NAME}"
+  if [ -s "/usr/share/model/${VMAF_MODEL_NAME}.json" ]
+  then
+    VMAF_MODEL="path=/usr/share/model/${VMAF_MODEL_NAME}.json"
+  fi
+  VMAF_VIDEO_HDR="no"
+  if [[ ${VIDEO_TRANSFER} == smpte2084 ]] || [[ ${VIDEO_TRANSFER} == arib-std-b67 ]]
+  then
+    VMAF_VIDEO_HDR="yes"
+  fi
+  }
+
 # VMAF of a processed chunk runs in two steps, so it can run alongside the next chunk:
 #   starting_quality_metric ENCODED REFERENCE - starts VMAF in the background and returns at once
 #   finishing_quality_metric                   - waits for it, sets VMAF_MIN/MAX/MEAN and
@@ -2248,11 +2286,10 @@ starting_quality_metric()
   then
     REFERENCE_FILTER="${REFERENCE_FILTER}${VMAF_REFERENCE_CROP},"
   fi
-  # the model file of the Linux packages, otherwise the model built into libvmaf (e.g. Homebrew)
-  local VMAF_MODEL="version=vmaf_v0.6.1"
-  if [ -s /usr/share/model/vmaf_v0.6.1.json ]
+  # the model is chosen once per run (choosing_vmaf_model), otherwise here from the reference
+  if [ -z "${VMAF_MODEL}" ]
   then
-    VMAF_MODEL="path=/usr/share/model/vmaf_v0.6.1.json"
+    choosing_vmaf_model "${REFERENCE_VIDEO_FILE}"
   fi
   local VMAF_FILES="${ENCODED_VIDEO_FILE}-${REFERENCE_VIDEO_FILE}"
   # shortest=1: frames recovered at an open-GOP split (recovering_lost_frames) end the processed
@@ -2332,7 +2369,7 @@ finishing_quality_metric()
     VMAF_MAX="$(jq -r '.pooled_metrics.vmaf.max' "${LOG}/${VMAF_FILES}_vmaf.json")"
     VMAF_MEAN="$(jq -r '.pooled_metrics.vmaf.mean' "${LOG}/${VMAF_FILES}_vmaf.json")"
   fi
-  inf "    VMAF of ${YELLOW}${ENCODED_VIDEO_FILE}${CYAN}: mean ${DARKCYAN}${VMAF_MEAN}${CYAN}, took ${DARKCYAN}${QUALITY_METRIC_RUNTIME}"
+  inf "    VMAF (${VMAF_MODEL_NAME}) of ${YELLOW}${ENCODED_VIDEO_FILE}${CYAN}: mean ${DARKCYAN}${VMAF_MEAN}${CYAN}, took ${DARKCYAN}${QUALITY_METRIC_RUNTIME}"
   }
 
 encoding_quality_metric()

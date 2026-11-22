@@ -314,6 +314,31 @@ assert_contains "VMAF model: package file, otherwise built into libvmaf" "${OUTP
 OUTPUT="$(PATH="${WORK_DIR}/vmafbin:${PATH}" run_with_helpers 'TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; TARGET_FRAME_COUNT=2; INTER_FRAMES_COUNT=2880; INPUT_FPS=23.976; TONE_MAPPING_FILTER="libplacebo=tm"; encoding_quality_metric merged.mkv original.mkv; cat graph.txt' 2>&1)"
 assert_contains "HDR: the reference is tone-mapped like the extracted frames" "${OUTPUT}" "[1:v]libplacebo=tm,setpts=N/(23.976*TB)[reference]"
 
+echo "VMAF model by resolution (choosing_vmaf_model)"
+mkdir -p "${WORK_DIR}/modelbin"
+cat > "${WORK_DIR}/modelbin/ffprobe" <<'EOF'
+#!/usr/bin/env bash
+# fake ffprobe: the video's "width,height,transfer" is the file's name (no file: probe fails)
+for LAST; do :; done
+[ -e "${LAST}" ] || exit 1
+printf '%s\n' "$(basename "${LAST}" .mkv)"
+EOF
+chmod +x "${WORK_DIR}/modelbin/ffprobe"
+MODEL_SHOW='; echo "${VMAF_MODEL_NAME} ${VMAF_MODEL} HDR=${VMAF_VIDEO_HDR}"'
+OUTPUT="$(PATH="${WORK_DIR}/modelbin:${PATH}" run_with_helpers 'touch 3840,2160,smpte2084.mkv; choosing_vmaf_model 3840,2160,smpte2084.mkv'"${MODEL_SHOW}" 2>&1)"
+assert_contains "4K HDR: the 4K model, HDR noted" "${OUTPUT}" "vmaf_4k_v0.6.1 "
+assert_contains "4K HDR: HDR noted" "${OUTPUT}" "HDR=yes"
+OUTPUT="$(PATH="${WORK_DIR}/modelbin:${PATH}" run_with_helpers 'touch 3840,1600,bt709.mkv; choosing_vmaf_model 3840,1600,bt709.mkv'"${MODEL_SHOW}" 2>&1)"
+assert_contains "a cropped 4K film (3840x1600) still gets the 4K model" "${OUTPUT}" "vmaf_4k_v0.6.1 "
+OUTPUT="$(PATH="${WORK_DIR}/modelbin:${PATH}" run_with_helpers 'touch 1920,1080,bt709.mkv; choosing_vmaf_model 1920,1080,bt709.mkv'"${MODEL_SHOW}" 2>&1)"
+assert_contains "1080p SDR: the standard model, no HDR" "${OUTPUT}" "vmaf_v0.6.1 "
+assert_contains "1080p SDR: no HDR" "${OUTPUT}" "HDR=no"
+OUTPUT="$(PATH="${WORK_DIR}/modelbin:${PATH}" run_with_helpers 'choosing_vmaf_model missing.mkv'"${MODEL_SHOW}" 2>&1)"
+assert_contains "an unreadable size falls back to the standard model" "${OUTPUT}" "vmaf_v0.6.1 "
+if [ -s /usr/share/model/vmaf_4k_v0.6.1.json ]; then EXPECTED_MODEL="model=path=/usr/share/model/vmaf_4k_v0.6.1.json:"; else EXPECTED_MODEL="model=version=vmaf_4k_v0.6.1:"; fi
+OUTPUT="$(PATH="${WORK_DIR}/vmafbin:${WORK_DIR}/modelbin:${PATH}" run_with_helpers 'TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; touch 3840,2160,bt709.mkv; INTER_FRAMES_COUNT=1440; INPUT_FPS=23.976; encoding_quality_metric merged.mkv 3840,2160,bt709.mkv; cat graph.txt' 2>&1)"
+assert_contains "without a run-wide model VMAF chooses it from the reference" "${OUTPUT}" "${EXPECTED_MODEL}"
+
 echo "VMAF in the background (starting_quality_metric / finishing_quality_metric)"
 mkdir -p "${WORK_DIR}/slowvmafbin"
 cat > "${WORK_DIR}/slowvmafbin/ffmpeg" <<'EOF'
