@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- VMAF models: why the model follows the resolution (README and code comment) ([3af4112](https://github.com/kamoyl/movies_management/commit/3af4112c79f79f96ee4488c0154dd0508f82ca86) by Kamoyl).
 - interpolation_nncn help: options named inside descriptions in the option colour ([6ba25ff](https://github.com/kamoyl/movies_management/commit/6ba25ffcb95dc294cfa02bb735afe5fd11b52b9f) by Kamoyl).
 - VMAF model by resolution: vmaf_4k_v0.6.1 above 1080p, named in log and report ([0ee93c4](https://github.com/kamoyl/movies_management/commit/0ee93c4f500970e654a9846622312c9f0dcf18aa) by Kamoyl).
 - README: -N none VMAF overlap measured (3.8 %, below 10 %), comparison done ([2a27db9](https://github.com/kamoyl/movies_management/commit/2a27db91864f097a067e2380e73e3376230bef66) by Kamoyl).
