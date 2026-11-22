@@ -123,7 +123,8 @@ $0 -R -i FILE [ -o var ] [ -v ]
             ${DODGERBLUE1}every part of one movie must have the same encoder: a part encoded with another one
             is done again
       ${LIME}-a${DODGERBLUE1}  with ${LIME}-E${DODGERBLUE1}: animation encoding profile
-      ${LIME}-g${DODGERBLUE1}  with ${LIME}-E${DODGERBLUE1}: grain encoding profile
+      ${LIME}-g${DODGERBLUE1}  with ${LIME}-E${DODGERBLUE1}: grain encoding profile; AV1 only: the grain is removed before encoding and
+          the player adds a synthetic one back (about 20-30 % smaller; encode 65-90 % slower at 1080p, about 2.8x at 4K)
       ${LIME}-H${DODGERBLUE1}  with ${LIME}-E${DODGERBLUE1}: high-motion encoding profile
     ${LIME}-S${DODGERBLUE1}  silent: runs in the background as a systemd service (system slice, as your user;
           needs root or sudo), so it survives closing the terminal or a logout; prints the unit

@@ -922,6 +922,11 @@ if [[ ${OUTPUT} == *MERGED_MARKER_KEPT* ]]; then fail "the merged part's marker 
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; VIDEO_CODEC=x265; handbrake_encode_settings; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; echo "CODEC=$(sed -n 3p p_encoded.mkv.done)"; tr "\n" " " < hb_args.txt' 2>&1)"
 assert_contains "-c x265 encodes with HandBrake's x265 10-bit" "${OUTPUT}" "--encoder x265_10bit --quality 18"
 assert_contains "the encoded part's marker names its encoder (line 3)" "${OUTPUT}" "CODEC=x265"
+OUTPUT="$(run_with_helpers 'GRAIN=yes; handbrake_encode_settings; echo "GRAIN_AV1=${VIDEO_ENCODER[*]}"; GRAIN=no; handbrake_encode_settings; echo "FILM_AV1=${VIDEO_ENCODER[*]}"; GRAIN=yes; VIDEO_CODEC=x265; handbrake_encode_settings; echo "GRAIN_X265=${VIDEO_ENCODER[*]}"' 2>&1)"
+assert_contains "-g with AV1 removes the grain and lets the player add it back" "${OUTPUT}" "GRAIN_AV1=svt_av1_10bit --quality 22 --encoder-preset 5 --nlmeans-tune grain --lapsharp-tune grain --encopts tune=0:enable-overlays=0:aq-mode=2:film-grain=8:film-grain-denoise=1"
+if [[ ${OUTPUT} == *FILM_AV1=*film-grain* ]]; then fail "without -g AV1 gets no film grain"; else pass "without -g AV1 gets no film grain"; fi
+if [[ ${OUTPUT} == *GRAIN_X265=*film-grain* ]]; then fail "-g with x265 gets no AV1 film grain option"; else pass "-g with x265 gets no AV1 film grain option"; fi
+assert_contains "-g with x265 warns that it changes nothing" "${OUTPUT}" "the grain profile (-g) changes nothing with x265"
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; echo 0.042000 > start.txt; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; echo "MUX: $(tr "\n" " " < mux_args.txt)"' 2>&1)"
 assert_contains "the encoded video starts where the merged part's video starts" "${OUTPUT}" "MUX: -o p_encoded.mkv --sync 0:42 p_encoded_video_only.mkv -D"
 OUTPUT="$(PATH="${WORK_DIR}/hbbin:${PATH}" run_with_helpers "${PART_SETUP}"'; KEEP_INTERMEDIATES=yes; echo "My Movie" > p_merged.mkv.done; starting_part_encoding p_merged.mkv p_encoded.mkv ""; finishing_part_encoding; if [ -e p_merged.mkv ] && [ -e p_merged.mkv.done ]; then echo MERGED_KEPT; fi' 2>&1)"
