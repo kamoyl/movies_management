@@ -2213,7 +2213,11 @@ encoding_process()
 #   VMAF_MODEL_NAME - vmaf_4k_v0.6.1 above 1080p (wider than 1920 or taller than 1080, so a
 #                     cropped 4K film still counts as 4K), vmaf_v0.6.1 otherwise (also when the
 #                     size cannot be read); the 4K model assumes a 4K screen seen from 1.5 times
-#                     its height, the other one a 1080p screen from 3 times its height
+#                     its height, the other one a 1080p screen from 3 times its height; their
+#                     scores differ by a varying amount (Project Hail Mary 4K, 1080p -> 4K model:
+#                     worst part 81.45 -> 86.75, median 90.08 -> 93.18, a good clip 95.35 -> 98.25),
+#                     so the order of parts stays but the distances do not: scores are compared
+#                     only within one model, which is why the model is named next to them
 #   VMAF_MODEL      - the libvmaf model option: the model file of the Linux packages, otherwise
 #                     the model built into libvmaf (e.g. Homebrew)
 #   VMAF_VIDEO_HDR  - yes for a PQ or HLG video: the models are trained on SDR, so VMAF of an HDR
