@@ -82,7 +82,7 @@ $0 -R -i FILE [ -o var ] [ -v ]
 
     ${LIME}-i${DODGERBLUE1}  input video (required; MP4 input is converted to MKV), or a Blu-ray folder (with BDMV/):
           its longest playlist is converted to <folder>.mkv first (mkvmerge: chapters, languages)
-    ${LIME}-P${DODGERBLUE1}  with a Blu-ray folder: the playlist to convert instead of the longest, e.g. [-P 00800]
+    ${LIME}-P${DODGERBLUE1}  with a Blu-ray folder: the playlist to convert instead of the longest, e.g. [${LIME}-P${DODGERBLUE1} 00800]
           (BDMV/PLAYLIST/00800.mpls; the run lists the longest playlists)
     ${LIME}-N${DODGERBLUE1}  NCNN/Vulkan method (default: ${CYAN}rife${DODGERBLUE1}); supported by this script:
                      ${ORANGERED1}rife        ${DARKCYAN}- Real-Time Intermediate Flow Estimation (frame interpolation)    ${DEEPPINK1}(https://github.com/nihui/rife-ncnn-vulkan)
@@ -102,37 +102,37 @@ $0 -R -i FILE [ -o var ] [ -v ]
           (default directory is: ${CYAN}${HOME}/var${DODGERBLUE1}; TMP and LOG are created inside it for every run)
     ${LIME}-O${DODGERBLUE1}  separate root for extracted and processed frame data (performance of IOPs is crucial)
           (default: same as ${CYAN}-o${DODGERBLUE1})
-    ${LIME}-s${DODGERBLUE1}  first three-digit chunk number to process, for example [-s 003] (default: ${CYAN}001${DODGERBLUE1})
+    ${LIME}-s${DODGERBLUE1}  first three-digit chunk number to process, for example [${LIME}-s${DODGERBLUE1} 003] (default: ${CYAN}001${DODGERBLUE1})
     ${LIME}-F${DODGERBLUE1}  fresh start: by default a run resumes, it skips chunks already finished by an earlier
-          run of the same movie and method in this directory; -F removes those results (with -s:
+          run of the same movie and method in this directory; ${LIME}-F${DODGERBLUE1} removes those results (with ${LIME}-s${DODGERBLUE1}:
           from that chunk on) and processes the movie again
-    ${LIME}-r${DODGERBLUE1}  resume (the default; still accepted, cannot be combined with -F)
+    ${LIME}-r${DODGERBLUE1}  resume (the default; still accepted, cannot be combined with ${LIME}-F${DODGERBLUE1})
     ${LIME}-T${DODGERBLUE1}  no tone mapping: an HDR video is processed as HDR, without conversion to SDR
           (colours of the processed frames may differ; a warning is shown)
-    ${LIME}-k${DODGERBLUE1}  keep intermediate files of finished chunks (the frames-only video in -O and the
+    ${LIME}-k${DODGERBLUE1}  keep intermediate files of finished chunks (the frames-only video in ${LIME}-O${DODGERBLUE1} and the
           chunk's frame directories); by default they are removed once the chunk is done
     ${LIME}-Q${DODGERBLUE1}  calculate VMAF (quality check) for each processed chunk (in the background, alongside the next chunk);
-          with -E it measures the final encode of the chunk against the source chunk
+          with ${LIME}-E${DODGERBLUE1} it measures the final encode of the chunk against the source chunk
     ${LIME}-E${DODGERBLUE1}  final encode: encodes each processed chunk with HandBrake (the movies_encoding settings), in the
-          background, removes its merged part (kept with -k), and at the end joins the encoded parts
+          background, removes its merged part (kept with ${LIME}-k${DODGERBLUE1}), and at the end joins the encoded parts
           into DESTINATION_DIR/<input name>.mkv; the crop is detected once, on the whole input
-          a failed encode stops the run after the current chunk (run again with -E to continue)
-    ${LIME}-c${DODGERBLUE1}  with -E: video encoder of the final encode (default: ${CYAN}av1${DODGERBLUE1}):
+          a failed encode stops the run after the current chunk (run again with ${LIME}-E${DODGERBLUE1} to continue)
+      ${LIME}-c${DODGERBLUE1}  with ${LIME}-E${DODGERBLUE1}: video encoder of the final encode (default: ${CYAN}av1${DODGERBLUE1}):
                      ${ORANGERED1}av1         ${DARKCYAN}- SVT-AV1 10-bit (HandBrake svt_av1_10bit)
                      ${ORANGERED1}x265        ${DARKCYAN}- x265 10-bit / HEVC (HandBrake x265_10bit)
-          ${DODGERBLUE1}every part of one movie must have the same encoder: a part encoded with another one
-          is done again
-    ${LIME}-a${DODGERBLUE1}  with -E: animation encoding profile
-    ${LIME}-g${DODGERBLUE1}  with -E: grain encoding profile
-    ${LIME}-H${DODGERBLUE1}  with -E: high-motion encoding profile
+            ${DODGERBLUE1}every part of one movie must have the same encoder: a part encoded with another one
+            is done again
+      ${LIME}-a${DODGERBLUE1}  with ${LIME}-E${DODGERBLUE1}: animation encoding profile
+      ${LIME}-g${DODGERBLUE1}  with ${LIME}-E${DODGERBLUE1}: grain encoding profile
+      ${LIME}-H${DODGERBLUE1}  with ${LIME}-E${DODGERBLUE1}: high-motion encoding profile
     ${LIME}-S${DODGERBLUE1}  silent: runs in the background as a systemd service (system slice, as your user;
           needs root or sudo), so it survives closing the terminal or a logout; prints the unit
           name, its log (all output) and how to follow or stop it. systemctl stop runs the
           Ctrl+C cleanup. Without root or sudo it exits; run the script interactively then
-    ${LIME}-M${DODGERBLUE1}  with -S: MemoryHigh of the service (e.g. 20G or 50%): above it the processes are
-          slowed down (memory reclaimed) instead of being killed; no limit by default
+      ${LIME}-M${DODGERBLUE1}  with ${LIME}-S${DODGERBLUE1}: MemoryHigh of the service (e.g. 20G or 50%): above it the processes are
+            slowed down (memory reclaimed) instead of being killed; no limit by default
     ${LIME}-R${DODGERBLUE1}  report only: writes VAR/<input name>_report.xlsx from all runs of the video in the
-          workspace (-o) and does nothing else; the video itself is not needed anymore. A chunk
+          workspace (${LIME}-o${DODGERBLUE1}) and does nothing else; the video itself is not needed anymore. A chunk
           processed in several runs comes from the latest run in which it is complete
     ${LIME}-v${DODGERBLUE1}  verbose diagnostics
     ${LIME}-h${DODGERBLUE1}  this help${RESET}
