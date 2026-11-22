@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- VMAF model by resolution: vmaf_4k_v0.6.1 above 1080p, named in log and report ([0ee93c4](https://github.com/kamoyl/movies_management/commit/0ee93c4f500970e654a9846622312c9f0dcf18aa) by Kamoyl).
 - README: -N none VMAF overlap measured (3.8 %, below 10 %), comparison done ([2a27db9](https://github.com/kamoyl/movies_management/commit/2a27db91864f097a067e2380e73e3376230bef66) by Kamoyl).
 - -N none: encode each part from the whole movie, so open-GOP splits lose no frames ([a59a3c9](https://github.com/kamoyl/movies_management/commit/a59a3c94269c85a1dabc6a0bec3a177ad30fcb3a) by Kamoyl).
 - README: Planned 9, fix option 1 tested and frame-accurate ([8540887](https://github.com/kamoyl/movies_management/commit/85408875ec8f65acf9228dd6503186dbe3dde4ab) by Kamoyl).
