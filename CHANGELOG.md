@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- CHANGELOG: list "Documented" commits too ([cd475bf](https://github.com/kamoyl/movies_management/commit/cd475bf934611df7d359a71eae206eef6f44707a) by Kamoyl).
 - changelog_updating: working commit links for ssh-alias remotes ([e4e1a7e](https://github.com/kamoyl/movies_management/commit/e4e1a7e752b35be8901dc186f80dd14ba30ebc98) by Kamoyl).
 
 ### Removed
@@ -28,6 +29,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - Remove -a and -H, and the HandBrake tunes that never did anything ([e5a6378](https://github.com/kamoyl/movies_management/commit/e5a63784d72ee2c56618e76056996e453fa8d133) by Kamoyl).
 - Remove dead commented-out code from .config (shared) ([7a92934](https://github.com/kamoyl/movies_management/commit/7a9293408c19b4d309b2a281c1db8bb3d761ffdc) by Kamoyl).
 - Remove the tone_mapping_runtime statistics column ([fe3bc96](https://github.com/kamoyl/movies_management/commit/fe3bc96fc68ad85f91ab95cc6033d826fcb4338e) by Kamoyl).
+
+### Documented
+
+- docs: -g with interpolation costs +30 % wall time, saves 20 % size ([c9aadee](https://github.com/kamoyl/movies_management/commit/c9aadee7021bc552ae583f02b6aec385f8e7a11a) by Kamoyl).
 
 ### Misc
 
