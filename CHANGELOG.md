@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Misc
 
+- .config: external IP asked only with -v (shared with get-auditing) ([4785c4d](https://github.com/kamoyl/movies_management/commit/4785c4da8d1a691a6db35c7e7d578c447ddf3207) by Kamoyl).
 - Excel: encode and VMAF in the steps-per-chunk chart, striped ([14915d7](https://github.com/kamoyl/movies_management/commit/14915d72ef91d4b3df948909145daf61d5841cba) by Kamoyl).
 - README: Planned 11, estimated finish of the run (backlog) ([a5c527d](https://github.com/kamoyl/movies_management/commit/a5c527dbeabd0511bc0823bfd9c1caa2766a11d1) by Kamoyl).
 - Excel charts sheet layout, and a plainer final-encode message ([219fafb](https://github.com/kamoyl/movies_management/commit/219fafb6518ed6f4c753e69c895152edab88fe19) by Kamoyl).
