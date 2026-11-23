@@ -549,6 +549,13 @@ extracting_mkv_streams()
     ) &
   }
 
+# HDR is told by the transfer function, PQ (HDR10, Dolby Vision) or HLG; not by the primaries:
+# an SDR video often has none tagged (null, unknown), which the old "not bt709" rule took for HDR
+hdr_transfer()
+{
+  [[ ${1} == smpte2084 ]] || [[ ${1} == arib-std-b67 ]]
+  }
+
 converting_hdr2sdr()
 {
   if [ $# -ne 1 ]
@@ -574,10 +581,10 @@ converting_hdr2sdr()
   # that lossless x265 encode took ~2/3 of the stage, while libplacebo itself is fast
   TONE_MAPPING_FILTER=""
   # TONE_MAPPING=no comes from interpolation_nncn -T
-  if [[ ${COLOR_PRIMARIES} != "bt709" ]] && [[ ${TONE_MAPPING:-yes} == no ]]
+  if hdr_transfer "${COLOR_TRANSFER}" && [[ ${TONE_MAPPING:-yes} == no ]]
   then
-    warn "  HDR video (${COLOR_PRIMARIES}), but tone mapping is switched off (-T): frames are processed as HDR, colours may differ"
-  elif [[ ${COLOR_PRIMARIES} != "bt709" ]]
+    warn "  HDR video (${COLOR_TRANSFER}), but tone mapping is switched off (-T): frames are processed as HDR, colours may differ"
+  elif hdr_transfer "${COLOR_TRANSFER}"
   then
     inf "  tone mapping (HDR to SDR) is done during frames extraction"
     TONE_MAPPING_FILTER="libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:format=yuv420p"
@@ -1252,15 +1259,15 @@ ffmpeg_feature_checks()
 {
   local VIDEO_FILE="${1}"
   local FFMPEG_FILTERS
-  local INPUT_COLOR_PRIMARIES
+  local INPUT_COLOR_TRANSFER
   FFMPEG_FILTERS="$(ffmpeg -hide_banner -filters 2>/dev/null | awk '{print $2}')"
   if [[ ${TONE_MAPPING:-yes} != no ]]
   then
-    # the same rule as converting_hdr2sdr: everything not bt709 is tone-mapped
-    INPUT_COLOR_PRIMARIES="$(ffprobe -v error -select_streams v:0 -show_entries stream=color_primaries -of default=nw=1:nk=1 "${VIDEO_FILE}" 2>/dev/null)"
-    if [[ ${INPUT_COLOR_PRIMARIES} != "bt709" ]] && ! grep -qx libplacebo <<< "${FFMPEG_FILTERS}"
+    # the same rule as converting_hdr2sdr (hdr_transfer)
+    INPUT_COLOR_TRANSFER="$(ffprobe -v error -select_streams v:0 -show_entries stream=color_transfer -of default=nw=1:nk=1 "${VIDEO_FILE}" 2>/dev/null)"
+    if hdr_transfer "${INPUT_COLOR_TRANSFER}" && ! grep -qx libplacebo <<< "${FFMPEG_FILTERS}"
     then
-      error "  ${YELLOW}${VIDEO_FILE}${RED} is HDR (${INPUT_COLOR_PRIMARIES:-unknown}), but ffmpeg has no ${YELLOW}libplacebo${RED} filter for tone mapping (use -T to process it as HDR)"
+      error "  ${YELLOW}${VIDEO_FILE}${RED} is HDR (${INPUT_COLOR_TRANSFER}), but ffmpeg has no ${YELLOW}libplacebo${RED} filter for tone mapping (use -T to process it as HDR)"
       ERROR_CODE="127"
       failed
     fi
@@ -2256,7 +2263,7 @@ choosing_vmaf_model()
     VMAF_MODEL="path=/usr/share/model/${VMAF_MODEL_NAME}.json"
   fi
   VMAF_VIDEO_HDR="no"
-  if [[ ${VIDEO_TRANSFER} == smpte2084 ]] || [[ ${VIDEO_TRANSFER} == arib-std-b67 ]]
+  if hdr_transfer "${VIDEO_TRANSFER}"
   then
     VMAF_VIDEO_HDR="yes"
   fi

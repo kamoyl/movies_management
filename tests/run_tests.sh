@@ -269,6 +269,9 @@ assert_contains "default: no _sdr/_hdr copies are made" "${OUTPUT}" "hdr.mkv "
 if [[ ${OUTPUT} == *_sdr.mkv* || ${OUTPUT} == *_hdr.mkv* || ${OUTPUT} == *LINKED* ]]; then fail "default: chunk is left untouched" "${OUTPUT}"; else pass "default: chunk is left untouched"; fi
 OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers 'TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; MOVIE_NAME_ARRAY=(sdr); echo "{\"frames\":[{\"color_primaries\":\"bt709\"}]}" > "$TMP/sdr_mastering_display.json"; TONE_MAPPING_FILTER=stale; converting_hdr2sdr sdr; echo "FILTER=[${TONE_MAPPING_FILTER}]"' 2>&1)"
 assert_contains "SDR: no filter (a previous chunk's filter is cleared)" "${OUTPUT}" "FILTER=[]"
+OUTPUT="$(PATH="${WORK_DIR}/bin:${PATH}" run_with_helpers 'TMP="$PWD/t"; LOG="$PWD/log"; mkdir -p "$TMP" "$LOG"; MOVIE_NAME_ARRAY=(sdr); echo "{\"frames\":[{\"color_space\":\"bt470bg\",\"color_primaries\":null,\"color_transfer\":null}]}" > "$TMP/sdr_mastering_display.json"; converting_hdr2sdr sdr; echo "FILTER=[${TONE_MAPPING_FILTER}]"' 2>&1)"
+assert_contains "untagged SDR (no primaries, no transfer): no filter" "${OUTPUT}" "FILTER=[]"
+if [[ ${OUTPUT} == *"tone mapping"* ]]; then fail "untagged SDR: no tone-mapping message" "${OUTPUT}"; else pass "untagged SDR: no tone-mapping message"; fi
 
 echo "extracting_mkv_frames (ffmpeg replaced by a fake that records its arguments)"
 mkdir -p "${WORK_DIR}/argsbin"
@@ -1079,9 +1082,9 @@ printf ' .S tonemap           V->V       Conversion to/from different dynamic ra
 EOF
 cat > "${WORK_DIR}/featurebin/ffprobe" <<'EOF'
 #!/usr/bin/env bash
-# the file name decides the colour primaries: hdr* is bt2020, everything else bt709
+# the file name decides the transfer: hdr* is PQ, untagged* has none, everything else bt709
 for ARG in "$@"; do LAST="${ARG}"; done
-if [[ ${LAST} == hdr* ]]; then echo bt2020; else echo bt709; fi
+if [[ ${LAST} == hdr* ]]; then echo smpte2084; elif [[ ${LAST} == untagged* ]]; then echo unknown; else echo bt709; fi
 EOF
 chmod +x "${WORK_DIR}/featurebin/ffmpeg" "${WORK_DIR}/featurebin/ffprobe"
 PATH="${WORK_DIR}/featurebin:${PATH}" run_with_helpers 'TONE_MAPPING=yes; ffmpeg_feature_checks hdr.mkv' > /dev/null 2>&1
@@ -1092,6 +1095,8 @@ PATH="${WORK_DIR}/featurebin:${PATH}" run_with_helpers 'TONE_MAPPING=no; ffmpeg_
 assert_status   "HDR with -T needs no libplacebo" 0 $?
 PATH="${WORK_DIR}/featurebin:${PATH}" run_with_helpers 'TONE_MAPPING=yes; ffmpeg_feature_checks sdr.mkv' > /dev/null 2>&1
 assert_status   "SDR needs no libplacebo" 0 $?
+PATH="${WORK_DIR}/featurebin:${PATH}" run_with_helpers 'TONE_MAPPING=yes; ffmpeg_feature_checks untagged.mkv' > /dev/null 2>&1
+assert_status   "untagged SDR needs no libplacebo" 0 $?
 PATH="${WORK_DIR}/featurebin:${PATH}" run_with_helpers 'TONE_MAPPING=yes; QUALITY_CHECK=yes; ffmpeg_feature_checks sdr.mkv' > /dev/null 2>&1
 assert_status   "-Q without libvmaf exits 127" 127 $?
 
