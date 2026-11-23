@@ -9,7 +9,8 @@ Reads from each RUN_TMP_DIR (all "~"-separated, header first, each one optional)
   timeline.csv   - one row per step and chunk (timeline_entry in .config_video)
   statistics.txt - one row per chunk, times as "12.3[s]"
   memory.csv     - one row per final encode: memory estimate and what was used (memory_entry)
-Sheets: "charts" (line charts over time, steps per chunk), then one sheet per file.
+Sheets: "charts" (line charts over time, steps per chunk with the final encode and VMAF
+striped, memory estimate), then one sheet per file.
 
 With several directories (runs of one video, e.g. after a stop and a restart) the files are
 combined into one report: the directories are ordered by name (the run's start time), and each
@@ -27,9 +28,12 @@ import xlsxwriter
 CHUNK_STEPS = ["extracting_streams", "preparation", "extracting_frames", "interpolating",
                "merging_frames", "merging_streams"]
 BACKGROUND_STEPS = ["encoding", "quality_check"]
+# the background steps run beside the next chunk, so in the bars they are striped in their own
+# colour: solid parts follow each other on the clock, striped ones are work done in parallel
+BACKGROUND_COLOURS = {"encoding": "#C00000", "quality_check": "#7030A0"}
 # charts of metrics.csv: title, y axis, a column is drawn when its header matches
-# (in this order on the "charts" sheet, followed by the steps per chunk, the final encode and
-# VMAF, and the memory estimate)
+# (in this order on the "charts" sheet, followed by the steps per chunk, with the final encode
+# and VMAF, and the memory estimate)
 METRIC_CHARTS = [
     ("CPU", "%", re.compile(r"^cpu_")),
     ("Memory", "GB", re.compile(r"^(mem_|swap_|cgroup_mem|tools_rss)")),
@@ -117,7 +121,7 @@ def charting_metrics(workbook, charts, data, position):
 
 
 def charting_steps(workbook, charts, data, position, bold):
-    """stacked columns: the steps of each chunk, then the background encode and VMAF."""
+    """stacked columns: all steps of each chunk, the background encode and VMAF striped on top."""
     header, rows = data
     durations = {}
     for row in rows:
@@ -138,24 +142,25 @@ def charting_steps(workbook, charts, data, position, bold):
             if step in durations[chunk]:
                 sheet.write_number(row_number, column, durations[chunk][step])
     sheet.freeze_panes(1, 1)
-    for title, step_group, chart_type in (("Steps per chunk [s]", CHUNK_STEPS, "column"),
-                                          ("Final encode and VMAF per chunk (background) [s]", BACKGROUND_STEPS, "column")):
-        chart = workbook.add_chart({"type": chart_type, "subtype": "stacked"})
-        for step in step_group:
-            column = steps.index(step) + 1
-            chart.add_series({
-                "name": ["steps per chunk", 0, column],
-                "categories": ["steps per chunk", 1, 0, len(chunks), 0],
-                "values": ["steps per chunk", 1, column, len(chunks), column],
-                "gap": 30,
-            })
-        chart.set_title({"name": title})
-        chart.set_x_axis({"name": "chunk"})
-        chart.set_y_axis({"name": "s"})
-        chart.set_size(CHART_SIZE)
-        charts.insert_chart(position, 0, chart)
-        position += CHART_ROWS
-    return position
+    chart = workbook.add_chart({"type": "column", "subtype": "stacked"})
+    for column, step in enumerate(steps, start=1):
+        series = {
+            "name": ["steps per chunk", 0, column],
+            "categories": ["steps per chunk", 1, 0, len(chunks), 0],
+            "values": ["steps per chunk", 1, column, len(chunks), column],
+            "gap": 30,
+        }
+        if step in BACKGROUND_COLOURS:
+            colour = BACKGROUND_COLOURS[step]
+            series["pattern"] = {"pattern": "wide_upward_diagonal", "fg_color": colour, "bg_color": "white"}
+            series["border"] = {"color": colour}
+        chart.add_series(series)
+    chart.set_title({"name": "Steps per chunk [s] (striped: final encode and VMAF, run beside the next chunk)"})
+    chart.set_x_axis({"name": "chunk"})
+    chart.set_y_axis({"name": "s"})
+    chart.set_size(CHART_SIZE)
+    charts.insert_chart(position, 0, chart)
+    return position + CHART_ROWS
 
 
 def charting_memory(workbook, charts, data, position):

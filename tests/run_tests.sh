@@ -670,21 +670,24 @@ then
   printf 'video_id~checked~epoch~available [GB]~held [GB]~can get [GB]~peak [GB]~peak source~needed [GB]~warned~encode status~min available [GB]~max swap [GB]~max tools_rss [GB]~max HandBrakeCLI [GB]\n021~a~1~12.0~0.1~12.1~19.5~measured~21.5~yes~0~0.90~8.00~19.53~16.15\n' > "${WORK_DIR}/report/memory.csv"
   OUTPUT="$("${REPO_ROOT}/.venv/bin/python3" "${REPO_ROOT}/metrics_to_excel.py" "${WORK_DIR}/report" "${WORK_DIR}/report/r.xlsx" 2>&1; echo "STATUS=$?"; "${REPO_ROOT}/.venv/bin/python3" -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); n=z.namelist(); print('SHEETS=%d CHARTS=%d' % (sum(x.startswith('xl/worksheets/sheet') for x in n), sum(x.startswith('xl/charts/chart') for x in n))); print('CHUNK=' + str('<t>021</t>' in z.read('xl/sharedStrings.xml').decode()))" "${WORK_DIR}/report/r.xlsx")"
   assert_contains "metrics_to_excel.py writes the workbook" "${OUTPUT}" "STATUS=0"
-  assert_contains "metrics_to_excel.py: charts, metrics, timeline, steps per chunk, memory, statistics; 8 charts (with GPU power)" "${OUTPUT}" "SHEETS=6 CHARTS=8"
+  assert_contains "metrics_to_excel.py: charts, metrics, timeline, steps per chunk, memory, statistics; 7 charts (with GPU power)" "${OUTPUT}" "SHEETS=6 CHARTS=7"
   assert_contains "metrics_to_excel.py keeps chunk numbers as text" "${OUTPUT}" "CHUNK=True"
   OUTPUT="$("${REPO_ROOT}/.venv/bin/python3" - "${WORK_DIR}/report/r.xlsx" <<'EOF'
 import re, sys, zipfile
 z = zipfile.ZipFile(sys.argv[1])
-titles = [re.search(r"<a:t>([^<]*)</a:t>", z.read("xl/charts/chart%d.xml" % i).decode()).group(1) for i in range(1, 9)]
+titles = [re.search(r"<a:t>([^<]*)</a:t>", z.read("xl/charts/chart%d.xml" % i).decode()).group(1) for i in range(1, 8)]
 print("ORDER=" + "|".join(titles))
 sheet = z.read("xl/worksheets/sheet1.xml").decode()
 print("ROWS=%s LASTROW=%s" % ("zeroHeight=\"1\"" in sheet, re.findall(r'<row r="(\d+)"', sheet)[-1]))
 print("COLS=" + str('<col min="65" max="16384" width="0" hidden="1"' in sheet))
+steps = [c for c in (z.read("xl/charts/chart%d.xml" % i).decode() for i in range(1, 8)) if "Steps per chunk" in c][0]
+print("SERIES=%d STRIPED=%d" % (steps.count("<c:ser>"), steps.count('prst="wdUpDiag"')))
 print("ENDS=" + ",".join(sorted(set(re.findall(r"<xdr:to><xdr:col>(\d+)<", z.read("xl/drawings/drawing1.xml").decode())))))
 EOF
 )"
-  assert_contains "metrics_to_excel.py: charts in the agreed order" "${OUTPUT}" "ORDER=CPU|Memory|GPU busy|GPU power|Memory per tool|Steps per chunk [s]|Final encode and VMAF per chunk (background) [s]|Memory: estimate"
-  assert_contains "metrics_to_excel.py: rows below the last chart are hidden (8 charts: rows 1-151 shown)" "${OUTPUT}" "ROWS=True LASTROW=151"
+  assert_contains "metrics_to_excel.py: charts in the agreed order" "${OUTPUT}" "ORDER=CPU|Memory|GPU busy|GPU power|Memory per tool|Steps per chunk [s] (striped: final encode and VMAF, run beside the next chunk)|Memory: estimate"
+  assert_contains "metrics_to_excel.py: rows below the last chart are hidden (7 charts: rows 1-132 shown)" "${OUTPUT}" "ROWS=True LASTROW=132"
+  assert_contains "metrics_to_excel.py: one steps chart with all 8 steps, the encode and VMAF striped" "${OUTPUT}" "SERIES=8 STRIPED=2"
   assert_contains "metrics_to_excel.py: columns BM and after are hidden" "${OUTPUT}" "COLS=True"
   assert_contains "metrics_to_excel.py: every chart ends in column BL" "${OUTPUT}" "ENDS=63"
   # runs a, b, c of one video: 021 complete in a, only started in c; 022 complete in a and b;
