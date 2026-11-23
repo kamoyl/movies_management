@@ -123,7 +123,8 @@ $0 -R -i FILE [ -o var ] [ -v ]
             ${DODGERBLUE1}every part of one movie must have the same encoder: a part encoded with another one
             is done again
       ${LIME}-g${DODGERBLUE1}  with ${LIME}-E${DODGERBLUE1}: grain encoding profile; AV1 only: the grain is removed before encoding and
-          the player adds a synthetic one back (about 20-30 % smaller; encode 65-90 % slower at 1080p, about 2.8x at 4K)
+          the player adds a synthetic one back (about 20-30 % smaller; encode 65-90 % slower at 1080p, about 2.8x at 4K;
+          the whole interpolation run about 30 % slower at 1080p)
     ${LIME}-S${DODGERBLUE1}  silent: runs in the background as a systemd service (system slice, as your user;
           needs root or sudo), so it survives closing the terminal or a logout; prints the unit
           name, its log (all output) and how to follow or stop it. systemctl stop runs the
