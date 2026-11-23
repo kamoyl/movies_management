@@ -28,17 +28,26 @@ CHUNK_STEPS = ["extracting_streams", "preparation", "extracting_frames", "interp
                "merging_frames", "merging_streams"]
 BACKGROUND_STEPS = ["encoding", "quality_check"]
 # charts of metrics.csv: title, y axis, a column is drawn when its header matches
+# (in this order on the "charts" sheet, followed by the steps per chunk, the final encode and
+# VMAF, and the memory estimate)
 METRIC_CHARTS = [
     ("CPU", "%", re.compile(r"^cpu_")),
     ("Memory", "GB", re.compile(r"^(mem_|swap_|cgroup_mem|tools_rss)")),
-    ("Memory per tool", "GB", re.compile(r"_rss \[GB\]$")),
+    ("Disks", "MB/s", re.compile(r"^disk_")),
     ("GPU busy", "%", re.compile(r"^card\d+_busy")),
+    ("GPU shader clock", "MHz", re.compile(r"^card\d+_sclk")),
     ("GPU memory (VRAM)", "GB", re.compile(r"^card\d+_vram")),
     ("GPU power", "W", re.compile(r"^card\d+_power")),
     ("GPU temperature", "°C", re.compile(r"^card\d+_temp")),
-    ("GPU shader clock", "MHz", re.compile(r"^card\d+_sclk")),
-    ("Disks", "MB/s", re.compile(r"^disk_")),
+    ("Memory per tool", "GB", re.compile(r"_rss \[GB\]$")),
 ]
+# the charts span columns A to BL (64 columns of the default 64 pixels); columns after them and
+# rows below the last chart are hidden, so the sheet shows the charts only
+CHART_COLUMNS = 64
+# (one pixel less: a chart ending exactly on the first hidden column is anchored at the last
+# column of the sheet)
+CHART_SIZE = {"width": CHART_COLUMNS * 64 - 1, "height": 360}
+CHART_ROWS = 19
 
 
 def number(value):
@@ -101,9 +110,9 @@ def charting_metrics(workbook, charts, data, position):
         chart.set_title({"name": title})
         chart.set_x_axis({"name": "time", "num_font": {"rotation": -45}, "interval_unit": max(1, last_row // 20)})
         chart.set_y_axis({"name": unit})
-        chart.set_size({"width": 1100, "height": 360})
+        chart.set_size(CHART_SIZE)
         charts.insert_chart(position, 0, chart)
-        position += 19
+        position += CHART_ROWS
     return position
 
 
@@ -143,9 +152,9 @@ def charting_steps(workbook, charts, data, position, bold):
         chart.set_title({"name": title})
         chart.set_x_axis({"name": "chunk"})
         chart.set_y_axis({"name": "s"})
-        chart.set_size({"width": 1100, "height": 360})
+        chart.set_size(CHART_SIZE)
         charts.insert_chart(position, 0, chart)
-        position += 19
+        position += CHART_ROWS
     return position
 
 
@@ -166,9 +175,19 @@ def charting_memory(workbook, charts, data, position):
     chart.set_title({"name": "Memory: estimate (can get, needed) and reality per chunk"})
     chart.set_x_axis({"name": "chunk"})
     chart.set_y_axis({"name": "GB"})
-    chart.set_size({"width": 1100, "height": 360})
+    chart.set_size(CHART_SIZE)
     charts.insert_chart(position, 0, chart)
-    return position + 19
+    return position + CHART_ROWS
+
+
+def hiding_around_charts(charts, rows):
+    """hides the columns after the charts and the rows below the last one."""
+    charts.set_column(CHART_COLUMNS, 16383, None, None, {"hidden": True})
+    # unused rows are hidden; the rows of the charts are "used" by giving them the default height
+    charts.set_default_row(hide_unused_rows=True)
+    # (the last chart ends where its block's last row starts: 18 rows of 20 pixels = 360)
+    for row in range(rows - 1):
+        charts.set_row(row, 15)
 
 
 FILES = {"metrics": "metrics.csv", "timeline": "timeline.csv", "statistics": "statistics.txt", "memory": "memory.csv"}
@@ -286,6 +305,7 @@ def main():
         position = charting_memory(workbook, charts, memory, position)
     if statistics:
         writing_sheet(workbook, "statistics", statistics, bold)
+    hiding_around_charts(charts, position)
     if "runs" in files:
         writing_sheet(workbook, "runs", files["runs"], bold)
     workbook.close()

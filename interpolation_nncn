@@ -1472,7 +1472,13 @@ then
     ERROR_CODE="2"
     failed
   fi
-  inf "  final encode (${YELLOW}${VIDEO_CODEC}${CYAN}) with the ${YELLOW}${OPTIMIZATION}${CYAN} profile into ${YELLOW}${FINAL_VIDEO_FILE}"
+  # the profile names (film, grain) stay in the .done markers; here it is said what they mean
+  if [[ ${OPTIMIZATION} == grain ]] && [[ ${VIDEO_CODEC} == av1 ]]
+  then
+    inf "  final encode (${YELLOW}${VIDEO_CODEC}${CYAN}) with film grain synthesis (${YELLOW}-g${CYAN}) into ${YELLOW}${FINAL_VIDEO_FILE}"
+  else
+    inf "  final encode (${YELLOW}${VIDEO_CODEC}${CYAN}) without film grain synthesis into ${YELLOW}${FINAL_VIDEO_FILE}"
+  fi
   # sets HANDBRAKE_CROP, one crop for every part
   detecting_crop "${WHOLE_MOVIE_NAME_ARRAY[*]}.mkv"
 fi

@@ -672,6 +672,21 @@ then
   assert_contains "metrics_to_excel.py writes the workbook" "${OUTPUT}" "STATUS=0"
   assert_contains "metrics_to_excel.py: charts, metrics, timeline, steps per chunk, memory, statistics; 8 charts (with GPU power)" "${OUTPUT}" "SHEETS=6 CHARTS=8"
   assert_contains "metrics_to_excel.py keeps chunk numbers as text" "${OUTPUT}" "CHUNK=True"
+  OUTPUT="$("${REPO_ROOT}/.venv/bin/python3" - "${WORK_DIR}/report/r.xlsx" <<'EOF'
+import re, sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+titles = [re.search(r"<a:t>([^<]*)</a:t>", z.read("xl/charts/chart%d.xml" % i).decode()).group(1) for i in range(1, 9)]
+print("ORDER=" + "|".join(titles))
+sheet = z.read("xl/worksheets/sheet1.xml").decode()
+print("ROWS=%s LASTROW=%s" % ("zeroHeight=\"1\"" in sheet, re.findall(r'<row r="(\d+)"', sheet)[-1]))
+print("COLS=" + str('<col min="65" max="16384" width="0" hidden="1"' in sheet))
+print("ENDS=" + ",".join(sorted(set(re.findall(r"<xdr:to><xdr:col>(\d+)<", z.read("xl/drawings/drawing1.xml").decode())))))
+EOF
+)"
+  assert_contains "metrics_to_excel.py: charts in the agreed order" "${OUTPUT}" "ORDER=CPU|Memory|GPU busy|GPU power|Memory per tool|Steps per chunk [s]|Final encode and VMAF per chunk (background) [s]|Memory: estimate"
+  assert_contains "metrics_to_excel.py: rows below the last chart are hidden (8 charts: rows 1-151 shown)" "${OUTPUT}" "ROWS=True LASTROW=151"
+  assert_contains "metrics_to_excel.py: columns BM and after are hidden" "${OUTPUT}" "COLS=True"
+  assert_contains "metrics_to_excel.py: every chart ends in column BL" "${OUTPUT}" "ENDS=63"
   # runs a, b, c of one video: 021 complete in a, only started in c; 022 complete in a and b;
   # 023 only started in b; the 10:00:05 sample is in a and b; b repeats its statistics header
   for RUN in a b c
