@@ -10,7 +10,7 @@ then
   VAR="${HOME}/var"
   mkdir -p "${VAR}"
 else
-  VAR=$(readlink -f "${o}")
+  VAR=$(readlink -m "${o}")
   if ! mkdir -p "${VAR}" > /dev/null 2>&1
   then
     error "I have no permissions to create OUTPUT directory here:"
@@ -32,7 +32,7 @@ if [ -z "${O}" ]
 then
   VAR_OUT="${VAR}"
 else
-  VAR_OUT=$(readlink -f "${O}")
+  VAR_OUT=$(readlink -m "${O}")
   if ! mkdir -p "${VAR_OUT}" > /dev/null 2>&1
   then
     error "I have no permissions to create OUTPUT directory here:"
