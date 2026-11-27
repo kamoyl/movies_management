@@ -39,18 +39,22 @@ $0 -h
   }
 
 # copies SOURCE over TARGET atomically, keeping TARGET's permissions (cp -p of the old target
-# first, then its content replaced: portable, unlike GNU chmod --reference)
+# first, then its content replaced: portable, unlike GNU chmod --reference); a new TARGET gets
+# SOURCE's permissions (an executable stays executable, a private file private)
 copying()
 {
-  local SOURCE="$1" TARGET="$2" TEMPORARY
+  local SOURCE="$1" TARGET="$2" TEMPORARY PERMISSIONS_FROM
   TEMPORARY="$(dirname "${TARGET}")/.$(basename "${TARGET}").config_syncing.$$"
   if [ -e "${TARGET}" ]
   then
-    if ! cp -p "${TARGET}" "${TEMPORARY}"
-    then
-      rm -f "${TEMPORARY}"
-      return 1
-    fi
+    PERMISSIONS_FROM="${TARGET}"
+  else
+    PERMISSIONS_FROM="${SOURCE}"
+  fi
+  if ! cp -p "${PERMISSIONS_FROM}" "${TEMPORARY}"
+  then
+    rm -f "${TEMPORARY}"
+    return 1
   fi
   if ! cat "${SOURCE}" > "${TEMPORARY}"
   then
