@@ -1129,9 +1129,6 @@ interpolating_extracted_frames()
   if [[ ${NCNN_METHOD} == rife ]]
   then
     NCNN_PARAMETERS=(-v -g "${NCNN_GPUS}" -j "${NCNN_THREADS}" -u -n ${INTER_FRAMES_COUNT} -m rife-v4.6)
-  elif [[ ${NCNN_METHOD} == dain ]] || [[ ${NCNN_METHOD} == cain ]]
-  then
-    NCNN_PARAMETERS=(-v -t 256,256 -g "${NCNN_GPUS}" -j "${NCNN_THREADS}" -n ${INTER_FRAMES_COUNT})
   elif [[ ${NCNN_METHOD} == realsr ]]
   then
     NCNN_SCALE=4
@@ -1529,7 +1526,7 @@ interpolation_video_file()
   local INPUT_FRAME_RATE_NUM="${BASH_REMATCH[1]}"
   local INPUT_FRAME_RATE_DEN="${BASH_REMATCH[2]}"
   INPUT_FPS="$(LC_ALL=C awk -v n="${INPUT_FRAME_RATE_NUM}" -v d="${INPUT_FRAME_RATE_DEN}" 'BEGIN { printf "%.6f", n / d }')"
-  if [[ ${NCNN_METHOD} == dain ]] || [[ ${NCNN_METHOD} == cain ]] || [[ ${NCNN_METHOD} == rife ]]
+  if [[ ${NCNN_METHOD} == rife ]]
   then
     TARGET_FRAME_COUNT="2"
     INTER_FRAMES_COUNT=$((INPUT_FRAMES_COUNT*TARGET_FRAME_COUNT))
@@ -1544,7 +1541,7 @@ interpolation_video_file()
     OUTPUT_FPS=${INPUT_FPS}
     OUTPUT_FPS_ROUND="${TARGET_FRAME_SCALE}x"
   else
-    error "  NCNN method ${YELLOW}${NCNN_METHOD}${RED} has no frame-count settings in ${FUNCNAME[0]} (supported: rife, dain, cain, realsr)"
+    error "  NCNN method ${YELLOW}${NCNN_METHOD}${RED} has no frame-count settings in ${FUNCNAME[0]} (supported: rife, realsr)"
     ERROR_CODE="2"
     failed
   fi
@@ -2285,7 +2282,7 @@ starting_quality_metric()
     ENCODED_VIDEO_FILE="${1}"
     REFERENCE_VIDEO_FILE="${2}"
   fi
-  # interpolation (rife/dain/cain) puts TARGET_FRAME_COUNT output frames per original frame:
+  # interpolation (rife) puts TARGET_FRAME_COUNT output frames per original frame:
   # output 0 = original 0, output 1 = in-between, output 2 = original 1, ...
   # in-between frames have no reference, so only every VMAF_FRAME_STEP-th frame is compared;
   # setpts renumbers both inputs, so frame N is paired with frame N

@@ -86,13 +86,13 @@ $0 -R -i FILE [ -o var ] [ -v ]
           (BDMV/PLAYLIST/00800.mpls; the run lists the longest playlists)
     ${LIME}-N${DODGERBLUE1}  NCNN/Vulkan method (default: ${CYAN}rife${DODGERBLUE1}); supported by this script:
                      ${ORANGERED1}rife        ${DARKCYAN}- Real-Time Intermediate Flow Estimation (frame interpolation)    ${DEEPPINK1}(https://github.com/nihui/rife-ncnn-vulkan)
-                     ${ORANGERED1}dain        ${DARKCYAN}- Depth-Aware Video Frame Interpolation                           ${DEEPPINK1}(https://github.com/nihui/dain-ncnn-vulkan)
-                     ${ORANGERED1}cain        ${DARKCYAN}- Channel Attention Frame Interpolation                           ${DEEPPINK1}(https://github.com/nihui/cain-ncnn-vulkan)
                      ${ORANGERED1}realsr      ${DARKCYAN}- superresolution (4x scale)                                      ${DEEPPINK1}(https://github.com/nihui/realsr-ncnn-vulkan)
                      ${ORANGERED1}none        ${DARKCYAN}- no NCNN processing: each source chunk is only encoded (needs -E); steps 2-5 are
                                    skipped, no GPU is used, an HDR video stays HDR (-T is not needed)
-          ${DODGERBLUE1}not supported yet (frame calculations are not configured for them, so they are rejected):
+          ${DODGERBLUE1}not supported (rejected; dain and cain were removed on 28 Nov: never used, RIFE is better or faster):
                      ${ORANGERED1}ifrnet      ${DARKCYAN}- Intermediate Feature Refine Network (frame interpolation)       ${DEEPPINK1}(https://github.com/nihui/ifrnet-ncnn-vulkan)
+                     ${ORANGERED1}dain        ${DARKCYAN}- Depth-Aware Video Frame Interpolation                           ${DEEPPINK1}(https://github.com/nihui/dain-ncnn-vulkan)
+                     ${ORANGERED1}cain        ${DARKCYAN}- Channel Attention Frame Interpolation                           ${DEEPPINK1}(https://github.com/nihui/cain-ncnn-vulkan)
                      ${ORANGERED1}Real-ESRGAN ${DARKCYAN}- image and video restoration                                     ${DEEPPINK1}(https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan)
                      ${ORANGERED1}srmd        ${DARKCYAN}- superresolution                                                 ${DEEPPINK1}(https://github.com/nihui/srmd-ncnn-vulkan)
                      ${ORANGERED1}waifu2x     ${DARKCYAN}- superresolution and denoising                                   ${DEEPPINK1}(https://github.com/nihui/waifu2x-ncnn-vulkan)
@@ -448,10 +448,10 @@ then
 fi
 
 case "${NCNN_METHOD}" in
-  rife|dain|cain|realsr|none)
+  rife|realsr|none)
     ;;
   *)
-    error "  NCNN method ${YELLOW}${NCNN_METHOD}${RED} is not supported by this script (supported: rife, dain, cain, realsr, none)"
+    error "  NCNN method ${YELLOW}${NCNN_METHOD}${RED} is not supported by this script (supported: rife, realsr, none)"
     ERROR_CODE="2"
     failed
     ;;

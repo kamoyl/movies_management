@@ -157,7 +157,7 @@ function flush()
 }
 /^    -[A-Za-z]  / { flush(); option = substr($1, 1); sub(/^    -[A-Za-z]  /, ""); text = trim($0); sub(/; supported by this script:$/, "", text); next }
 option == "" { next }
-/not supported yet/ { supported = "no"; next }
+/not supported/ { supported = "no"; next }
 /^ {21}[A-Za-z][A-Za-z0-9-]* +- / {
   name = $1
   line = $0

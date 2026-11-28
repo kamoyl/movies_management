@@ -119,7 +119,7 @@ assert_contains "interpolation_nncn is read whole before it runs (safe to edit d
 OUTPUT="$(TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -h 2>&1)"
 assert_contains "interpolation_nncn -h documents -F (fresh start, resume by default)" "${OUTPUT}" "-F  fresh start: by default a run resumes"
 assert_contains "interpolation_nncn -h keeps -r (the default)" "${OUTPUT}" "-r  resume (the default"
-assert_contains "interpolation_nncn -h separates unsupported methods" "${OUTPUT}" "not supported yet"
+assert_contains "interpolation_nncn -h separates unsupported methods" "${OUTPUT}" "not supported (rejected"
 assert_contains "interpolation_nncn -h documents -T (no tone mapping)" "${OUTPUT}" "-T  no tone mapping"
 mkdir -p "${WORK_DIR}/cli" && echo x > "${WORK_DIR}/cli/x.mkv"
 OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -F -r 2>&1)"; STATUS=$?
@@ -134,6 +134,9 @@ assert_contains "interpolation_nncn -M with a wrong size says why" "${OUTPUT}" "
 OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -N none 2>&1)"; STATUS=$?
 assert_status   "interpolation_nncn -N none without -E stops with 2" 2 "${STATUS}"
 assert_contains "interpolation_nncn -N none without -E says why" "${OUTPUT}" "-N none only encodes the chunks, so it needs -E"
+OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -N dain 2>&1)"; STATUS=$?
+assert_status   "interpolation_nncn rejects the removed -N dain with 2" 2 "${STATUS}"
+assert_contains "interpolation_nncn -N dain says what is supported" "${OUTPUT}" "supported: rife, realsr, none"
 OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -N none -E -T 2>&1)"; STATUS=$?
 assert_status   "interpolation_nncn -N none with -T stops with 2" 2 "${STATUS}"
 OUTPUT="$(cd "${WORK_DIR}/cli" && TERM=dumb bash "${REPO_ROOT}/interpolation_nncn" -i x.mkv -o "${WORK_DIR}/cli/v" -c x265 2>&1)"; STATUS=$?

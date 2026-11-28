@@ -115,7 +115,7 @@ what changed and why. Speed work has its own section:
 - `.config_video` checks the results of MP4→MKV conversion, HDR→SDR tone mapping, stream and frame merging, `mkvmerge`/`mkvpropedit` calls, and OMDb/TheMovieDB responses. `mkvpropedit` output goes to `LOG/<name>_mkvpropedit.log` instead of `/dev/null`. A failed VMAF check is reported and recorded as `error` in the statistics, but does not stop the run. Optional steps (cover download, permissions, tag cleanup) produce warnings only.
 - `encoding_process` fails early when the destination directory is not writable. It encodes the eng/pol/dut audio tracks (numbered among audio tracks, as HandBrakeCLI `-a` expects); with no such track it takes all audio tracks, and with no audio at all it uses `-a none`. Without an eng/pol/dut subtitle track it encodes without subtitles (`-s none`). Each fallback is reported with a warning. It reports a HandBrake start-up failure, and otherwise says clearly that the encode was only *started* in the background.
 - `movies_encoding` also checks for `mediainfo`, `mkvpropedit`, and, with `-e`, `HandBrakeCLI`.
-- `interpolation_nncn` checks the required tools (missing tool: exit 127) and the FFmpeg features it will need (the intermediate codec's encoder; `libplacebo` for an HDR video unless `-T`; `libvmaf` with `-Q`) before doing any work, and accepts only `rife`, `dain`, `cain`, `realsr`, and `none` (encode only, with `-E`). An invalid `-s` value or unsupported method exits with code 2. It validates the video duration, the `mkvmerge` split result, the last chunk number, and each chunk file. NCNN failures are reported as errors, and Ctrl+C reports the matching method's logs and exits with code 130.
+- `interpolation_nncn` checks the required tools (missing tool: exit 127) and the FFmpeg features it will need (the intermediate codec's encoder; `libplacebo` for an HDR video unless `-T`; `libvmaf` with `-Q`) before doing any work, and accepts only `rife`, `realsr`, and `none` (encode only, with `-E`). An invalid `-s` value or unsupported method exits with code 2. It validates the video duration, the `mkvmerge` split result, the last chunk number, and each chunk file. NCNN failures are reported as errors, and Ctrl+C reports the matching method's logs and exits with code 130.
 
 Exit codes: `0` success, `1` processing error, `2` invalid usage or input, `127` missing tool, `130` interrupted. When an external tool fails, its own exit code is shown in the error message, but the script still exits with `1`, so a tool's code (for example `mkvmerge` exit `2`) is never mistaken for invalid usage.
 
@@ -237,7 +237,7 @@ Use this script to process a video in one-minute chunks with an NCNN/Vulkan inte
 | `-r` | — | Resume. The default; still accepted so that existing commands work. Cannot be combined with `-F` (exit 2). |
 | `-T` | — | No tone mapping: an HDR video is processed as HDR, without conversion to SDR. A warning is shown, because the colours of the processed frames may differ. Without `-T`, HDR is tone-mapped to SDR automatically. |
 | `-k` | — | Keep the intermediate files of finished chunks: the frames-only video in `TMP_OUT` and the chunk's frame directories. Without `-k` they are removed once the chunk is done (its `.done` marker is written). The frames-only video is a full copy of the video track of `_merged.mkv`, so keeping it doubles the space needed per chunk. |
-| `-Q` | — | Run the VMAF quality check for each processed chunk (processed chunk = distorted, first input; original chunk = reference, second input). For interpolation (`rife`, `dain`, `cain`) only the frames at original positions are compared, because in-between frames have no reference; the score shows what frame merging and encoding lost, not the quality of the interpolation itself. Uses all CPU cores. Requires an FFmpeg build with `libvmaf`; the model depends on the movie's resolution: `vmaf_4k_v0.6.1` above 1080p (wider than 1920 or taller than 1080, so a cropped 4K film counts as 4K), `vmaf_v0.6.1` otherwise; the file in `/usr/share/model/` when it exists (Linux packages), otherwise the model built into libvmaf (for example Homebrew). The model is chosen once per run, shown at the start, in every VMAF line and in the report column (`VMAF [mean, <model>]`). An HDR video compared as HDR (`-N none`, `-T`) gets a warning that its score is a guide only. An HDR reference is tone-mapped with the same filter as the extracted frames. VMAF runs in the background with lower priority (`nice -n 10`) alongside the next chunk; the source chunk is kept until its VMAF is done, and the last chunk's VMAF is waited for at the end. Off by default. |
+| `-Q` | — | Run the VMAF quality check for each processed chunk (processed chunk = distorted, first input; original chunk = reference, second input). For interpolation (`rife`) only the frames at original positions are compared, because in-between frames have no reference; the score shows what frame merging and encoding lost, not the quality of the interpolation itself. Uses all CPU cores. Requires an FFmpeg build with `libvmaf`; the model depends on the movie's resolution: `vmaf_4k_v0.6.1` above 1080p (wider than 1920 or taller than 1080, so a cropped 4K film counts as 4K), `vmaf_v0.6.1` otherwise; the file in `/usr/share/model/` when it exists (Linux packages), otherwise the model built into libvmaf (for example Homebrew). The model is chosen once per run, shown at the start, in every VMAF line and in the report column (`VMAF [mean, <model>]`). An HDR video compared as HDR (`-N none`, `-T`) gets a warning that its score is a guide only. An HDR reference is tone-mapped with the same filter as the extracted frames. VMAF runs in the background with lower priority (`nice -n 10`) alongside the next chunk; the source chunk is kept until its VMAF is done, and the last chunk's VMAF is waited for at the end. Off by default. |
 | `-E` | — | Final encode of each part: after a chunk is merged, HandBrake encodes it in the background (`nice -n 10`) alongside the next chunk, with the same settings as `movies_encoding` (SVT-AV1 10-bit, quality 22, preset 5, audio copied). The crop is detected once, from the whole input, and passed to every part (HandBrake's automatic crop differs from part to part). After a successful encode the `_merged.mkv` part is removed (kept with `-k`). At the end the video of the encoded parts is joined with `mkvmerge --append-mode track`, with the audio and subtitle tracks taken from the source movie (the same tracks as the chunks), into `DESTINATION_DIR/<input name>.mkv` (default `/media/ready`) and removed (kept with `-k`). The run stops at start-up if the destination is missing or not writable (exit 1) or the final file already exists (exit 2). With `-Q`, VMAF compares the encoded part (not the merged one) with the source chunk, cropped the same way. A failed encode keeps its merged part and stops the run (exit 1) once the chunk processed alongside it is finished; run again with `-E`. See [Final encode of each part](#final-encode-of-each-part--e). |
 | `-c` | `CODEC` | With `-E`: the encoder of the final encode, `av1` (default, SVT-AV1 10-bit as `movies_encoding`) or `x265` (x265 10-bit, quality 18, preset medium, `aq-mode=4`). Without `-E` or with another name: exit 2. See [Encoder of the final encode](#encoder-of-the-final-encode--c). |
 | `-g` | — | With `-E`: grain profile (as `movies_encoding -g`: AV1 film grain synthesis). Without `-E`: exit 2. |
@@ -383,6 +383,33 @@ DESTINATION_DIR="$HOME/ready" ./interpolation_nncn -i "Episode.mkv" -E -g
   - Synthesized film grain (AV1 `film-grain=N`) lowers VMAF although it looks right, because the grain is not the same pixels as the source's.
   - `--nlmeans-tune` and `--lapsharp-tune` only tune the denoise/sharpen filters; without `--nlmeans`/`--lapsharp` those filters are off and the tunes do nothing (seen in the HandBrake log: only the frame-rate filter runs). Removed 22 Nov with `-a` and `-H` (Done item 47).
 
+### Is it worth it? Grain, interpolation and VMAF, measured
+
+Grain (`-g`) and interpolation both cost time and resources, so each is used only when it pays off. These measurements (Nov 2026, rig2) decide it:
+
+**Night on Earth** (1080p, whole film, 4 versions; VMAF against the source, cropped the same way; interpolated files compared on every 2nd frame):
+
+| Version | Size | VMAF mean / min |
+|---|---|---|
+| AV1, no grain | 4.64 GB | 93.45 / 69.8 |
+| AV1, grain (`-g`) | 3.51 GB (−24 %) | 92.01 / 67.7 |
+| RIFE 48 fps, no grain | 5.20 GB (+12 %) | 91.80 / 63.3 |
+| RIFE 48 fps, grain | 4.02 GB | 90.90 / 66.8 |
+
+**Ghost Dog** (4K HDR10, 3 one-minute clips cut at closed-GOP split points, the script's encode settings, `vmaf_4k` model):
+
+| Clip (start) | No grain: size / encode / VMAF | Grain: size / encode / VMAF |
+|---|---|---|
+| 1301 s | 66.3 MB / 98 s / 94.48 | 52.5 MB (−21 %) / 199 s / 93.70 |
+| 2593 s | 83.3 MB / 105 s / 92.44 | 63.0 MB (−24 %) / 174 s / 91.40 |
+| 5225 s | 86.6 MB / 105 s / 93.46 | 68.9 MB (−20 %) / 178 s / 92.36 |
+| total | 236 MB / 308 s | 184 MB (−22 %) / 551 s (1.8×) |
+
+What it means:
+- **Grain (`-g`): worth it for grainy films.** About a fifth to a quarter smaller in both films, for 1.8× the encode time. VMAF drops by about 1 point, which is expected: synthesized grain looks right but is not the same pixels as the source's grain (see the note above), so judge it by eye, not by VMAF.
+- **Interpolation: only when it is worth it.** On Night on Earth it made the file bigger (+12 %) and even its original frames scored lower. Use it for content which gains from smoother motion (e.g. Blade Runner 2099, fast camera pans), not by default.
+- **VMAF (`-Q`) is cheap with interpolation.** On Blade Runner 2099 S1E1 (RIFE 48 fps, 4K) the parts with VMAF took 460 s against 418 s without, about 10 % (different parts, so ±5 %), because VMAF runs in the background alongside the next part.
+
 ### Encode only (`-N none`)
 
 ```bash
@@ -420,7 +447,7 @@ The lossless codecs need a lot of disk space. At 4K, that is about 11 GB per min
 INTERMEDIATE_CODEC=x264_crf10 ./interpolation_nncn -i "Movie.mkv"
 ```
 
-The method names listed by the script's help include `cain`, `dain`, `rife`, `ifrnet`, `realsr`, `Real-ESRGAN`, `srmd`, `waifu2x`, `realcugan`, and `zimage`. However, the current processing configuration has explicit parameter sets only for `rife`, `dain`, `cain`, `realsr`, `realesrgan`, and `srmd`. `rife` is the default and doubles the frame rate; `dain` and `cain` also use the interpolation path. `realsr` is configured for 4x scaling, while `realesrgan` and `srmd` use 2x scaling. Other names shown in the help do not currently have equivalent method setup in `.config_video`; do not assume they will run successfully. Method spelling must match the executable name used by the script (for example, `realesrgan`).
+The method names listed by the script's help include `rife`, `realsr`, `ifrnet`, `dain`, `cain`, `Real-ESRGAN`, `srmd`, `waifu2x`, `realcugan`, and `zimage`. However, the current processing configuration has explicit parameter sets only for `rife`, `realsr`, `realesrgan`, and `srmd`. `rife` is the default and doubles the frame rate. `dain` and `cain` were removed on 28 Nov (Done item 51): never used in any run, no tests, and RIFE is the better choice overall (general knowledge, not measured here: DAIN is very slow, CAIN smears fast motion). `realsr` is configured for 4x scaling, while `realesrgan` and `srmd` use 2x scaling. Other names shown in the help do not currently have equivalent method setup in `.config_video`; do not assume they will run successfully. Method spelling must match the executable name used by the script (for example, `realesrgan`).
 
 Examples:
 
@@ -428,8 +455,8 @@ Examples:
 # Interpolate with the default RIFE method
 ./interpolation_nncn -i "Episode.mkv"
 
-# Use DAIN and a separate workspace
-./interpolation_nncn -i "Episode.mkv" -N dain -o "$HOME/video-work"
+# Use a separate workspace
+./interpolation_nncn -i "Episode.mkv" -o "$HOME/video-work"
 
 # Start processing from chunk 003 and store frame data on another volume
 ./interpolation_nncn -i "Episode.mkv" -N rife -s 003 -O "/mnt/fast-storage"
@@ -864,6 +891,8 @@ Peak space use per chunk was 30–37 GB of PNG frames.
     - Checked: 4 new tests (chart order, hidden rows and columns, every chart ends in BL), 400 pass.
 50. **Encode and VMAF in the "steps per chunk" chart** (23 Nov, the user's request). One stacked bar per chunk now holds all 8 steps, so it shows which one costs the most; the separate "final encode and VMAF" chart is gone. The encode and VMAF run beside the next chunk, so their parts are striped (diagonal lines in their own colour, also in the legend) and the title says so: the solid parts follow each other on the clock, the striped ones are work done in parallel, and the whole bar is the work of the chunk, not its time on the clock. With all 11 charts, rows from 209 are hidden.
     - Checked: 1 new test (8 series, 2 striped), the chart tests updated to 7 charts.
+51. **DAIN and CAIN removed** (28 Nov, the user's proposal). Neither was used in any run (all runs used RIFE or `-N none`) and neither had a test; RIFE is the better choice overall (general knowledge, not measured here: DAIN is very slow, CAIN smears fast motion). `-N dain` and `-N cain` now stop with exit 2 and list the supported methods (`rife`, `realsr`, `none`); the help lists them as rejected. The binaries in `/usr/local/bin` are left alone.
+    - Checked: 1 new test (`-N dain` stops with 2 and says what is supported).
 
 **Second run, native 4K.** The first run (below) scaled the frames down to 1920×800, a quarter of the pixels of chunk 029 (3840×1600, HDR), so its sizes were about 4× too low. This run used 300 PNG frames at native resolution, encoded as 50 fps, scaled to a 60 s chunk of 3000 frames, on the same Mac. VMAF compares each encode with the source frames. The frames were not tone-mapped (no `libplacebo` on the Mac); VMAF is not made for HDR (PQ) video, so its values are for comparison only.
 
@@ -1040,4 +1069,4 @@ Requirements: a TeX distribution (TeX Live or MacTeX: `latexmk`, `pdflatex`, `kp
 
 ## Notes on option/help mismatches
 
-The help output (`-h`) and the option parsers of both scripts list the same options; unknown options exit with code 2. `interpolation_nncn -h` separates the methods it supports (`rife`, `dain`, `cain`, `realsr`, and `none`) from those that are listed but not supported yet.
+The help output (`-h`) and the option parsers of both scripts list the same options; unknown options exit with code 2. `interpolation_nncn -h` separates the methods it supports (`rife`, `realsr`, and `none`) from those that are listed but rejected.
